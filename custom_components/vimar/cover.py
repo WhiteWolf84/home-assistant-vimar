@@ -352,26 +352,24 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def is_opening(self) -> bool:
-        """Return True if opening OR already fully open.
+        """Return True only during active opening operation.
         
-        This disables the OPEN button when at 100% (fully open).
-        Home Assistant uses this to determine button availability.
+        Home Assistant disables buttons based on is_closed and current_cover_position,
+        NOT based on is_opening/is_closing. These properties only indicate ACTIVE movement.
         """
         if self._use_time_based_tracking():
-            # True if actively opening OR already at 100%
-            return self._tb_operation == "opening" or self._tb_position == 100
+            return self._tb_operation == "opening"
         return False
 
     @property
     def is_closing(self) -> bool:
-        """Return True if closing OR already fully closed.
+        """Return True only during active closing operation.
         
-        This disables the CLOSE button when at 0% (fully closed).
-        Home Assistant uses this to determine button availability.
+        Home Assistant disables buttons based on is_closed and current_cover_position,
+        NOT based on is_opening/is_closing. These properties only indicate ACTIVE movement.
         """
         if self._use_time_based_tracking():
-            # True if actively closing OR already at 0%
-            return self._tb_operation == "closing" or self._tb_position == 0
+            return self._tb_operation == "closing"
         return False
 
     @property
@@ -430,20 +428,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     async def async_close_cover(self, **kwargs):
         """Close the cover."""
         if self._use_time_based_tracking():
-            # Check if already at target position
-            if self._tb_position == 0:
-                _LOGGER.debug(f"{self.name}: 🚫 Already closed (0%), ignoring CLOSE command")
-                return  # Don't send command if already closed
             await self._tb_start_tracking(False, target=0)
         self.change_state("up/down", "1")
 
     async def async_open_cover(self, **kwargs):
         """Open the cover."""
         if self._use_time_based_tracking():
-            # Check if already at target position
-            if self._tb_position == 100:
-                _LOGGER.debug(f"{self.name}: 🚫 Already open (100%), ignoring OPEN command")
-                return  # Don't send command if already open
             await self._tb_start_tracking(True, target=100)
         self.change_state("up/down", "0")
 
@@ -461,11 +451,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     # Native mode
                     self.change_state("position", 100 - target)
                 else:
-                    # Time-based mode - check if already at target
-                    if self._tb_position == target:
-                        _LOGGER.debug(f"{self.name}: 🚫 Already at {target}%, ignoring SET_POSITION")
-                        return
-                    
+                    # Time-based mode
                     if target > self._tb_position:
                         await self._tb_start_tracking(True, target=target)
                         self.change_state("up/down", "0")
