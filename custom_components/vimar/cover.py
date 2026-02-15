@@ -352,32 +352,26 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def is_opening(self) -> bool:
-        """Return True if the cover is opening.
+        """Return True if opening OR already fully open.
         
-        When using time-based tracking with assumed_state and current_cover_position,
-        Home Assistant needs this property to properly disable/enable buttons.
-        
-        Returns True only while actively tracking an opening operation.
-        When tracking stops (_tb_operation becomes None), this returns False
-        and buttons are re-enabled based on current position.
+        This disables the OPEN button when at 100% (fully open).
+        Home Assistant uses this to determine button availability.
         """
         if self._use_time_based_tracking():
-            return self._tb_operation == "opening"
+            # True if actively opening OR already at 100%
+            return self._tb_operation == "opening" or self._tb_position == 100
         return False
 
     @property
     def is_closing(self) -> bool:
-        """Return True if the cover is closing.
+        """Return True if closing OR already fully closed.
         
-        When using time-based tracking with assumed_state and current_cover_position,
-        Home Assistant needs this property to properly disable/enable buttons.
-        
-        Returns True only while actively tracking a closing operation.
-        When tracking stops (_tb_operation becomes None), this returns False
-        and buttons are re-enabled based on current position.
+        This disables the CLOSE button when at 0% (fully closed).
+        Home Assistant uses this to determine button availability.
         """
         if self._use_time_based_tracking():
-            return self._tb_operation == "closing"
+            # True if actively closing OR already at 0%
+            return self._tb_operation == "closing" or self._tb_position == 0
         return False
 
     @property
