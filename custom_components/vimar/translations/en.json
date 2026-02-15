@@ -48,10 +48,14 @@
           "scan_interval": "Scan Interval (seconds)",
           "global_channel_id": "MediaPlayer Global Channel Id",
           "ignore": "Ignored platforms",
+          "cover_position_mode": "Cover position mode",
           "use_vimar_naming": "Use naming as Vimar",
           "friendly_name_room_name_at_begin": "Set Room Name at begin of name",
           "devices_as_lights_re": "RegEx for set entities as lights (CH_Main_Automation), others setted as switch",
           "devices_as_binary_sensor_re": "RegEx for set entities swich as binary_sensor"
+        },
+        "data_description": {
+          "cover_position_mode": "Choose how to handle cover positions: 'auto' uses native method if available otherwise time-based tracking, 'native' uses only traditional method, 'time_based' always forces time-based tracking"
         }
       },
       "three": {
@@ -68,6 +72,15 @@
       "save_cert_failed": "Saving certificate failed. Check path and retry",
       "unknown": "Unexpected error",
       "regex_not_valid": "RegEx not valid"
+    }
+  },
+  "selector": {
+    "cover_position_mode": {
+      "options": {
+        "auto": "Auto (smart hybrid)",
+        "native": "Native (webserver only)",
+        "time_based": "Time-based (always)"
+      }
     }
   },
   "services": {
