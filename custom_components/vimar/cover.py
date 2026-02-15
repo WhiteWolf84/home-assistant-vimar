@@ -392,15 +392,17 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def supported_features(self) -> CoverEntityFeature:
+        """Flag supported features.
+        
+        SET_POSITION is always included since all covers support it
+        (either via native position or time-based tracking).
+        """
         flags = (
             CoverEntityFeature.OPEN
             | CoverEntityFeature.CLOSE
             | CoverEntityFeature.STOP
+            | CoverEntityFeature.SET_POSITION  # Always present like original!
         )
-
-        # Add SET_POSITION if using time-based OR if native position is available
-        if self._use_time_based_tracking() or self.has_state("position"):
-            flags |= CoverEntityFeature.SET_POSITION
 
         if self.has_state("slat_position") and self.has_state(
             "clockwise/counterclockwise"
