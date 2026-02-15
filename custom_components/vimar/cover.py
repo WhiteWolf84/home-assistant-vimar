@@ -350,53 +350,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Time-based mode
         return self._tb_position == 0 if self._tb_position is not None else None
 
-    @property
-    def is_opening(self) -> bool:
-        """Return if the cover is opening.
-        
-        In time-based mode: check internal tracking state
-        In native mode: check if webserver reports up/down = '0' (moving up)
-        BUT only if not at end position (position != 0)
-        """
-        if self._use_time_based_tracking():
-            # Time-based: report opening only during active tracking to target
-            return self._tb_operation == "opening"
-        
-        # Native mode: check webserver state
-        updown = self.get_state("up/down")
-        if updown == "0":  # Moving up
-            # Only report opening if not already fully open
-            if self.has_state("position"):
-                position = int(self.get_state("position"))
-                # position in Vimar is inverted: 0 = fully open
-                return position != 0
-            # If no position feedback, assume it's opening when up/down = 0
-            return True
-        return False
-
-    @property
-    def is_closing(self) -> bool:
-        """Return if the cover is closing.
-        
-        In time-based mode: check internal tracking state
-        In native mode: check if webserver reports up/down = '1' (moving down)
-        BUT only if not at end position (position != 100)
-        """
-        if self._use_time_based_tracking():
-            # Time-based: report closing only during active tracking to target
-            return self._tb_operation == "closing"
-        
-        # Native mode: check webserver state
-        updown = self.get_state("up/down")
-        if updown == "1":  # Moving down
-            # Only report closing if not already fully closed
-            if self.has_state("position"):
-                position = int(self.get_state("position"))
-                # position in Vimar is inverted: 100 = fully closed
-                return position != 100
-            # If no position feedback, assume it's closing when up/down = 1
-            return True
-        return False
+    # ✅ REMOVED is_opening and is_closing properties!
+    # Home Assistant will handle them automatically based on current_cover_position
 
     @property
     def current_cover_position(self):
