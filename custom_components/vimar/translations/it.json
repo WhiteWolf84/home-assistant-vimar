@@ -48,10 +48,14 @@
           "scan_interval": "Intervallo Scansione (secondi)",
           "global_channel_id": "ID Canale Globale MediaPlayer",
           "ignore": "Piattaforme ignorate",
+          "cover_position_mode": "Modalità posizionamento tapparelle",
           "use_vimar_naming": "Usa nomenclatura Vimar",
           "friendly_name_room_name_at_begin": "Imposta nome stanza all'inizio del nome",
           "devices_as_lights_re": "RegEx per impostare entità come luci (CH_Main_Automation), altre come interruttori",
           "devices_as_binary_sensor_re": "RegEx per impostare entità interruttori come sensori binari"
+        },
+        "data_description": {
+          "cover_position_mode": "Scegli come gestire la posizione delle tapparelle: 'auto' usa il metodo nativo se disponibile altrimenti il tracking temporale, 'native' usa solo il metodo tradizionale, 'time_based' forza sempre il tracking temporale"
         }
       },
       "three": {
@@ -68,6 +72,15 @@
       "save_cert_failed": "Salvataggio certificato fallito. Controlla il percorso e riprova",
       "unknown": "Errore imprevisto",
       "regex_not_valid": "RegEx non valida"
+    }
+  },
+  "selector": {
+    "cover_position_mode": {
+      "options": {
+        "auto": "Automatico (ibrido intelligente)",
+        "native": "Nativo (solo webserver)",
+        "time_based": "Basato su tempo (sempre)"
+      }
     }
   },
   "services": {
