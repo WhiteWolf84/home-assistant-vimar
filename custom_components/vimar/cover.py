@@ -350,8 +350,35 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Time-based mode
         return self._tb_position == 0 if self._tb_position is not None else None
 
-    # ✅ REMOVED is_opening and is_closing properties!
-    # Home Assistant will handle them automatically based on current_cover_position
+    @property
+    def is_opening(self) -> bool:
+        """Return True if the cover is opening.
+        
+        When using time-based tracking with assumed_state and current_cover_position,
+        Home Assistant needs this property to properly disable/enable buttons.
+        
+        Returns True only while actively tracking an opening operation.
+        When tracking stops (_tb_operation becomes None), this returns False
+        and buttons are re-enabled based on current position.
+        """
+        if self._use_time_based_tracking():
+            return self._tb_operation == "opening"
+        return False
+
+    @property
+    def is_closing(self) -> bool:
+        """Return True if the cover is closing.
+        
+        When using time-based tracking with assumed_state and current_cover_position,
+        Home Assistant needs this property to properly disable/enable buttons.
+        
+        Returns True only while actively tracking a closing operation.
+        When tracking stops (_tb_operation becomes None), this returns False
+        and buttons are re-enabled based on current position.
+        """
+        if self._use_time_based_tracking():
+            return self._tb_operation == "closing"
+        return False
 
     @property
     def current_cover_position(self):
