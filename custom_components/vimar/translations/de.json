@@ -1,73 +1,89 @@
 {
-    "title": "VIMAR By-Me Hub",
-    "config": {
-      "step": {
-        "user": {
-          "title": "Set up VIMAR By-Me Hub",
-          "data": {
-            "title": "Instance Title",
-            "host": "Host",
-            "username": "User Name",
-            "password": "Password",
-            "port": "Port",
-            "certificate": "Certificate file name",
-            "secure": "Secure (Https)",
-            "verify_ssl": "Verify SSL"
-          }
+  "title": "VIMAR By-Me Hub",
+  "config": {
+    "step": {
+      "user": {
+        "title": "VIMAR By-Me Hub einrichten",
+        "data": {
+          "title": "Instanz Titel",
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "port": "Port",
+          "certificate": "Zertifikat Dateiname",
+          "secure": "Sicher (Https)",
+          "verify_ssl": "SSL verifizieren"
         }
-      },
-      "error": {
-        "cannot_connect": "Failed to connect, please try again",
-        "invalid_auth": "Invalid authentication",
-        "invalid_cert": "Invalid certificate, try change or remove",
-        "save_cert_failed": "Saving certificate failed. Check path and retry",
-        "unknown": "Unexpected error"
-      },
-      "abort": {
-        "already_configured": "Device is already configured"
       }
     },
-    "options": {
-      "step": {
-        "init": {
-          "title": "Set up VIMAR By-Me Hub (Auth)",
-          "data": {
-            "host": "Host",
-            "username": "User Name",
-            "password": "Password",
-            "port": "Port",
-            "certificate": "Certificate file name",
-            "secure": "Secure (Https)",
-            "verify_ssl": "Verify SSL"
-          }
-        },
-        "two": {
-          "title": "Set up VIMAR By-Me Hub (2)",
-          "data": {
-            "timeout": "Request Timeout (seconds)",
-            "scan_interval": "Scan Interval (seconds)",
-            "global_channel_id": "MediaPlayer Global Channel Id",
-            "ignore": "Ignored platforms",
-            "use_vimar_naming": "Use naming as Vimar",
-            "friendly_name_room_name_at_begin": "Set Room Name at begin of name",
-            "devices_as_lights_re": "RegEx for set entities as lights (CH_Main_Automation), others setted as switch",
-            "devices_as_binary_sensor_re": "RegEx for set entities swich as binary_sensor"
-          }
-        },
-        "three": {
-          "title": "Set up VIMAR By-Me Hub (3)",
-          "data": {
-            "delete_and_reload_all_entities" : "Delete and reload all entities (if naming changed)"
-          }
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen, bitte erneut versuchen",
+      "invalid_auth": "Ungültige Authentifizierung",
+      "invalid_cert": "Ungültiges Zertifikat, ändern oder entfernen",
+      "save_cert_failed": "Zertifikat speichern fehlgeschlagen. Pfad prüfen und erneut versuchen",
+      "unknown": "Unerwarteter Fehler"
+    },
+    "abort": {
+      "already_configured": "Gerät ist bereits konfiguriert"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "VIMAR By-Me Hub einrichten (Auth)",
+        "data": {
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "port": "Port",
+          "certificate": "Zertifikat Dateiname",
+          "secure": "Sicher (Https)",
+          "verify_ssl": "SSL verifizieren"
         }
       },
-      "error": {
-        "cannot_connect": "Failed to connect, please try again",
-        "invalid_auth": "Invalid authentication",
-        "invalid_cert": "Invalid certificate, try change or remove",
-        "save_cert_failed": "Saving certificate failed. Check path and retry",
-        "unknown": "Unexpected error",
-        "regex_not_valid": "RegEx not valid"
+      "two": {
+        "title": "VIMAR By-Me Hub einrichten (2)",
+        "data": {
+          "timeout": "Anforderungs-Timeout (Sekunden)",
+          "scan_interval": "Scan-Intervall (Sekunden)",
+          "global_channel_id": "MediaPlayer Globale Kanal-ID",
+          "ignore": "Ignorierte Plattformen",
+          "use_vimar_naming": "Vimar-Benennung verwenden",
+          "friendly_name_room_name_at_begin": "Raumname am Anfang des Namens setzen",
+          "devices_as_lights_re": "RegEx für Entitäten als Lichter (CH_Main_Automation), andere als Schalter",
+          "devices_as_binary_sensor_re": "RegEx für Entitäten Schalter als Binärsensor"
+        }
+      },
+      "three": {
+        "title": "VIMAR By-Me Hub einrichten (3)",
+        "data": {
+          "delete_and_reload_all_entities": "Alle Entitäten löschen und neu laden (wenn Benennung geändert)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen, bitte erneut versuchen",
+      "invalid_auth": "Ungültige Authentifizierung",
+      "invalid_cert": "Ungültiges Zertifikat, ändern oder entfernen",
+      "save_cert_failed": "Zertifikat speichern fehlgeschlagen. Pfad prüfen und erneut versuchen",
+      "unknown": "Unerwarteter Fehler",
+      "regex_not_valid": "RegEx ungültig"
+    }
+  },
+  "services": {
+    "set_travel_times": {
+      "name": "Öffnungs-/Schließzeiten konfigurieren",
+      "description": "Legt die Öffnungs- und Schließzeiten für einen Rolladen fest. Die Werte werden permanent gespeichert und für die Positionsverfolgung verwendet.",
+      "fields": {
+        "travel_time_up": {
+          "name": "Öffnungszeit (Sekunden)",
+          "description": "Zeit in Sekunden, die zum vollständigen Öffnen des Rolladens benötigt wird"
+        },
+        "travel_time_down": {
+          "name": "Schließzeit (Sekunden)",
+          "description": "Zeit in Sekunden, die zum vollständigen Schließen des Rolladens benötigt wird"
+        }
       }
     }
   }
+}
