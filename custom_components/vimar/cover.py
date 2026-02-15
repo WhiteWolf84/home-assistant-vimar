@@ -18,7 +18,14 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 import voluptuous as vol
 
-from .const import DEVICE_TYPE_COVERS as CURR_PLATFORM
+from .const import (
+    CONF_COVER_POSITION_MODE,
+    COVER_POSITION_MODE_AUTO,
+    COVER_POSITION_MODE_NATIVE,
+    COVER_POSITION_MODE_TIME_BASED,
+    DEFAULT_COVER_POSITION_MODE,
+    DEVICE_TYPE_COVERS as CURR_PLATFORM,
+)
 from .vimar_entity import VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,7 +62,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     @property
     def assumed_state(self) -> bool:
         """Return True if we're using time-based tracking."""
-        if self.has_state("position"):
+        if self._use_time_based_tracking():
             return True
         return False
 
@@ -75,6 +82,28 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
         self._travel_time_down = DEFAULT_TRAVEL_TIME_DOWN
+
+    def _get_position_mode(self) -> str:
+        """Get configured position mode from coordinator."""
+        if hasattr(self.coordinator, "vimarconfig"):
+            return self.coordinator.vimarconfig.get(
+                CONF_COVER_POSITION_MODE, DEFAULT_COVER_POSITION_MODE
+            )
+        return DEFAULT_COVER_POSITION_MODE
+
+    def _use_time_based_tracking(self) -> bool:
+        """Determine if time-based tracking should be used."""
+        mode = self._get_position_mode()
+
+        if mode == COVER_POSITION_MODE_TIME_BASED:
+            # Force time-based even if native position is available
+            return True
+        elif mode == COVER_POSITION_MODE_NATIVE:
+            # Never use time-based, rely on native only
+            return False
+        else:  # COVER_POSITION_MODE_AUTO or default
+            # Use time-based only if native position is not available
+            return not self.has_state("position")
 
     async def async_set_travel_times(self, travel_time_up: int, travel_time_down: int):
         """Service to set travel times for this cover."""
@@ -104,6 +133,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         await super().async_added_to_hass()
 
         _LOGGER.debug(f"{self.name}: === async_added_to_hass START ===")
+        _LOGGER.debug(f"{self.name}: Position mode: {self._get_position_mode()}")
+        _LOGGER.debug(f"{self.name}: Use time-based tracking: {self._use_time_based_tracking()}")
 
         # Carica travel times dalle entity options
         if hasattr(self, "registry_entry") and self.registry_entry:
@@ -126,8 +157,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     f"down: {self._travel_time_down}s"
                 )
 
-        # Ripristina posizione
-        if not self.has_state("position"):
+        # Ripristina posizione solo se usiamo time-based tracking
+        if self._use_time_based_tracking():
             old_state = await self.async_get_last_state()
 
             _LOGGER.debug(f"{self.name}: old_state exists = {old_state is not None}")
@@ -158,7 +189,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from coordinator."""
         super()._handle_coordinator_update()
-        if not self.has_state("position"):
+        if self._use_time_based_tracking():
             self._tb_check_vimar_state()
 
     def _tb_check_vimar_state(self):
@@ -308,31 +339,35 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def is_closed(self) -> bool | None:
-        if self.has_state("position"):
+        if not self._use_time_based_tracking():
+            # Native mode - use traditional logic
             if self.get_state("up/down") == "1":
                 return True
             elif self.get_state("up/down") == "0":
                 return False
             else:
                 return None
+        # Time-based mode
         return self._tb_position == 0 if self._tb_position is not None else None
 
     @property
     def is_opening(self) -> bool:
-        if not self.has_state("position"):
+        if self._use_time_based_tracking():
             return self._tb_operation == "opening"
         return False
 
     @property
     def is_closing(self) -> bool:
-        if not self.has_state("position"):
+        if self._use_time_based_tracking():
             return self._tb_operation == "closing"
         return False
 
     @property
     def current_cover_position(self):
-        if self.has_state("position"):
+        if not self._use_time_based_tracking() and self.has_state("position"):
+            # Native mode
             return 100 - int(self.get_state("position"))
+        # Time-based mode
         return self._tb_position
 
     @property
@@ -351,8 +386,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             CoverEntityFeature.OPEN
             | CoverEntityFeature.CLOSE
             | CoverEntityFeature.STOP
-            | CoverEntityFeature.SET_POSITION
         )
+
+        # Add SET_POSITION if using time-based OR if native position is available
+        if self._use_time_based_tracking() or self.has_state("position"):
+            flags |= CoverEntityFeature.SET_POSITION
 
         if self.has_state("slat_position") and self.has_state(
             "clockwise/counterclockwise"
@@ -370,22 +408,25 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     def extra_state_attributes(self):
         """Return extra attributes."""
         attrs = super().extra_state_attributes or {}
-        attrs["travel_time_up"] = self._travel_time_up
-        attrs["travel_time_down"] = self._travel_time_down
+        attrs["position_mode"] = self._get_position_mode()
+        attrs["uses_time_based_tracking"] = self._use_time_based_tracking()
+        if self._use_time_based_tracking():
+            attrs["travel_time_up"] = self._travel_time_up
+            attrs["travel_time_down"] = self._travel_time_down
         return attrs
 
     async def async_close_cover(self, **kwargs):
-        if not self.has_state("position"):
+        if self._use_time_based_tracking():
             await self._tb_start_tracking(False, target=0)
         self.change_state("up/down", "1")
 
     async def async_open_cover(self, **kwargs):
-        if not self.has_state("position"):
+        if self._use_time_based_tracking():
             await self._tb_start_tracking(True, target=100)
         self.change_state("up/down", "0")
 
     async def async_stop_cover(self, **kwargs):
-        if not self.has_state("position"):
+        if self._use_time_based_tracking():
             await self._tb_stop_tracking()
         self.change_state("stop up/stop down", "1")
 
@@ -394,9 +435,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             if ATTR_POSITION in kwargs:
                 target = int(kwargs[ATTR_POSITION])
 
-                if self.has_state("position"):
+                if not self._use_time_based_tracking() and self.has_state("position"):
+                    # Native mode
                     self.change_state("position", 100 - target)
                 else:
+                    # Time-based mode
                     if target > self._tb_position:
                         await self._tb_start_tracking(True, target=target)
                         self.change_state("up/down", "0")
