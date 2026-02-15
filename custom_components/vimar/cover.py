@@ -1,6 +1,10 @@
-"""Platform for cover integration."""
+"""Platform for cover integration - CON ENTITY OPTIONS.
+
+Configurazione travel times tramite UI di ogni singola cover!
+"""
 
 import logging
+from datetime import datetime, timedelta
 
 from homeassistant.components.cover import (
     ATTR_POSITION,
@@ -8,39 +12,295 @@ from homeassistant.components.cover import (
     CoverEntity,
     CoverEntityFeature,
 )
+from homeassistant.core import callback
+from homeassistant.helpers import entity_platform
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.restore_state import RestoreEntity
+import voluptuous as vol
 
 from .const import DEVICE_TYPE_COVERS as CURR_PLATFORM
 from .vimar_entity import VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
 
+DEFAULT_TRAVEL_TIME_UP = 28
+DEFAULT_TRAVEL_TIME_DOWN = 26
+POSITION_UPDATE_INTERVAL = 0.2
+
+# Chiavi per storage entity options
+CONF_TRAVEL_TIME_UP = "travel_time_up"
+CONF_TRAVEL_TIME_DOWN = "travel_time_down"
+
 
 async def async_setup_entry(hass, entry, async_add_devices):
     """Set up the Vimar Cover platform."""
     vimar_setup_entry(VimarCover, CURR_PLATFORM, hass, entry, async_add_devices)
 
+    # Registra servizio per configurare travel times
+    platform = entity_platform.async_get_current_platform()
 
-# see: https://developers.home-assistant.io/docs/core/entity/cover
-class VimarCover(VimarEntity, CoverEntity):
-    """Provides a Vimar cover."""
+    platform.async_register_entity_service(
+        "set_travel_times",
+        {
+            vol.Required(CONF_TRAVEL_TIME_UP): vol.All(int, vol.Range(min=1, max=300)),
+            vol.Required(CONF_TRAVEL_TIME_DOWN): vol.All(int, vol.Range(min=1, max=300)),
+        },
+        "async_set_travel_times",
+    )
 
-    # see:
-    # https://developers.home-assistant.io/docs/entity_index/#generic-properties
-    # Return True if the state is based on our assumption instead of reading it from the device. this will ignore is_closed state
+
+class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
+    """Provides a Vimar cover with time-based position tracking."""
+
     @property
     def assumed_state(self) -> bool:
-        """Return True if unable to access real state of the entity."""
-        return True
+        """Return True if we're using time-based tracking."""
+        if self.has_state("position"):
+            return True
+        return False
 
     def __init__(self, coordinator, device_id: int):
         """Initialize the cover."""
         VimarEntity.__init__(self, coordinator, device_id)
-        # self.entity_id = "cover." + self._name.lower() + "_" + self._device_id
 
-        # _state = False .. 0, stop has not been pressed
-        # _state = True .. 1, stop has been pressed
-        # _direction = 0 .. upwards
-        # _direction = 1 .. downards
+        # Time-based tracking
+        self._tb_position = None
+        self._tb_target = None
+        self._tb_start_time = None
+        self._tb_start_position = None
+        self._tb_operation = None
+        self._tb_unsub = None
+        self._tb_last_updown = None
+
+        # Travel times (saranno caricati in async_added_to_hass)
+        self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
+        self._travel_time_down = DEFAULT_TRAVEL_TIME_DOWN
+
+    async def async_set_travel_times(self, travel_time_up: int, travel_time_down: int):
+        """Service to set travel times for this cover."""
+        self._travel_time_up = travel_time_up
+        self._travel_time_down = travel_time_down
+
+        # Salva nelle entity options
+        if hasattr(self, "registry_entry") and self.registry_entry:
+            from homeassistant.helpers import entity_registry as er
+
+            entity_reg = er.async_get(self.hass)
+            entity_reg.async_update_entity_options(
+                self.entity_id,
+                "cover",
+                {
+                    CONF_TRAVEL_TIME_UP: travel_time_up,
+                    CONF_TRAVEL_TIME_DOWN: travel_time_down,
+                }
+            )
+
+        _LOGGER.info(
+            f"{self.name}: Travel times updated - up: {travel_time_up}s, down: {travel_time_down}s"
+        )
+
+    async def async_added_to_hass(self):
+        """Restore state when added to hass."""
+        await super().async_added_to_hass()
+
+        _LOGGER.debug(f"{self.name}: === async_added_to_hass START ===")
+
+        # Carica travel times dalle entity options
+        if hasattr(self, "registry_entry") and self.registry_entry:
+            options = self.registry_entry.options.get("cover", {})
+
+            saved_up = options.get(CONF_TRAVEL_TIME_UP)
+            saved_down = options.get(CONF_TRAVEL_TIME_DOWN)
+
+            if saved_up is not None:
+                self._travel_time_up = int(saved_up)
+            if saved_down is not None:
+                self._travel_time_down = int(saved_down)
+
+            if (
+                self._travel_time_up != DEFAULT_TRAVEL_TIME_UP
+                or self._travel_time_down != DEFAULT_TRAVEL_TIME_DOWN
+            ):
+                _LOGGER.info(
+                    f"{self.name}: Custom travel times loaded - up: {self._travel_time_up}s, "
+                    f"down: {self._travel_time_down}s"
+                )
+
+        # Ripristina posizione
+        if not self.has_state("position"):
+            old_state = await self.async_get_last_state()
+
+            _LOGGER.debug(f"{self.name}: old_state exists = {old_state is not None}")
+
+            if old_state:
+                _LOGGER.debug(f"{self.name}: old_state.state = '{old_state.state}'")
+                position_attr = old_state.attributes.get("current_position")
+                _LOGGER.debug(f"{self.name}: current_position value = {position_attr}")
+
+            if old_state and old_state.attributes.get("current_position") is not None:
+                self._tb_position = old_state.attributes["current_position"]
+                _LOGGER.info(f"{self.name}: ✅ Position restored: {self._tb_position}%")
+            else:
+                self._tb_position = 0
+                _LOGGER.info(f"{self.name}: ⚠️ New cover, default position: 0% (closed)")
+        else:
+            _LOGGER.debug(f"{self.name}: Using native position from webserver")
+
+        self._tb_last_updown = self.get_state("up/down")
+        _LOGGER.debug(f"{self.name}: === async_added_to_hass END ===")
+
+    async def async_will_remove_from_hass(self):
+        """Cleanup when removed."""
+        if self._tb_unsub:
+            self._tb_unsub()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from coordinator."""
+        super()._handle_coordinator_update()
+        if not self.has_state("position"):
+            self._tb_check_vimar_state()
+
+    def _tb_check_vimar_state(self):
+        """Controlla stato Vimar e gestisci movimenti."""
+        current_updown = self.get_state("up/down")
+
+        if self._tb_operation:
+            expected_updown = "0" if self._tb_operation == "opening" else "1"
+
+            if current_updown != expected_updown:
+                _LOGGER.info(
+                    f"{self.name}: ⏸️ STOP detected during HA tracking! "
+                    f"up/down={current_updown} (was {self._tb_operation})"
+                )
+                self.hass.async_create_task(self._tb_stop_tracking())
+                return
+
+        if current_updown != self._tb_last_updown and not self._tb_operation:
+
+            if current_updown == "0":
+                self._tb_position = 100
+                _LOGGER.info(
+                    f"{self.name}: ⬆️ Physical button OPEN → Position set to 100%"
+                )
+                self.async_write_ha_state()
+
+            elif current_updown == "1":
+                self._tb_position = 0
+                _LOGGER.info(
+                    f"{self.name}: ⬇️ Physical button CLOSE → Position set to 0%"
+                )
+                self.async_write_ha_state()
+
+        self._tb_last_updown = current_updown
+
+    async def _tb_start_tracking(self, opening: bool, target: int = None):
+        """Avvia tracking temporale per comandi HA."""
+        operation = "opening" if opening else "closing"
+
+        if self._tb_operation == operation:
+            return
+
+        self._tb_operation = operation
+        self._tb_start_time = datetime.now()
+        self._tb_start_position = self._tb_position
+        self._tb_target = target if target is not None else (100 if opening else 0)
+
+        if self._tb_unsub:
+            self._tb_unsub()
+
+        self._tb_unsub = async_track_time_interval(
+            self.hass,
+            self._tb_update_position,
+            timedelta(seconds=POSITION_UPDATE_INTERVAL),
+        )
+
+        _LOGGER.debug(
+            f"{self.name}: ▶️ Tracking {operation} from {self._tb_position}% to {self._tb_target}%"
+        )
+        self.async_write_ha_state()
+
+    async def _tb_stop_tracking(self):
+        """Ferma tracking e calcola posizione finale."""
+        if self._tb_unsub:
+            self._tb_unsub()
+            self._tb_unsub = None
+
+        if self._tb_start_time:
+            self._tb_calculate_position()
+
+        _LOGGER.info(f"{self.name}: ⏹️ Stopped at {self._tb_position}%")
+
+        self._tb_operation = None
+        self._tb_start_time = None
+        self._tb_target = None
+
+        self.async_write_ha_state()
+
+    @callback
+    def _tb_update_position(self, now):
+        """Aggiorna posizione durante tracking."""
+        self._tb_calculate_position()
+
+        should_stop = False
+        send_stop_command = False
+
+        if self._tb_position >= 100 and self._tb_operation == "opening":
+            self._tb_position = 100
+            should_stop = True
+            send_stop_command = False
+
+        elif self._tb_position <= 0 and self._tb_operation == "closing":
+            self._tb_position = 0
+            should_stop = True
+            send_stop_command = False
+
+        elif self._tb_target is not None:
+            if self._tb_operation == "opening" and self._tb_position >= self._tb_target:
+                self._tb_position = self._tb_target
+                should_stop = True
+                send_stop_command = (self._tb_target not in [0, 100])
+
+            elif self._tb_operation == "closing" and self._tb_position <= self._tb_target:
+                self._tb_position = self._tb_target
+                should_stop = True
+                send_stop_command = (self._tb_target not in [0, 100])
+
+        if should_stop:
+            if send_stop_command:
+                _LOGGER.info(
+                    f"{self.name}: 🎯 Reached target {self._tb_position}%, sending STOP"
+                )
+                self.hass.async_create_task(self.async_stop_cover())
+            else:
+                _LOGGER.info(
+                    f"{self.name}: 🏁 Reached end-stop {self._tb_position}%, "
+                    "mechanical stop (no STOP command)"
+                )
+
+            self.hass.async_create_task(self._tb_stop_tracking())
+
+        self.async_write_ha_state()
+
+    def _tb_calculate_position(self):
+        """Calcola posizione attuale basata sul tempo trascorso."""
+        if not self._tb_start_time:
+            return
+
+        elapsed = (datetime.now() - self._tb_start_time).total_seconds()
+        travel_time = (
+            self._travel_time_up
+            if self._tb_operation == "opening"
+            else self._travel_time_down
+        )
+        percentage = (elapsed / travel_time) * 100
+
+        if self._tb_operation == "opening":
+            self._tb_position = min(100, self._tb_start_position + percentage)
+        else:
+            self._tb_position = max(0, self._tb_start_position - percentage)
+
+        self._tb_position = round(self._tb_position)
 
     @property
     def entity_platform(self):
@@ -48,55 +308,55 @@ class VimarCover(VimarEntity, CoverEntity):
 
     @property
     def is_closed(self) -> bool | None:
-        """Return if the cover is closed."""
-        # if _state (stopped) is 1, than stopped was pressed, therefor it cannot be completely closed
-        # if its 0, and direction 1, than it was going downwards and it was
-        # never stopped, therefor it is closed now
-        # if self.get_state('stop up/stop down') != '0':
-        #     return None
+        if self.has_state("position"):
+            if self.get_state("up/down") == "1":
+                return True
+            elif self.get_state("up/down") == "0":
+                return False
+            else:
+                return None
+        return self._tb_position == 0 if self._tb_position is not None else None
 
-        if self.get_state("up/down") == "1":
-            return True
-        elif self.get_state("up/down") == "0":
-            return False
-        else:
-            return None
+    @property
+    def is_opening(self) -> bool:
+        if not self.has_state("position"):
+            return self._tb_operation == "opening"
+        return False
+
+    @property
+    def is_closing(self) -> bool:
+        if not self.has_state("position"):
+            return self._tb_operation == "closing"
+        return False
 
     @property
     def current_cover_position(self):
-        """Return current position of cover.
-
-        None is unknown, 0 is closed, 100 is fully open.
-        """
         if self.has_state("position"):
             return 100 - int(self.get_state("position"))
-        else:
-            return None
+        return self._tb_position
 
     @property
     def current_cover_tilt_position(self):
-        """
-        Return current position of cover tilt.
-
-        None is unknown, 0 is closed, 100 is fully open.
-        """
         if self.has_state("slat_position"):
             return 100 - int(self.get_state("slat_position"))
-        else:
-            return None
+        return None
 
     @property
     def is_default_state(self):
-        """Return True of in default state - resulting in default icon."""
         return (self.is_closed, True)[self.is_closed is None]
 
     @property
     def supported_features(self) -> CoverEntityFeature:
-        """Flag supported features."""
-        flags = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
-        if self.has_state("position"):
-            flags |= CoverEntityFeature.SET_POSITION
-        if self.has_state("slat_position") and self.has_state("clockwise/counterclockwise"):
+        flags = (
+            CoverEntityFeature.OPEN
+            | CoverEntityFeature.CLOSE
+            | CoverEntityFeature.STOP
+            | CoverEntityFeature.SET_POSITION
+        )
+
+        if self.has_state("slat_position") and self.has_state(
+            "clockwise/counterclockwise"
+        ):
             flags |= (
                 CoverEntityFeature.STOP_TILT
                 | CoverEntityFeature.OPEN_TILT
@@ -106,45 +366,56 @@ class VimarCover(VimarEntity, CoverEntity):
 
         return flags
 
-    # async getter and setter
+    @property
+    def extra_state_attributes(self):
+        """Return extra attributes."""
+        attrs = super().extra_state_attributes or {}
+        attrs["travel_time_up"] = self._travel_time_up
+        attrs["travel_time_down"] = self._travel_time_down
+        return attrs
 
     async def async_close_cover(self, **kwargs):
-        """Close the cover."""
+        if not self.has_state("position"):
+            await self._tb_start_tracking(False, target=0)
         self.change_state("up/down", "1")
 
     async def async_open_cover(self, **kwargs):
-        """Open the cover."""
+        if not self.has_state("position"):
+            await self._tb_start_tracking(True, target=100)
         self.change_state("up/down", "0")
 
     async def async_stop_cover(self, **kwargs):
-        """Stop the cover."""
+        if not self.has_state("position"):
+            await self._tb_stop_tracking()
         self.change_state("stop up/stop down", "1")
 
     async def async_set_cover_position(self, **kwargs):
-        """Move the cover to a specific position."""
         if kwargs:
-            if ATTR_POSITION in kwargs and self.has_state("position"):
-                self.change_state("position", 100 - int(kwargs[ATTR_POSITION]))
+            if ATTR_POSITION in kwargs:
+                target = int(kwargs[ATTR_POSITION])
+
+                if self.has_state("position"):
+                    self.change_state("position", 100 - target)
+                else:
+                    if target > self._tb_position:
+                        await self._tb_start_tracking(True, target=target)
+                        self.change_state("up/down", "0")
+                    elif target < self._tb_position:
+                        await self._tb_start_tracking(False, target=target)
+                        self.change_state("up/down", "1")
 
     async def async_open_cover_tilt(self, **kwargs):
-        """Open the cover tilt."""
         self.change_state("clockwise/counterclockwise", "0")
 
     async def async_close_cover_tilt(self, **kwargs):
-        """Close the cover tilt."""
         self.change_state("clockwise/counterclockwise", "1")
 
     async def async_set_cover_tilt_position(self, **kwargs):
-        """Move the cover tilt to a specific position. vimar 100 is down and 0 is up, hass: 100 is up and 0 is down."""
         if kwargs:
             if ATTR_TILT_POSITION in kwargs and self.has_state("slat_position"):
-                self.change_state("slat_position", 100 - int(kwargs[ATTR_TILT_POSITION]))
+                self.change_state(
+                    "slat_position", 100 - int(kwargs[ATTR_TILT_POSITION])
+                )
 
     async def async_stop_cover_tilt(self, **kwargs):
-        """Stop the cover."""
         self.change_state("stop up/stop down", "1")
-
-    # private helper methods
-
-
-# end class VimarCover

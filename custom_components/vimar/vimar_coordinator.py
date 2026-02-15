@@ -74,7 +74,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         if uptade_interval < 1:
             uptade_interval = DEFAULT_SCAN_INTERVAL
         super().__init__(
-            hass, _LOGGER, name=DOMAIN, update_interval=timedelta(seconds=uptade_interval)
+            hass, _LOGGER, name=DOMAIN, update_interval=timedelta(seconds=uptade_interval), config_entry=entry
         )
 
     async def _async_update_data(self):

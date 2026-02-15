@@ -134,7 +134,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = VimarDataUpdateCoordinator(hass, entry=entry, vimarconfig=vimarconfig)
     hass.data[DOMAIN][entry.entry_id] = coordinator
     await coordinator.init_vimarproject()
-    await coordinator.async_config_entry_first_refresh()
+
+    # Chiama async_config_entry_first_refresh solo se è il primo setup
+    if entry.state.name == "SETUP_IN_PROGRESS":
+        await coordinator.async_config_entry_first_refresh()
+    else:
+        await coordinator.async_refresh()
+
 
     if (entry.data or {}).get(CONF_DELETE_AND_RELOAD_ALL_ENTITIES):
         options = entry.data.copy()

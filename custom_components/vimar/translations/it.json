@@ -1,0 +1,89 @@
+{
+  "title": "VIMAR By-Me Hub",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configura VIMAR By-Me Hub",
+        "data": {
+          "title": "Titolo Istanza",
+          "host": "Host",
+          "username": "Nome Utente",
+          "password": "Password",
+          "port": "Porta",
+          "certificate": "Nome file certificato",
+          "secure": "Sicuro (Https)",
+          "verify_ssl": "Verifica SSL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connessione fallita, riprova",
+      "invalid_auth": "Autenticazione non valida",
+      "invalid_cert": "Certificato non valido, prova a cambiare o rimuovere",
+      "save_cert_failed": "Salvataggio certificato fallito. Controlla il percorso e riprova",
+      "unknown": "Errore imprevisto"
+    },
+    "abort": {
+      "already_configured": "Il dispositivo è già configurato"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configura VIMAR By-Me Hub (Auth)",
+        "data": {
+          "host": "Host",
+          "username": "Nome Utente",
+          "password": "Password",
+          "port": "Porta",
+          "certificate": "Nome file certificato",
+          "secure": "Sicuro (Https)",
+          "verify_ssl": "Verifica SSL"
+        }
+      },
+      "two": {
+        "title": "Configura VIMAR By-Me Hub (2)",
+        "data": {
+          "timeout": "Timeout Richiesta (secondi)",
+          "scan_interval": "Intervallo Scansione (secondi)",
+          "global_channel_id": "ID Canale Globale MediaPlayer",
+          "ignore": "Piattaforme ignorate",
+          "use_vimar_naming": "Usa nomenclatura Vimar",
+          "friendly_name_room_name_at_begin": "Imposta nome stanza all'inizio del nome",
+          "devices_as_lights_re": "RegEx per impostare entità come luci (CH_Main_Automation), altre come interruttori",
+          "devices_as_binary_sensor_re": "RegEx per impostare entità interruttori come sensori binari"
+        }
+      },
+      "three": {
+        "title": "Configura VIMAR By-Me Hub (3)",
+        "data": {
+          "delete_and_reload_all_entities": "Elimina e ricarica tutte le entità (se la nomenclatura è cambiata)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connessione fallita, riprova",
+      "invalid_auth": "Autenticazione non valida",
+      "invalid_cert": "Certificato non valido, prova a cambiare o rimuovere",
+      "save_cert_failed": "Salvataggio certificato fallito. Controlla il percorso e riprova",
+      "unknown": "Errore imprevisto",
+      "regex_not_valid": "RegEx non valida"
+    }
+  },
+  "services": {
+    "set_travel_times": {
+      "name": "Configura Tempi Apertura/Chiusura",
+      "description": "Imposta i tempi di apertura e chiusura per una tapparella. I valori vengono salvati permanentemente e utilizzati per il tracking della posizione.",
+      "fields": {
+        "travel_time_up": {
+          "name": "Tempo Apertura (secondi)",
+          "description": "Tempo in secondi necessario per aprire completamente la tapparella"
+        },
+        "travel_time_down": {
+          "name": "Tempo Chiusura (secondi)",
+          "description": "Tempo in secondi necessario per chiudere completamente la tapparella"
+        }
+      }
+    }
+  }
+}
