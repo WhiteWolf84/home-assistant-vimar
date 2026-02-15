@@ -48,10 +48,14 @@
           "scan_interval": "Scan-Intervall (Sekunden)",
           "global_channel_id": "MediaPlayer Globale Kanal-ID",
           "ignore": "Ignorierte Plattformen",
+          "cover_position_mode": "Rolladen-Positionierungsmodus",
           "use_vimar_naming": "Vimar-Benennung verwenden",
           "friendly_name_room_name_at_begin": "Raumname am Anfang des Namens setzen",
           "devices_as_lights_re": "RegEx für Entitäten als Lichter (CH_Main_Automation), andere als Schalter",
           "devices_as_binary_sensor_re": "RegEx für Entitäten Schalter als Binärsensor"
+        },
+        "data_description": {
+          "cover_position_mode": "Wählen Sie, wie die Rollladenpositionen verwaltet werden: 'auto' verwendet die native Methode, falls verfügbar, sonst zeitbasierte Verfolgung, 'native' verwendet nur die traditionelle Methode, 'time_based' erzwingt immer zeitbasierte Verfolgung"
         }
       },
       "three": {
@@ -68,6 +72,15 @@
       "save_cert_failed": "Zertifikat speichern fehlgeschlagen. Pfad prüfen und erneut versuchen",
       "unknown": "Unerwarteter Fehler",
       "regex_not_valid": "RegEx ungültig"
+    }
+  },
+  "selector": {
+    "cover_position_mode": {
+      "options": {
+        "auto": "Automatisch (intelligenter Hybrid)",
+        "native": "Nativ (nur Webserver)",
+        "time_based": "Zeitbasiert (immer)"
+      }
     }
   },
   "services": {
