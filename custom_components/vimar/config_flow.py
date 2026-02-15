@@ -24,6 +24,7 @@ from homeassistant.util import slugify
 from .const import (
     _LOGGER,
     CONF_CERTIFICATE,
+    CONF_COVER_POSITION_MODE,
     CONF_DELETE_AND_RELOAD_ALL_ENTITIES,
     CONF_DEVICES_BINARY_SENSOR_RE,
     CONF_DEVICES_LIGHTS_RE,
@@ -35,7 +36,9 @@ from .const import (
     CONF_SECURE,
     CONF_TITLE,
     CONF_USE_VIMAR_NAMING,
+    COVER_POSITION_MODES,
     DEFAULT_CERTIFICATE,
+    DEFAULT_COVER_POSITION_MODE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SECURE,
@@ -342,6 +345,10 @@ def get_schema_options_two(config: dict | None = None) -> dict:
         vol.Optional(
             CONF_IGNORE_PLATFORM, description=get_vol_descr(config, CONF_IGNORE_PLATFORM)
         ): cv.multi_select(domains),
+        vol.Optional(
+            CONF_COVER_POSITION_MODE,
+            description=get_vol_descr(config, CONF_COVER_POSITION_MODE, DEFAULT_COVER_POSITION_MODE),
+        ): vol.In(COVER_POSITION_MODES),
         vol.Optional(
             CONF_USE_VIMAR_NAMING, description=get_vol_descr(config, CONF_USE_VIMAR_NAMING)
         ): bool,
