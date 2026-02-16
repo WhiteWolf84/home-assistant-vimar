@@ -61,9 +61,16 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def assumed_state(self) -> bool:
-        """Return True if we're using time-based tracking."""
-        if self._use_time_based_tracking():
+        """Return True if state is assumed (copied from original logic).
+        
+        Original had: True if has native position, False otherwise.
+        This seems backwards but was working in the original version!
+        For time-based tracking mode, we adapt it to check if NOT using time-based.
+        """
+        if not self._use_time_based_tracking():
+            # Has native position → return True (like original)
             return True
+        # Using time-based → return False (like original for covers without position)
         return False
 
     def __init__(self, coordinator, device_id: int):
