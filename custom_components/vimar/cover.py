@@ -62,23 +62,29 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def assumed_state(self) -> bool:
-        """Return True if state is assumed (copied from original logic).
+        """Return True if state is assumed (estimated), False if known (certain).
         
-        Original had: True if has native position, False otherwise.
-        This seems backwards but was working in the original version!
-        For time-based tracking mode, we adapt it to check if NOT using time-based.
-        For LEGACY mode, return True (original behavior).
+        True = State is ASSUMED/ESTIMATED (cannot access real position)
+        False = State is KNOWN/CERTAIN (have accurate position info)
+        
+        LEGACY mode: Always True (like original master branch)
+        NATIVE mode: True if no sensor, False if has sensor
+        TIME_BASED mode: False (calculated position is "known")
+        AUTO mode: False (either native sensor or time-based calculation)
         """
         mode = self._get_position_mode()
         
         if mode == COVER_POSITION_MODE_LEGACY:
-            # LEGACY mode: original behavior from master branch
-            return True if self.has_state("position") else False
-        
-        if not self._use_time_based_tracking():
-            # Has native position → return True (like original)
+            # LEGACY: Always True (original master behavior)
             return True
-        # Using time-based → return False (like original for covers without position)
+        
+        if mode == COVER_POSITION_MODE_NATIVE:
+            # NATIVE: True if no sensor (assumed), False if has sensor (known)
+            return not self.has_state("position")
+        
+        # TIME_BASED or AUTO modes:
+        # - Time-based tracking provides calculated position → False (known)
+        # - Native sensor provides hardware position → False (known)
         return False
 
     def __init__(self, coordinator, device_id: int):
