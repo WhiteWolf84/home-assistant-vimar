@@ -55,7 +55,7 @@
           "devices_as_binary_sensor_re": "RegEx per impostare entità interruttori come sensori binari"
         },
         "data_description": {
-          "cover_position_mode": "Scegli come gestire la posizione delle tapparelle: 'auto' usa il metodo nativo se disponibile altrimenti il tracking temporale, 'native' usa solo il metodo tradizionale, 'time_based' forza sempre il tracking temporale"
+          "cover_position_mode": "Scegli come gestire la posizione delle tapparelle:\n- 'auto': usa tracking temporale se non c'è sensore, altrimenti nativo\n- 'native': usa solo feedback webserver\n- 'time_based': forza sempre tracking temporale\n- 'legacy': comportamento originale master (no tracking)"
         }
       },
       "three": {
@@ -79,7 +79,8 @@
       "options": {
         "auto": "Automatico (ibrido intelligente)",
         "native": "Nativo (solo webserver)",
-        "time_based": "Basato su tempo (sempre)"
+        "time_based": "Basato su tempo (sempre)",
+        "legacy": "Legacy (come master branch)"
       }
     }
   },
