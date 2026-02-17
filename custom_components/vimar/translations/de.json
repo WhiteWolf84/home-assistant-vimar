@@ -55,7 +55,7 @@
           "devices_as_binary_sensor_re": "RegEx für Entitäten Schalter als Binärsensor"
         },
         "data_description": {
-          "cover_position_mode": "Wählen Sie, wie die Rollladenpositionen verwaltet werden: 'auto' verwendet die native Methode, falls verfügbar, sonst zeitbasierte Verfolgung, 'native' verwendet nur die traditionelle Methode, 'time_based' erzwingt immer zeitbasierte Verfolgung"
+          "cover_position_mode": "Wählen Sie, wie die Rollladenpositionen verwaltet werden:\n- 'auto': verwendet zeitbasierte Verfolgung wenn kein Sensor, sonst nativ\n- 'native': verwendet nur Webserver-Feedback\n- 'time_based': erzwingt immer zeitbasierte Verfolgung\n- 'legacy': ursprüngliches Master-Branch-Verhalten (keine Verfolgung)"
         }
       },
       "three": {
@@ -79,7 +79,8 @@
       "options": {
         "auto": "Automatisch (intelligenter Hybrid)",
         "native": "Nativ (nur Webserver)",
-        "time_based": "Zeitbasiert (immer)"
+        "time_based": "Zeitbasiert (immer)",
+        "legacy": "Legacy (wie Master-Branch)"
       }
     }
   },
