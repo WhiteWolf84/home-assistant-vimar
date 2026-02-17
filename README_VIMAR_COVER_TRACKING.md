@@ -56,6 +56,7 @@ Position tracking behavior is controlled via integration configuration (`cover_p
 - Position display only when hardware sensor present
 - `set_cover_position` requires hardware sensor
 - Compatible with original configuration files
+- Always reports `assumed_state = True` (like original)
 
 **Use case**: Migration from original version, compatibility testing, rollback scenarios
 
@@ -150,37 +151,42 @@ position = start_position ± (elapsed_time / travel_time) × 100%
 
 ### `assumed_state`
 
-| Mode | Hardware Sensor | Returns |
-|------|----------------|----------|
-| LEGACY | Yes | `True` |
-| LEGACY | No | `False` |
-| Other modes | - | `False` (time-based) / `True` (native) |
+**Definition**: 
+- `True` = State is **ASSUMED/ESTIMATED** (cannot access real position)
+- `False` = State is **KNOWN/CERTAIN** (have accurate position information)
 
-**Note**: LEGACY mode preserves original (counterintuitive) behavior from master branch.
+| Mode | Hardware Sensor | Returns | Explanation |
+|------|----------------|----------|-------------|
+| **LEGACY** | Any | `True` | Always assumed (master branch compatibility) |
+| **NATIVE** | ✅ Yes | `False` | Known from hardware sensor |
+| **NATIVE** | ❌ No | `True` | Assumed (only up/down state) |
+| **TIME_BASED** | Any | `False` | Known from calculation |
+| **AUTO** | ✅ Yes | `False` | Known from hardware sensor |
+| **AUTO** | ❌ No | `False` | Known from time-based calculation |
 
 ### `current_cover_position`
 
 | Mode | Hardware Sensor | Returns |
 |------|----------------|----------|
-| LEGACY | Yes | Hardware position (0-100) |
-| LEGACY | No | `None` |
-| TIME_BASED | Any | Time-based position |
-| NATIVE | Yes | Hardware position |
-| NATIVE | No | `None` |
-| AUTO | Yes | Hardware position |
-| AUTO | No | Time-based position |
+| **LEGACY** | ✅ Yes | Hardware position (0-100) |
+| **LEGACY** | ❌ No | `None` |
+| **TIME_BASED** | Any | Time-based position (0-100) |
+| **NATIVE** | ✅ Yes | Hardware position (0-100) |
+| **NATIVE** | ❌ No | `None` |
+| **AUTO** | ✅ Yes | Hardware position (0-100) |
+| **AUTO** | ❌ No | Time-based position (0-100) |
 
 ### `supported_features`
 
 | Mode | Hardware Sensor | SET_POSITION Available? |
 |------|----------------|-------------------------|
-| LEGACY | Yes | ✅ Yes |
-| LEGACY | No | ❌ No |
-| TIME_BASED | Any | ✅ Yes |
-| NATIVE | Yes | ✅ Yes |
-| NATIVE | No | ❌ No |
-| AUTO | Yes | ✅ Yes |
-| AUTO | No | ✅ Yes (time-based) |
+| **LEGACY** | ✅ Yes | ✅ Yes |
+| **LEGACY** | ❌ No | ❌ No |
+| **TIME_BASED** | Any | ✅ Yes |
+| **NATIVE** | ✅ Yes | ✅ Yes |
+| **NATIVE** | ❌ No | ❌ No |
+| **AUTO** | ✅ Yes | ✅ Yes |
+| **AUTO** | ❌ No | ✅ Yes (time-based) |
 
 ---
 
@@ -243,9 +249,9 @@ travel_time_down: 26
 - ✅ Zero CPU overhead
 
 **Entity properties**:
+- `assumed_state`: Always `True`
 - `current_cover_position`: Hardware sensor value or `None`
 - `supported_features`: SET_POSITION only if sensor present
-- `assumed_state`: `True` if sensor, `False` otherwise (counterintuitive)
 
 ### New Implementation - LEGACY Mode
 
@@ -253,6 +259,11 @@ travel_time_down: 26
 - Exact same entity properties
 - Zero time-based tracking
 - Use for compatibility/rollback
+
+**Entity properties**:
+- `assumed_state`: Always `True` (like master)
+- `current_cover_position`: Hardware sensor or `None`
+- `supported_features`: SET_POSITION only if sensor present
 
 ### New Implementation - AUTO Mode (Recommended)
 
@@ -265,9 +276,9 @@ travel_time_down: 26
 - ⚠️ ±5% accuracy (depends on calibration)
 
 **Entity properties**:
+- `assumed_state`: `False` (position is known)
 - `current_cover_position`: Always available (hardware or calculated)
 - `supported_features`: SET_POSITION always included
-- `assumed_state`: `False` (time-based mode)
 
 ---
 
@@ -368,11 +379,11 @@ cover_position_mode: LEGACY
 
 | Mode | Overhead | Notes |
 |------|----------|-------|
-| LEGACY | None | Zero additional processing |
-| NATIVE | None | Uses hardware sensors only |
-| AUTO (with sensors) | None | Falls back to native |
-| AUTO (without sensors) | Low | 200ms interval updates during movement |
-| TIME_BASED | Low | Always active, 200ms updates |
+| **LEGACY** | None | Zero additional processing |
+| **NATIVE** | None | Uses hardware sensors only |
+| **AUTO** (with sensors) | None | Falls back to native |
+| **AUTO** (without sensors) | Low | 200ms interval updates during movement |
+| **TIME_BASED** | Low | Always active, 200ms updates |
 
 **Measurements**: ~0.1% CPU usage per active cover (Raspberry Pi 4)
 
@@ -418,6 +429,10 @@ A: No. Tilt features require hardware sensors (`slat_position` state). Time-base
 
 A: Position is persisted every state change. After restart, last known position is restored (may not reflect actual physical position if cover moved manually during outage).
 
+**Q: Why is assumed_state always True in LEGACY mode?**
+
+A: For compatibility with master branch. The original implementation always returned True, even with hardware sensors. This preserves exact behavior for migration scenarios.
+
 ---
 
 ## Limitations
@@ -427,6 +442,7 @@ A: Position is persisted every state change. After restart, last known position 
 3. **Manual movement**: Physical adjustments during power outage cannot be detected
 4. **Tilt tracking**: Not supported - requires hardware sensor
 5. **Obstructions**: Time-based tracking doesn't detect mechanical blockage
+6. **LEGACY assumed_state**: Always True for historical compatibility (not semantically accurate)
 
 ---
 
@@ -466,6 +482,23 @@ A: Position is persisted every state change. After restart, last known position 
 - `_tb_operation`: Current operation ("opening"/"closing"/None)
 - `_travel_time_up/down`: Calibrated travel times
 
+### assumed_state Logic
+
+```python
+@property
+def assumed_state(self) -> bool:
+    """True = ASSUMED/ESTIMATED, False = KNOWN/CERTAIN"""
+    
+    if mode == LEGACY:
+        return True  # Always (master compatibility)
+    
+    if mode == NATIVE:
+        return not has_sensor()  # True if no sensor
+    
+    # TIME_BASED or AUTO:
+    return False  # Position is known (calculated or sensor)
+```
+
 ### Testing Checklist
 
 - [x] Position tracking during open/close
@@ -476,6 +509,7 @@ A: Position is persisted every state change. After restart, last known position 
 - [x] Mode switching (AUTO/TIME_BASED/NATIVE/LEGACY)
 - [x] Travel time service configuration
 - [x] Entity attributes exposure
+- [x] assumed_state correctness per mode
 - [x] Edge cases (0%, 100%, rapid commands)
 - [x] Coordinator update handling
 - [x] Multi-cover scenarios
@@ -506,6 +540,14 @@ logger:
 
 ## Changelog
 
+### v2.0.1 - Bug Fixes
+
+**Fixed**:
+- `assumed_state` logic corrected: True=assumed, False=known
+- LEGACY mode now always returns `assumed_state=True` (master compatibility)
+- NATIVE mode correctly reports assumed_state based on sensor presence
+- Documentation updated with accurate property behavior tables
+
 ### v2.0.0 - Time-Based Position Tracking
 
 **Added**:
@@ -518,7 +560,7 @@ logger:
 
 **Changed**:
 - `supported_features` now includes SET_POSITION in AUTO mode (always)
-- `assumed_state` behavior in time-based mode
+- `assumed_state` behavior in time-based mode (False = known position)
 - `current_cover_position` always available in AUTO mode
 
 **Maintained**:
