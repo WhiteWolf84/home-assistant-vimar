@@ -23,6 +23,7 @@ from .const import (
     COVER_POSITION_MODE_AUTO,
     COVER_POSITION_MODE_NATIVE,
     COVER_POSITION_MODE_TIME_BASED,
+    COVER_POSITION_MODE_LEGACY,
     DEFAULT_COVER_POSITION_MODE,
     DEVICE_TYPE_COVERS as CURR_PLATFORM,
 )
@@ -66,7 +67,14 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         Original had: True if has native position, False otherwise.
         This seems backwards but was working in the original version!
         For time-based tracking mode, we adapt it to check if NOT using time-based.
+        For LEGACY mode, return True (original behavior).
         """
+        mode = self._get_position_mode()
+        
+        if mode == COVER_POSITION_MODE_LEGACY:
+            # LEGACY mode: original behavior from master branch
+            return True if self.has_state("position") else False
+        
         if not self._use_time_based_tracking():
             # Has native position → return True (like original)
             return True
@@ -102,7 +110,10 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         """Determine if time-based tracking should be used."""
         mode = self._get_position_mode()
 
-        if mode == COVER_POSITION_MODE_TIME_BASED:
+        if mode == COVER_POSITION_MODE_LEGACY:
+            # LEGACY mode: disable all time-based tracking (original master behavior)
+            return False
+        elif mode == COVER_POSITION_MODE_TIME_BASED:
             # Force time-based even if native position is available
             return True
         elif mode == COVER_POSITION_MODE_NATIVE:
@@ -182,7 +193,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 self._tb_position = 0
                 _LOGGER.info(f"{self.name}: ⚠️ New cover, default position: 0% (closed)")
         else:
-            _LOGGER.debug(f"{self.name}: Using native position from webserver")
+            mode = self._get_position_mode()
+            if mode == COVER_POSITION_MODE_LEGACY:
+                _LOGGER.debug(f"{self.name}: LEGACY mode - no time-based tracking")
+            else:
+                _LOGGER.debug(f"{self.name}: Using native position from webserver")
 
         self._tb_last_updown = self.get_state("up/down")
         _LOGGER.debug(f"{self.name}: === async_added_to_hass END ===")
@@ -346,6 +361,17 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def is_closed(self) -> bool | None:
+        mode = self._get_position_mode()
+        
+        if mode == COVER_POSITION_MODE_LEGACY:
+            # LEGACY mode: original behavior from master branch
+            if self.get_state("up/down") == "1":
+                return True
+            elif self.get_state("up/down") == "0":
+                return False
+            else:
+                return None
+        
         if not self._use_time_based_tracking():
             # Native mode - use traditional logic
             if self.get_state("up/down") == "1":
@@ -381,6 +407,14 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     @property
     def current_cover_position(self):
+        mode = self._get_position_mode()
+        
+        if mode == COVER_POSITION_MODE_LEGACY:
+            # LEGACY mode: only return position if native sensor available
+            if self.has_state("position"):
+                return 100 - int(self.get_state("position"))
+            return None  # No position in legacy mode without sensor
+        
         if not self._use_time_based_tracking() and self.has_state("position"):
             # Native mode
             return 100 - int(self.get_state("position"))
@@ -401,15 +435,25 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     def supported_features(self) -> CoverEntityFeature:
         """Flag supported features.
         
-        SET_POSITION is always included since all covers support it
-        (either via native position or time-based tracking).
+        In LEGACY mode, SET_POSITION is only available if hardware sensor exists.
+        In other modes, SET_POSITION is always available.
         """
+        mode = self._get_position_mode()
+        
         flags = (
             CoverEntityFeature.OPEN
             | CoverEntityFeature.CLOSE
             | CoverEntityFeature.STOP
-            | CoverEntityFeature.SET_POSITION  # Always present like original!
         )
+        
+        # SET_POSITION logic based on mode
+        if mode == COVER_POSITION_MODE_LEGACY:
+            # LEGACY mode: SET_POSITION only if native sensor available
+            if self.has_state("position"):
+                flags |= CoverEntityFeature.SET_POSITION
+        else:
+            # All other modes: always include SET_POSITION
+            flags |= CoverEntityFeature.SET_POSITION
 
         if self.has_state("slat_position") and self.has_state(
             "clockwise/counterclockwise"
@@ -457,7 +501,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 target = int(kwargs[ATTR_POSITION])
 
                 if not self._use_time_based_tracking() and self.has_state("position"):
-                    # Native mode
+                    # Native mode (or LEGACY with sensor)
                     self.change_state("position", 100 - target)
                 else:
                     # Time-based mode
