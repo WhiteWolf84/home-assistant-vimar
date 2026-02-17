@@ -44,7 +44,7 @@ Questo componente **calcola la posizione** in base al tempo di movimento, conosc
 - **💾 Ripristino Dopo Riavvio**: Salva e ripristina la posizione dopo il reboot di HA
 - **🎚️ Set Position**: Permette di aprire/chiudere a percentuali specifiche (es. 50%)
 - **⚙️ Configurazione Per-Entity**: Tempi di apertura/chiusura salvati per ogni singola cover
-- **🎛️ 3 Modalità di Funzionamento**: AUTO, TIME_BASED, NATIVE configurabili
+- **🎛️ 4 Modalità di Funzionamento**: AUTO, TIME_BASED, NATIVE, LEGACY configurabili
 - **🔀 Compatibile**: Funziona insieme a cover con sensori hardware
 - **🌐 Multilingua**: Supporta Italiano, Inglese, Tedesco
 
@@ -56,6 +56,7 @@ Questo componente **calcola la posizione** in base al tempo di movimento, conosc
 - **Alta Granularità**: Aggiornamento posizione ogni 0.2 secondi durante movimento
 - **Sicurezza**: Gestisce correttamente interruzioni, stop manuali, blackout
 - **Button Management**: Disabilita automaticamente pulsanti OPEN/CLOSE ai finecorsa
+- **Modalità LEGACY**: Rollback al comportamento originale master branch
 
 ---
 
@@ -103,7 +104,7 @@ Raggiunge finecorsa meccanico a 100%
 
 ### Modalità di Funzionamento
 
-Il componente supporta **3 modalità** configurabili:
+Il componente supporta **4 modalità** configurabili:
 
 #### 1. 🤖 AUTO (default)
 ```
@@ -123,6 +124,21 @@ Uso: quando il sensore Vimar è impreciso o in ritardo
 Usa SOLO feedback dal sensore Vimar
 Disabilita completamente il tracking temporale
 ```
+
+#### 4. 🔙 LEGACY (compatibilità)
+```
+Comportamento originale del branch master
+- NO time-based tracking
+- NO ripristino posizione
+- SET_POSITION solo se sensore hardware disponibile
+- Zero overhead (nessun tracking attivo)
+```
+
+**Quando usare LEGACY:**
+- 🔄 Vuoi tornare al comportamento originale
+- 🧪 Testing e confronto con master branch
+- 📊 Zero overhead (no tracking)
+- 🔒 Compatibilità totale con versione precedente
 
 ### Gestione Finecorsa Intelligente
 
@@ -155,10 +171,10 @@ else:
 └──────────┬──────────┘
            │
            ▼
-┌─────────────────────┐
-│ Modalità Attiva?    │
-│ AUTO/TIME/NATIVE    │
-└──────┬──────────────┘
+┌──────────────────────────┐
+│ Modalità Attiva?         │
+│ AUTO/TIME/NATIVE/LEGACY │
+└──────┬──────────────────┘
        │
        ▼
 ┌─────────────────────┐
@@ -176,6 +192,7 @@ else:
 ┌─────────────────────┐
 │ Tracking Loop       │
 │ (ogni 0.2s)         │
+│ (LEGACY: skip)      │
 └──────────┬──────────┘
            │
            ▼
@@ -212,11 +229,15 @@ assumed_state = False  # HA conosce ESATTAMENTE la posizione!
 
 # Per NATIVE (sensore hardware):
 assumed_state = True   # Dipende dal feedback esterno
+
+# Per LEGACY:
+assumed_state = True (se ha sensore) / False (se no sensore)
 ```
 
 Questa logica **sembra controintuitiva** ma è corretta:
 - Con tracking temporale, HA **calcola deterministicamente** la posizione
 - Con sensore hardware, HA **assume** la posizione dal webserver
+- In LEGACY, replica esattamente il comportamento master originale
 
 Grazie a questo, Home Assistant disabilita correttamente i pulsanti OPEN/CLOSE ai finecorsa!
 
@@ -260,7 +281,7 @@ cp -r custom_components/vimar /config/custom_components/
 
 ```
 custom_components/vimar/
-├── cover.py              ← Implementazione tracking con 3 modalità
+├── cover.py              ← Implementazione tracking con 4 modalità
 ├── const.py              ← Costanti CONF_COVER_POSITION_MODE
 └── services.yaml         ← Servizio set_travel_times
 ```
@@ -269,38 +290,18 @@ custom_components/vimar/
 
 ## ⚙️ Configurazione
 
-### Metodo 1: configuration.yaml (Raccomandato)
+### Configurazione via Config Flow UI
 
-Aggiungi alla configurazione Vimar:
+**Impostazioni** → **Dispositivi e Servizi** → **Vimar** → **⚙️ CONFIGURA**
 
-```yaml
-vimar:
-  host: 192.168.1.XXX
-  username: !secret vimar_user
-  password: !secret vimar_pass
-  certificate_validation: false
-  
-  # ⬇️ Configurazione modalità posizione
-  cover_position_mode: auto  # auto | time_based | native
-```
+Menu a tendina con **4 opzioni**:
 
-**Opzioni disponibili:**
-
-| Valore | Descrizione |
-|--------|-------------|
-| `auto` | (Default) Usa TIME_BASED se non c'è sensore, altrimenti NATIVE |
-| `time_based` | Forza tracking temporale per TUTTE le cover |
-| `native` | Usa SOLO feedback sensori hardware (disabilita tracking) |
-
-### Metodo 2: UI (Legacy)
-
-Se preferisci configurare via UI:
-
-1. Vai su **Impostazioni** → **Dispositivi e Servizi**
-2. Trova **Vimar**
-3. Clicca **CONFIGURA**
-4. Seleziona modalità dal menu a tendina
-5. Salva e riavvia HA
+| Modalità | Descrizione |
+|----------|-------------|
+| 🤖 **Automatico** | (Default) Usa TIME_BASED se non c'è sensore, altrimenti NATIVE |
+| ⏱️ **Time-based** | Forza tracking temporale per TUTTE le cover |
+| 🔧 **Native** | Usa SOLO feedback sensori hardware (disabilita tracking) |
+| 🔙 **Legacy** | Comportamento originale master (no tracking) |
 
 ### Configurazione Tempi di Percorrenza
 
@@ -337,6 +338,8 @@ data:
 
 ✅ I tempi vengono **salvati automaticamente** nell'entity registry!
 
+**Nota**: In modalità LEGACY, i travel times non vengono utilizzati.
+
 #### Step 3: Verifica Configurazione
 
 **Strumenti Sviluppatore** → **Stati** → Cerca `cover.tapparella_xxx`
@@ -344,10 +347,10 @@ data:
 Gli **attributi** devono mostrare:
 ```yaml
 current_position: 0-100
-position_mode: auto
-uses_time_based_tracking: true
-travel_time_up: 28
-travel_time_down: 26
+position_mode: auto  # o time_based, native, legacy
+uses_time_based_tracking: true  # false se LEGACY o NATIVE
+travel_time_up: 28  # Solo se time-based
+travel_time_down: 26  # Solo se time-based
 supported_features: 15  # OPEN | CLOSE | STOP | SET_POSITION
 friendly_name: "Tapparella Cameretta"
 ```
@@ -392,6 +395,10 @@ data:
   position: 50  # Apri al 50%
 ```
 
+**Note:**
+- Funziona in modalità AUTO, TIME_BASED, NATIVE (se sensore presente)
+- In modalità LEGACY: funziona SOLO se c'è sensore hardware
+
 **Posizioni comuni:**
 - `0` = Completamente chiusa
 - `25` = Chiusa al 75%
@@ -419,6 +426,11 @@ Nella UI di Home Assistant, le cover con tracking time-based mostrano:
 - ✅ Pulsante CLOSE disabilitato quando chiusa (0%)
 - ✅ Pulsante OPEN disabilitato quando aperta (100%)
 - ✅ Indicatore posizione in tempo reale durante movimento
+
+**In modalità LEGACY**:
+- ❌ Slider posizione disponibile SOLO se c'è sensore hardware
+- ✅ Pulsanti OPEN/CLOSE/STOP sempre disponibili
+- ❌ Nessun tracking posizione in tempo reale
 
 ### Card Lovelace
 
@@ -452,6 +464,8 @@ features:
 Configura i tempi di apertura/chiusura per una specifica cover.
 
 I tempi vengono salvati nelle **entity options** e persistono tra i riavvii.
+
+**Nota**: Questo servizio è rilevante solo per modalità AUTO e TIME_BASED. In modalità NATIVE e LEGACY, i tempi vengono ignorati.
 
 #### Parametri
 
@@ -605,14 +619,13 @@ automation:
 
 **Cause & Soluzioni:**
 
-1. **Modalità NATIVE attiva**
-   ```yaml
-   # In configuration.yaml
-   vimar:
-     cover_position_mode: auto  # Cambia da 'native' a 'auto'
+1. **Modalità LEGACY o NATIVE attiva**
+   ```
+   Verifica: Developer Tools → Stati → Attributo "position_mode"
+   Soluzione: Config Flow → Vimar → Cambia in 'auto' o 'time_based'
    ```
 
-2. **Tempi Non Configurati**
+2. **Tempi Non Configurati (in AUTO/TIME_BASED)**
    ```yaml
    # Verifica attributi cover
    travel_time_up: ?
@@ -669,7 +682,7 @@ automation:
    position_mode: auto
    uses_time_based_tracking: true
    
-   # Se false → verifica configuration.yaml
+   # Se false → verifica configuration
    ```
 
 ---
@@ -687,7 +700,8 @@ assumed_state: false  # Deve essere False per time-based!
 
 # Se è True:
 # 1. Verifica di essere su branch timed-shutters
-# 2. Riavvia Home Assistant
+# 2. Verifica position_mode (non sia LEGACY)
+# 3. Riavvia Home Assistant
 ```
 
 ---
@@ -698,25 +712,25 @@ assumed_state: false  # Deve essere False per time-based!
 
 **Soluzioni:**
 
-1. **Prima Installazione**
+1. **Modalità LEGACY o NATIVE**
+   ```
+   In queste modalità, il ripristino posizione è disabilitato.
+   Soluzione: Usa modalità AUTO o TIME_BASED
+   ```
+
+2. **Prima Installazione**
    ```
    Normale! Non c'è ancora stato precedente.
    Muovi le tapparelle, poi riavvia → OK
    ```
 
-2. **Stato Non Salvato**
+3. **Stato Non Salvato**
    ```bash
    # Verifica file restore_state
    cat /config/.storage/core.restore_state | grep -A5 cover.tapparella
    
    # Deve contenere:
    "current_position": <valore>
-   ```
-
-3. **Verifica RestoreEntity**
-   ```
-   Il codice usa RestoreEntity per salvare stato.
-   Se manca, reinstalla da branch timed-shutters.
    ```
 
 ---
@@ -727,20 +741,26 @@ assumed_state: false  # Deve essere False per time-based!
 
 **Soluzioni:**
 
-1. **Verifica Supported Features**
+1. **Modalità LEGACY senza sensore**
+   ```
+   In LEGACY, SET_POSITION funziona SOLO se c'è sensore hardware.
+   Soluzione: Cambia modalità in AUTO o TIME_BASED
+   ```
+
+2. **Verifica Supported Features**
    ```yaml
    # Developer Tools → Stati
    supported_features: 15
-   # Deve includere SET_POSITION (flag sempre presente)
+   # Deve includere SET_POSITION
    ```
 
-2. **Check Modalità**
+3. **Check Modalità**
    ```yaml
    uses_time_based_tracking: true  # Deve essere true
    position_mode: auto  # O time_based
    ```
 
-3. **Controlla Log**
+4. **Controlla Log**
    ```bash
    grep -i "set_cover_position\|tracking" /config/home-assistant.log | tail -20
    ```
@@ -798,7 +818,7 @@ logger:
 Poi cerca nei log:
 
 ```bash
-grep "Tapparella\|tracking\|position" /config/home-assistant.log | tail -50
+grep "Tapparella\|tracking\|position\|LEGACY" /config/home-assistant.log | tail -50
 ```
 
 **Log da cercare:**
@@ -807,6 +827,7 @@ grep "Tapparella\|tracking\|position" /config/home-assistant.log | tail -50
 ✅ "Travel times loaded - up: 28s, down: 26s"
 ✅ "Tracking opening from 0% to 100%"
 ✅ "Reached end-stop 100%, mechanical stop"
+✅ "LEGACY mode - no time-based tracking"
 ❌ "Already closed (0%), ignoring CLOSE command"
 ```
 
@@ -830,46 +851,61 @@ cat /config/.storage/core.entity_registry | \
 
 ## ❓ FAQ
 
-### Q: Qual è la differenza tra AUTO, TIME_BASED e NATIVE?
+### Q: Qual è la differenza tra le 4 modalità?
 **A:** 
 - **AUTO**: Sceglie automaticamente (time-based se non c'è sensore, native se c'è)
 - **TIME_BASED**: Forza tracking temporale anche se c'è sensore (utile se sensore impreciso)
 - **NATIVE**: Usa SOLO sensori hardware, disabilita tracking temporale
+- **LEGACY**: Comportamento originale master branch (no tracking, zero overhead)
+
+### Q: Quando dovrei usare la modalità LEGACY?
+**A:** 
+- Vuoi tornare al comportamento originale del branch master
+- Stai facendo testing/confronti
+- Vuoi zero overhead (nessun tracking attivo)
+- Hai problemi con le altre modalità e vuoi un fallback sicuro
+
+### Q: In LEGACY posso usare set_cover_position?
+**A:** Sì, ma SOLO se la cover ha un sensore di posizione hardware. Senza sensore, `set_cover_position` non è disponibile in LEGACY.
 
 ### Q: Posso usare TIME_BASED anche con cover che hanno sensori?
-**A:** Sì! Imposta `cover_position_mode: time_based` per forzare il tracking temporale per tutte.
+**A:** Sì! Imposta modalità TIME_BASED per forzare il tracking temporale per tutte le cover.
 
 ### Q: I tempi di calibrazione persistono dopo riavvio?
 **A:** Sì! Vengono salvati nelle **entity options** (file `core.entity_registry`).
 
 ### Q: Cosa succede se c'è un blackout durante il movimento?
-**A:** La posizione viene salvata periodicamente. Al riavvio, riprende dall'ultima posizione nota. Potrebbe esserci una piccola imprecisione (<5%).
+**A:** In AUTO/TIME_BASED, la posizione viene salvata periodicamente. Al riavvio, riprende dall'ultima posizione nota. In LEGACY, non c'è tracking.
 
 ### Q: Devo ricalibrare periodicamente?
-**A:** Consigliato ogni 6-12 mesi, o se noti imprecisioni. I motori possono rallentare con l'usura.
+**A:** Consigliato ogni 6-12 mesi in modalità TIME_BASED, o se noti imprecisioni. I motori possono rallentare con l'usura.
 
 ### Q: Come funziona l'auto-calibrazione ai finecorsa?
-**A:** Ogni volta che raggiungi 0% o 100% (finecorsa meccanico), la posizione viene automaticamente corretta. Questo compensa derive accumulate nel tempo.
+**A:** Ogni volta che raggiungi 0% o 100% (finecorsa meccanico) in modalità TIME_BASED, la posizione viene automaticamente corretta. Questo compensa derive accumulate nel tempo.
 
 ### Q: Perché `assumed_state = False` per tracking time-based?
 **A:** Perché Home Assistant **calcola esattamente** la posizione. Non è "assunta" da fonte esterna, è deterministica. Questo permette la corretta gestione dei pulsanti UI.
 
 ### Q: Quanto è preciso il tracking?
-**A:** Con calibrazione accurata: errore <3%. L'auto-calibrazione ai finecorsa azzera la deriva periodicamente.
+**A:** In TIME_BASED con calibrazione accurata: errore <3%. L'auto-calibrazione ai finecorsa azzera la deriva periodicamente.
 
 ### Q: Posso usarlo con veneziane (tilt)?
 **A:** Il tracking posizione funziona per apertura/chiusura. Il tilt usa i comandi Vimar standard (se supportato dall'hardware).
 
 ### Q: Consuma risorse CPU/memoria?
-**A:** Minimo. Aggiorna ogni 0.2s solo durante movimento. A riposo, zero overhead.
+**A:** 
+- **AUTO/TIME_BASED**: Minimo. Aggiorna ogni 0.2s solo durante movimento. A riposo, zero overhead.
+- **NATIVE/LEGACY**: Zero overhead (nessun tracking).
 
 ### Q: Come faccio backup della configurazione?
 **A:** Includi nel backup:
 ```bash
 /config/.storage/core.entity_registry  # Entity options (tempi)
 /config/.storage/core.restore_state    # Posizioni correnti
-/config/configuration.yaml             # cover_position_mode
 ```
+
+### Q: Posso cambiare modalità in qualsiasi momento?
+**A:** Sì! Via Config Flow UI. Riavvia HA dopo il cambio. Le entity options (travel times) vengono mantenute.
 
 ---
 
@@ -877,32 +913,35 @@ cat /config/.storage/core.entity_registry | \
 
 ### Limitazioni Tecniche
 
-1. **Precisione Tempo-Dipendente**: Basata sui tempi configurati. Errori di calibrazione = imprecisione posizione.
+1. **Precisione Tempo-Dipendente**: In TIME_BASED, basata sui tempi configurati. Errori di calibrazione = imprecisione posizione.
 
 2. **Inerzia Meccanica**: Il motore ha inerzia. Comando stop ≠ stop istantaneo.
 
-3. **Deriva nel Tempo**: Motori possono rallentare con usura. Mitigato dall'auto-calibrazione ai finecorsa.
+3. **Deriva nel Tempo**: Motori possono rallentare con usura. Mitigato dall'auto-calibrazione ai finecorsa in TIME_BASED.
 
 4. **Nessun Feedback Blocchi**: Il sistema non rileva se la tapparella è bloccata fisicamente.
 
-5. **Movimenti Manuali**: Se muovi via pulsante fisico (non tramite HA), la posizione viene **rilevata** al successivo polling.
+5. **Movimenti Manuali**: Se muovi via pulsante fisico (non tramite HA), la posizione viene **rilevata** al successivo polling (solo in TIME_BASED).
 
 ### Limitazioni Funzionali
 
-1. **Modalità Globale**: `cover_position_mode` è globale, non per singola cover.
+1. **Modalità Globale**: La modalità `position_mode` è globale, non per singola cover.
 
-2. **Richiede Calibrazione Iniziale**: Devi misurare i tempi manualmente per ogni cover.
+2. **Richiede Calibrazione Iniziale**: In AUTO/TIME_BASED, devi misurare i tempi manualmente per ogni cover.
 
 3. **Update Rate**: Aggiornamento ogni 0.2 secondi (limite accettabile).
 
+4. **LEGACY Limitazioni**: In LEGACY, `set_cover_position` disponibile SOLO con sensore hardware.
+
 ### Best Practices
 
-✅ **Calibra con Precisione**: Usa cronometro digitale, fai media di 3 misurazioni
-✅ **Cicli Completi Periodici**: Fai apertura/chiusura completa settimanalmente per auto-calibrazione
+✅ **Calibra con Precisione**: Usa cronometro digitale, fai media di 3 misurazioni (TIME_BASED)
+✅ **Cicli Completi Periodici**: Fai apertura/chiusura completa settimanalmente per auto-calibrazione (TIME_BASED)
 ✅ **Ricalibra Dopo Manutenzione**: Se cambi motore o cinghie
 ✅ **Backup Configurazione**: Esporta `entity_registry` periodicamente
 ✅ **Monitora Log**: Controlla eventuali errori dopo aggiornamenti
 ✅ **Test Dopo Upgrade HA**: Verifica funzionalità dopo upgrade maggiori
+✅ **Usa LEGACY per Fallback**: In caso di problemi, LEGACY è un fallback sicuro
 
 ---
 
@@ -910,14 +949,16 @@ cat /config/.storage/core.entity_registry | \
 
 Questo branch `timed-shutters` introduce:
 
-1. ✅ **3 Modalità Configurabili**: AUTO | TIME_BASED | NATIVE
-2. ✅ **Entity Options**: Tempi salvati per singola cover (no config flow)
-3. ✅ **Configuration.yaml**: Configurazione più semplice
-4. ✅ **Auto-Calibrazione Finecorsa**: Risincronizzazione automatica
+1. ✅ **4 Modalità Configurabili**: AUTO | TIME_BASED | NATIVE | **LEGACY**
+2. ✅ **Entity Options**: Tempi salvati per singola cover (persistenti)
+3. ✅ **Config Flow UI**: Configurazione semplice tramite UI
+4. ✅ **Auto-Calibrazione Finecorsa**: Risincronizzazione automatica (TIME_BASED)
 5. ✅ **Assumed State Corretto**: Gestione pulsanti UI perfetta
 6. ✅ **Alta Granularità**: Update ogni 0.2s (era 1s)
 7. ✅ **Attributi Extra**: `position_mode`, `uses_time_based_tracking`
-8. ✅ **Ottimizzazione Finecorsa**: No STOP command a 0%/100%
+8. ✅ **Ottimizzazione Finecorsa**: No STOP command a 0%/100% (TIME_BASED)
+9. ✅ **Modalità LEGACY**: Rollback sicuro al comportamento originale
+10. ✅ **Flessibilità**: 4 modalità per coprire ogni esigenza
 
 ---
 
@@ -928,9 +969,10 @@ Questo branch `timed-shutters` introduce:
 - **Repository**: https://github.com/WhiteWolf84/home-assistant-vimar
 
 ### File Principali
-- `cover.py` - Implementazione completa con 3 modalità
-- `const.py` - Costanti CONF_COVER_POSITION_MODE
+- `cover.py` - Implementazione completa con 4 modalità
+- `const.py` - Costanti CONF_COVER_POSITION_MODE (4 modalità)
 - `services.yaml` - Servizio set_travel_times
+- `translations/` - IT, EN, DE (con LEGACY)
 
 ### Versioni
 - **Branch Version**: timed-shutters
@@ -940,30 +982,33 @@ Questo branch `timed-shutters` introduce:
 ### Crediti
 - **Implementazione Time-Based Tracking**: Sviluppata in collaborazione
 - **Auto-Calibrazione Finecorsa**: Feature richiesta dall'utente
+- **Modalità LEGACY**: Richiesta compatibilità master branch
 - **Testing & Debug**: WhiteWolf84
 
 ---
 
 ## 🎊 Conclusione
 
-Hai ora un sistema **completo e ottimizzato** di tracking posizione per le tue tapparelle Vimar!
+Hai ora un sistema **completo e flessibile** di tracking posizione per le tue tapparelle Vimar!
 
 ### Caratteristiche Uniche:
-- 🎛️ Tre modalità configurabili per ogni esigenza
-- 🎯 Auto-calibrazione che azzera derive nel tempo
+- 🎛️ **Quattro modalità** configurabili per ogni esigenza
+- 🎯 Auto-calibrazione che azzera derive nel tempo (TIME_BASED)
 - ⚙️ Ottimizzazione usura hardware (no STOP ai finecorsa)
 - 💾 Configurazione persistente per-entity
 - 🎨 UI perfetta con pulsanti disabilitati correttamente
+- 🔙 **Modalità LEGACY** per rollback sicuro
 
 ### Prossimi Passi:
-1. ✅ Configura `cover_position_mode` in configuration.yaml
-2. ✅ Calibra i tempi di ogni cover con `set_travel_times`
+1. ✅ Configura modalità via Config Flow UI
+2. ✅ Calibra i tempi di ogni cover con `set_travel_times` (se AUTO/TIME_BASED)
 3. ✅ Testa apertura/chiusura parziali
 4. ✅ Crea automazioni personalizzate
-5. ✅ Fai cicli completi periodici per mantenere precisione
+5. ✅ Fai cicli completi periodici per mantenere precisione (TIME_BASED)
+6. ✅ Usa LEGACY se hai bisogno di comportamento originale
 
 **Buon uso! 🏠✨**
 
 ---
 
-*Ultimo aggiornamento: Febbraio 2026 - Branch timed-shutters*
+*Ultimo aggiornamento: Febbraio 2026 - Branch timed-shutters - 4 modalità disponibili*
