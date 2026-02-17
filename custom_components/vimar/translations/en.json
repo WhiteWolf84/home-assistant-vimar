@@ -55,7 +55,7 @@
           "devices_as_binary_sensor_re": "RegEx for set entities swich as binary_sensor"
         },
         "data_description": {
-          "cover_position_mode": "Choose how to handle cover positions: 'auto' uses native method if available otherwise time-based tracking, 'native' uses only traditional method, 'time_based' always forces time-based tracking"
+          "cover_position_mode": "Choose how to handle cover positions:\n- 'auto': uses time-based tracking if no sensor, otherwise native\n- 'native': uses only webserver feedback\n- 'time_based': always forces time-based tracking\n- 'legacy': original master branch behavior (no tracking)"
         }
       },
       "three": {
@@ -79,7 +79,8 @@
       "options": {
         "auto": "Auto (smart hybrid)",
         "native": "Native (webserver only)",
-        "time_based": "Time-based (always)"
+        "time_based": "Time-based (always)",
+        "legacy": "Legacy (like master branch)"
       }
     }
   },
