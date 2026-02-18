@@ -6,7 +6,6 @@ import logging
 import os
 import ssl
 import sys
-import time
 import xml.etree.ElementTree as xmlTree
 from collections.abc import Callable
 from typing import TypedDict
@@ -47,12 +46,6 @@ _LOGGER = logging.getLogger(__name__)
 _LOGGER_isDebug = _LOGGER.isEnabledFor(logging.DEBUG)
 MAX_ROWS_PER_REQUEST = 300
 
-VIMAR_BUILD = "2026.02.18.004"
-
-# Unknown-Payload retry settings
-_UNKNOWN_PAYLOAD_RETRY_DELAY = 3.0   # seconds to wait before retrying
-_UNKNOWN_PAYLOAD_MAX_RETRIES = 3     # max retries per query
-
 # from homeassistant/components/switch/__init__.py
 DEVICE_CLASS_OUTLET = "outlet"
 DEVICE_CLASS_SWITCH = "switch"
@@ -76,6 +69,13 @@ class HTTPAdapter(adapters.HTTPAdapter):
         """Initialize the HTTPAdapter."""
         super().__init__(*args, **kwargs)
 
+    # def init_poolmanager(self, *args, **kwargs):
+    #     """Initialize the connection pool."""
+    #     ssl_context = ssl.create_default_context()
+    #     ssl_context.minimum_version = ssl.TLSVersion.TLSv1
+    #     kwargs["ssl_context"] = ssl_context
+    #     return super().init_poolmanager(*args, **kwargs)
+
     def init_poolmanager(self, *args, **kwargs):
         """Initialize the connection pool."""
         ssl_context = ssl.create_default_context()
@@ -85,10 +85,17 @@ class HTTPAdapter(adapters.HTTPAdapter):
         ssl_context.minimum_version = ssl.TLSVersion.TLSv1
         ssl_context.check_hostname = False
 
+        # Also you could try to set ciphers manually as it was in my case.
+        # On other ciphers their server was reset the connection with:
+        # [Errno 104] Connection reset by peer
+        # ssl_context.set_ciphers("ECDHE-RSA-AES256-SHA")
+        # https://stackoverflow.com/questions/38715570/restrieve-up-to-date-tls-cipher-suite-with-python
+        # table https://testssl.sh/openssl-iana.mapping.html
         ssl_context.set_ciphers("AES256-SHA")
 
         # See urllib3.poolmanager.SSL_KEYWORDS for all available keys.
         kwargs["ssl_context"] = ssl_context
+        # kwargs["assert_hostname"] = False
         return super().init_poolmanager(*args, **kwargs)
 
 
@@ -171,7 +178,10 @@ class VimarLink:
         timeout=None,
     ):
         """Prepare connections instance for vimar webserver."""
-        _LOGGER.info("Vimar link initialized - Build: %s", VIMAR_BUILD)
+        _LOGGER.info("Vimar link initialized")
+
+        # TODO - change static variables to normal instance variables
+        # self._host = ''
 
         if schema is not None:
             self._schema = schema
@@ -236,6 +246,7 @@ class VimarLink:
     def login(self):
         """Call login and store the session id."""
 
+        # self._port = "444"
         loginurl = (
             "%s://%s:%s/vimarbyweb/modules/system/user_login.php?sessionid=&username=%s&password=%s&remember=0&op=login"
             % (
@@ -262,12 +273,20 @@ class VimarLink:
         if result is False and use_cert:  # if problem is of certificate, download it again
             curr_ex = self.request_last_exception
             curr_ex_str = str(curr_ex)
+            # if certified not valid:
+            # SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get issuer certificate (_ssl.c:1129)
+            # SSLError(SSLError(136, '[X509: NO_CERTIFICATE_OR_CRL_FOUND] no certificate or crl found
+            # if file not found
+            # Could not find a suitable TLS CA certificate bundle, invalid path: rootCA.VIMAR.crt
             if "SSLError" in curr_ex_str or "TLS CA" in curr_ex_str:
                 try:
+                    # return downloaded only if changed, then, if is expired
                     cert_downloaded = self.install_certificate()
+                    # self.request_last_exception = curr_ex
                     if cert_downloaded:
                         result = self._request(loginurl)
                 except BaseException:
+                    # self.request_last_exception = curr_ex
                     pass
 
         if result is not None:
@@ -294,7 +313,7 @@ class VimarLink:
                 else:
                     raise VimarConnectionError("Error during login. Code: %s", logincode.text)
             else:
-                _LOGGER.info("Vimar login ok (Build: %s)", VIMAR_BUILD)
+                _LOGGER.info("Vimar login ok")
                 loginsession = xml.find("sessionid")
                 if loginsession is not None and loginsession.text != "":
                     _LOGGER.debug("Got a new Vimar Session id: %s", loginsession.text)
@@ -320,8 +339,13 @@ class VimarLink:
 
     def check_session(self):
         """Check if session is valid - if not, clear session id."""
+        # _LOGGER.error("calling url: " + url)
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
+            # needs to be set to overcome:
+            # 'Expect' => '100-continue'
+            # otherwise header and payload is send in two requests if payload
+            # is bigger then 1024byte
             "Expect": "",
         }
 
@@ -364,6 +388,7 @@ class VimarLink:
 
     def get_optionals_param(self, state):
         """Return SYNCDB for climates states."""
+        # if (state in ['setpoint', 'stagione', 'unita', 'centralizzato', 'funzionamento', 'temporizzazione', 'channel', 'source', 'global_channel']):
         if state in [
             "setpoint",
             "stagione",
@@ -382,6 +407,7 @@ class VimarLink:
         """Get attribute status for a single device."""
         status_list = {}
 
+        # , o3.OPTIONALP AS status_range
         select = """SELECT o3.ID AS status_id, o3.NAME AS status_name, o3.CURRENT_VALUE AS status_value
 FROM DPADD_OBJECT_RELATION r3
 INNER JOIN DPADD_OBJECT o3 ON r3.CHILDOBJ_ID = o3.ID AND o3.type = "BYMEOBJ"
@@ -392,12 +418,15 @@ ORDER BY o3.ID;""" % (
 
         payload = self._request_vimar_sql(select)
         if payload is not None:
+            # there will be multible times the same device
+            # each having a different status part (on/off + dimming etc.)
             for device in payload:
                 if status_list == {}:
                     status_list = {
                         device["status_name"]: {
                             "status_id": device["status_id"],
                             "status_value": device["status_value"],
+                            # 'status_range': device['status_range'],
                         }
                     }
                 else:
@@ -405,11 +434,49 @@ ORDER BY o3.ID;""" % (
                         status_list[device["status_name"]] = {
                             "status_id": device["status_id"],
                             "status_value": device["status_value"],
+                            # 'status_range': device['status_range'],
                         }
 
             return status_list
 
         return {}
+
+    # Device example:
+    #   'room_id' => string '439' (length=3)
+    #   'object_id' => string '768' (length=3)
+    #   'object_name' => string 'DIMMER 11 WOHNZIMMER ERDGESCHOSS' (length=32)
+    #   'ID' => string '768' (length=3)
+    #   'NAME' => string 'DIMMER 11 WOHNZIMMER ERDGESCHOSS' (length=32)
+    #   'DESCRIPTION' => string 'DIMMER 11 WOHNZIMMER ERDGESCHOSS' (length=32)
+    #   'TYPE' => string 'BYMEIDX' (length=7)
+    #   'MIN_VALUE' => string '434' (length=3)
+    #   'MAX_VALUE' => string '391' (length=3)
+    #   'CURRENT_VALUE' => string '' (length=0)
+    #   'STATUS_ID' => string '-1' (length=2)
+    #   'RENDERING_ID' => string '141' (length=3)
+    #   'IMAGE_PATH' => string 'on_off/ICN_DV_LuceGenerale_on.png' (length=33)
+    #   'IS_STOPPABLE' => string '0' (length=1)
+    #   'MSP' => string '158' (length=3)
+    #   'OPTIONALP' => string 'index_id=158|category=1' (length=23)
+    #   'PHPCLASS' => string 'dpadVimarBymeIdx' (length=16)
+    #   'COMMUNICATIONSECTION_ID' => string '6' (length=1)
+    #   'IS_BOOLEAN' => string '0' (length=1)
+    #   'WITH_PERMISSION' => string '1' (length=1)
+    #   'TRACK_FLAG' => string '0' (length=1)
+    #   'IS_REMOTABLE' => string '0' (length=1)
+    #   'REMOTABLE_FILTER' => string '*' (length=1)
+    #   'OWNED_BY' => string 'LOCAL' (length=5)
+    #   'HAS_GRANT' => string '0' (length=1)
+    #   'GRANT_HASHCODE' => string '' (length=0)
+    #   'AUTOMATIC_REFRESH_FLAG' => string '0' (length=1)
+    #   'TRACK_FLAG_ONREAD' => string '0' (length=1)
+    #   'IS_DISCOVERABLE' => string '1' (length=1)
+
+    #   'VALUES_TYPE' => string 'CH_Dimmer_Automation' (length=20)
+    #   'ENABLE_FLAG' => string '1' (length=1)
+    #   'IS_READABLE' => string '1' (length=1)
+    #   'IS_WRITABLE' => string '1' (length=1)
+    #   'IS_VISIBLE' => string '1' (length=1)
 
     def get_paged_results(
         self,
@@ -455,41 +522,32 @@ ORDER BY o3.ID;""" % (
 
         start, limit = self._sanitize_limits(start, limit)
 
-        _LOGGER.debug("[Build:%s] get_room_devices started - from %d to %d", VIMAR_BUILD, start, start + limit)
+        _LOGGER.debug("get_room_devices started - from %d to %d", start, start + limit)
 
-        select = """SELECT GROUP_CONCAT(DISTINCT r2.PARENTOBJ_ID) AS room_ids, \
-            o2.ID AS object_id,
-            o2.NAME AS object_name, \
-            o2.VALUES_TYPE AS object_type
-        FROM DPADD_OBJECT_RELATION r2
-        INNER JOIN DPADD_OBJECT o2 ON r2.CHILDOBJ_ID = o2.ID AND o2.type = "BYMEIDX"
-        WHERE r2.PARENTOBJ_ID IN (%s) AND r2.RELATION_WEB_TIPOLOGY = "GENERIC_RELATION"
-        GROUP BY o2.ID, o2.NAME, o2.VALUES_TYPE
-        LIMIT %d, %d;""" % (
+        select = """SELECT GROUP_CONCAT(r2.PARENTOBJ_ID) AS room_ids, o2.ID AS object_id,
+o2.NAME AS object_name, o2.VALUES_TYPE as object_type,
+o3.ID AS status_id, o3.NAME AS status_name, o3.CURRENT_VALUE AS status_value
+FROM DPADD_OBJECT_RELATION r2
+INNER JOIN DPADD_OBJECT o2 ON r2.CHILDOBJ_ID = o2.ID AND o2.type = "BYMEIDX"
+INNER JOIN DPADD_OBJECT_RELATION r3 ON o2.ID = r3.PARENTOBJ_ID AND r3.RELATION_WEB_TIPOLOGY = "BYME_IDXOBJ_RELATION"
+INNER JOIN DPADD_OBJECT o3 ON r3.CHILDOBJ_ID = o3.ID AND o3.type = "BYMEOBJ" AND o3.NAME != ""
+WHERE r2.PARENTOBJ_ID IN (%s) AND r2.RELATION_WEB_TIPOLOGY = "GENERIC_RELATION"
+GROUP BY o2.ID, o2.NAME, o2.VALUES_TYPE, o3.ID, o3.NAME, o3.CURRENT_VALUE
+LIMIT %d, %d;""" % (
             self._room_ids,
             start,
             limit,
         )
 
-        select2 = """SELECT r3.PARENTOBJ_ID AS object_id,
-                o3.ID AS status_id, \
-                o3.NAME AS status_name, \
-                o3.CURRENT_VALUE AS status_value
-            FROM DPADD_OBJECT_RELATION r3
-            INNER JOIN DPADD_OBJECT o3 ON r3.CHILDOBJ_ID = o3.ID AND o3.type = "BYMEOBJ" AND o3.NAME != ""
-            WHERE r3.PARENTOBJ_ID IN (
-                SELECT o2.ID FROM DPADD_OBJECT_RELATION r2
-                INNER JOIN DPADD_OBJECT o2 ON r2.CHILDOBJ_ID = o2.ID AND o2.type = "BYMEIDX"
-                WHERE r2.PARENTOBJ_ID IN (%s) AND r2.RELATION_WEB_TIPOLOGY = "GENERIC_RELATION"
-                LIMIT %d, %d
-            ) AND r3.RELATION_WEB_TIPOLOGY = "BYME_IDXOBJ_RELATION";""" % (
-            self._room_ids,
-            start,
-            limit,
-        )
+        # o3.OPTIONALP AS status_range
+        # AND o3.OPTIONALP IS NOT NULL
+        #
+        # AND
+        # o2.ENABLE_FLAG = "1" AND o2.IS_READABLE = "1" AND o2.IS_WRITABLE =
+        # "1" AND o2.IS_VISIBLE = "1"
 
         # passo OnlyUpdate a True, poichè deve solo riempire le informazioni delle room per gli oggetti esistenti
-        return self._generate_device_list_room(select, select2, devices)
+        return self._generate_device_list(select, devices, True)
 
     def get_remote_devices(
         self,
@@ -501,18 +559,16 @@ ORDER BY o3.ID;""" % (
         if devices is None:
             devices = {}
         if len(devices) == 0:
-            _LOGGER.info(
-                "[Build:%s] get_remote_devices started - start=%d limit=%d",
-                VIMAR_BUILD,
-                start or 0,
-                limit or 0,
+            _LOGGER.debug(
+                "get_remote_devices started - from %d to %d",
+                start,
+                (start or 0) + (limit or 0),
             )
 
         start, limit = self._sanitize_limits(start, limit)
 
-        _LOGGER.info("[Build:%s] Executing get_remote_devices SQL query (start=%d, limit=%d)", VIMAR_BUILD, start, limit)
-
-        select = """SELECT '' AS room_ids, o2.ID AS object_id, o2.NAME AS object_name, o2.VALUES_TYPE AS object_type,
+        select = """SELECT '' AS room_ids, o2.id AS object_id, o2.name AS object_name, o2.VALUES_TYPE AS object_type,
+o2.NAME AS object_name, o2.VALUES_TYPE AS object_type,
 o3.ID AS status_id, o3.NAME AS status_name, o3.OPTIONALP as status_range, o3.CURRENT_VALUE AS status_value
 FROM DPADD_OBJECT AS o2
 INNER JOIN (SELECT CLASSNAME,IS_EVENT,IS_EXECUTABLE FROM DPAD_WEB_PHPCLASS) AS D_WP ON o2.PHPCLASS=D_WP.CLASSNAME
@@ -524,11 +580,7 @@ LIMIT %d, %d;""" % (
             limit,
         )
 
-        result = self._generate_device_list(select, devices)
-        if result is not None:
-            devices, row_count = result
-            _LOGGER.info("[Build:%s] After get_remote_devices: device count=%d, state_count=%d", VIMAR_BUILD, len(devices), row_count)
-        return result
+        return self._generate_device_list(select, devices)
 
     def _sanitize_limits(self, start: int | None, limit: int | None):
         """Check for sane values in start and limit."""
@@ -539,58 +591,6 @@ LIMIT %d, %d;""" % (
             start = 0
         return start, limit
 
-    def _generate_device_list_room(
-        self, select_devices, select_statuses, devices: dict[str, VimarDevice] | None = None
-    ):
-        """Generate device list for rooms using two separate SQL queries."""
-        if devices is None:
-            devices = {}
-
-        # Query 1: get devices with room_ids
-        payload_devices = self._request_vimar_sql(select_devices)
-        if payload_devices is None:
-            return None
-
-        # Populate devices with room info
-        for device in payload_devices:
-            if device["object_id"] not in devices:
-                continue
-            deviceItem = devices[device["object_id"]]
-            if device["room_ids"] is not None and device["room_ids"] != "":
-                room_ids = []
-                room_names = []
-                for roomId in device["room_ids"].split(","):
-                    if (
-                        roomId is not None
-                        and roomId != ""
-                        and self._rooms is not None
-                        and roomId in self._rooms
-                    ):
-                        room = self._rooms[roomId]
-                        room_ids.append(roomId)
-                        room_names.append(room["name"])
-                deviceItem["room_ids"] = room_ids
-                deviceItem["room_names"] = room_names
-                deviceItem["room_name"] = room_names[0] if len(room_names) > 0 else ""
-
-        # Query 2: get statuses
-        payload_statuses = self._request_vimar_sql(select_statuses)
-        if payload_statuses is None:
-            return devices, 0
-
-        for device in payload_statuses:
-            if device["object_id"] not in devices:
-                continue
-            deviceItem = devices[device["object_id"]]
-            if device["status_name"] != "":
-                deviceItem["status"][device["status_name"]] = {
-                    "status_id": device["status_id"],
-                    "status_value": device["status_value"],
-                }
-
-        _LOGGER.debug("[Build:%s] get_room_devices ends - found %d devices", VIMAR_BUILD, len(payload_devices))
-        return devices, len(payload_devices)
-
     def _generate_device_list(
         self, select, devices: dict[str, VimarDevice] | None = None, onlyUpdate: bool = False
     ):
@@ -599,6 +599,8 @@ LIMIT %d, %d;""" % (
             devices = {}
         payload = self._request_vimar_sql(select)
         if payload is not None:
+            # there will be multible times the same device
+            # each having a different status part (on/off + dimming etc.)
             for device in payload:
                 deviceItem: VimarDevice | None = None
                 if device["object_id"] not in devices:
@@ -619,6 +621,7 @@ LIMIT %d, %d;""" % (
                     }
                     devices[device["object_id"]] = deviceItem
                 else:
+                    # if object_id is already in the device list, we only update the state
                     deviceItem = devices[device["object_id"]]
 
                 if device["status_name"] != "":
@@ -657,7 +660,7 @@ LIMIT %d, %d;""" % (
         if self._room_ids is not None:
             return self._room_ids
 
-        _LOGGER.debug("[Build:%s] get_main_groups start", VIMAR_BUILD)
+        _LOGGER.debug("get_main_groups start")
 
         select = """SELECT o1.id as id, o1.name as name
 FROM DPADD_OBJECT o0
@@ -667,7 +670,7 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
 
         payload = self._request_vimar_sql(select)
         if payload is not None:
-            _LOGGER.debug("[Build:%s] get_room_ids ends - payload: %s", VIMAR_BUILD, str(payload))
+            _LOGGER.debug("get_room_ids ends - payload: %s", str(payload))
             roomIds = []
             rooms = {}
             for group in payload:
@@ -678,30 +681,22 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
                 }
             self._rooms = rooms
             self._room_ids = ",".join(roomIds)
-            _LOGGER.info("[Build:%s] get_room_ids ends - found %d rooms", VIMAR_BUILD, len(self._room_ids.split(",")))
+            _LOGGER.info("get_room_ids ends - found %d rooms", len(self._room_ids.split(",")))
 
             return self._room_ids
         else:
             return None
 
-    def _request_vimar_sql(self, select, _retry_count=0):
-        """Build sql request. Retries automatically on Unknown-Payload."""
-        import time as _time
-
-        select_clean = (
+    def _request_vimar_sql(self, select):
+        """Build sql request."""
+        select = (
             select.replace("\r\n", " ")
             .replace("\n", " ")
             .replace('"', "&apos;")
             .replace("'", "&apos;")
         )
 
-        _LOGGER.info(
-            "[Build:%s][SQL] Query length: %d chars. Preview: %s...",
-            VIMAR_BUILD,
-            len(select_clean),
-            select[:200],
-        )
-
+        # optionals is set to NO-OPTIONAL (singular) for sql only
         post = (
             '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
             '<soapenv:Body><service-databasesocketoperation xmlns="urn:xmethods-dpadws">'
@@ -714,47 +709,16 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
             "<function>DML-SQL</function><type>SELECT</type>"
             "<statement>%s</statement><statement-len>%d</statement-len>"
             "</service-databasesocketoperation></soapenv:Body></soapenv:Envelope>"
-        ) % (self._session_id, select_clean, len(select_clean))
+        ) % (self._session_id, select, len(select))
 
-        t_start = _time.time()
         response = self._request_vimar_soap(post)
-        elapsed = _time.time() - t_start
-        _LOGGER.info("[Build:%s][SQL] Query execution time: %.2f seconds", VIMAR_BUILD, elapsed)
-
         if response is not None and response is not False:
+
+            # print('Response XML', xmlTree.tostring(response, method='xml'), 'POST: ', post)
+
             payload = response.find(".//payload")
             if payload is not None:
-                payload_text = payload.text or ""
-                _LOGGER.info(
-                    "[Build:%s][SQL] Response payload length: %d chars. First 200: %s",
-                    VIMAR_BUILD,
-                    len(payload_text),
-                    payload_text[:200],
-                )
-
-                # ---- Build 004: Unknown-Payload detection and retry ----
-                if payload_text.strip() == "Unknown-Payload":
-                    if _retry_count < _UNKNOWN_PAYLOAD_MAX_RETRIES:
-                        _LOGGER.warning(
-                            "[Build:%s][SQL] Unknown-Payload detected (attempt %d/%d) - "
-                            "waiting %.1fs before retry...",
-                            VIMAR_BUILD,
-                            _retry_count + 1,
-                            _UNKNOWN_PAYLOAD_MAX_RETRIES,
-                            _UNKNOWN_PAYLOAD_RETRY_DELAY,
-                        )
-                        _time.sleep(_UNKNOWN_PAYLOAD_RETRY_DELAY)
-                        return self._request_vimar_sql(select, _retry_count=_retry_count + 1)
-                    else:
-                        _LOGGER.error(
-                            "[Build:%s][SQL] Unknown-Payload persists after %d retries - giving up.",
-                            VIMAR_BUILD,
-                            _UNKNOWN_PAYLOAD_MAX_RETRIES,
-                        )
-                        return []
-                # ---- end Build 004 fix ----
-
-                parsed_data = self._parse_sql_payload(payload_text)
+                parsed_data = self._parse_sql_payload(payload.text)
 
                 if parsed_data is None:
                     _LOGGER.warning(
@@ -762,12 +726,6 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
                         + ElementTree.tostring(response, encoding="unicode")
                         + " from post: "
                         + post
-                    )
-                else:
-                    _LOGGER.info(
-                        "[Build:%s][SQL] Successfully parsed %d rows",
-                        VIMAR_BUILD,
-                        len(parsed_data),
                     )
 
                 return parsed_data
@@ -781,6 +739,15 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
 
     def _parse_sql_payload(self, string):
         """Split string payload into dictionary array."""
+        # DONE: we need to move parseSQLPayload over to pyton
+        # Example payload string:
+        # Response: DBMG-000
+        # NextRows: 2
+        # Row000001: 'MAIN_GROUPS'
+        # Row000002: '435,439,454,458,473,494,505,532,579,587,605,613,628,641,649,660,682,690,703,731,739,752,760,794,802,817,828,836,868,883,898,906,921,929,1777,1778'
+        # should be MAIN_GROUPS =
+        # '435,439,454,458,473,494,505,532,579,587,605,613,628,641,649,660,682,690,703,731,739,752,760,794,802,817,828,836,868,883,898,906,921,929,1777,1778'
+
         return_list = []
 
         try:
@@ -817,14 +784,18 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
                             return_list.append(row_dict)
 
         except BaseException as err:
+            # exc_type, exc_obj, exc_tb = sys.exc_info()
             _, _, exc_tb = sys.exc_info()
             _LOGGER.error(
                 "Error parsing SQL: %s in line: %d - payload: %s"
                 % (err, exc_tb.tb_lineno if exc_tb is not None else 0, string)
             )
-            # Return empty list - do NOT relogin here to avoid loops
-            # Unknown-Payload retry is handled in _request_vimar_sql
-            return []
+            # enforce relogin
+            _LOGGER.info("Start to relogin..")
+            self._session_id = None
+            self.login()
+            # raise VimarConnectionError(
+            #     "Error parsing SQL: %s in line: %d - payload: %s" % (err, exc_tb.tb_lineno, string))
 
         return return_list
 
@@ -832,7 +803,12 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
         headers = {
             "SOAPAction": "dbSoapRequest",
             "SOAPServer": "",
+            # 'X-Requested-With' => 'XMLHttpRequest',
             "Content-Type": 'text/xml; charset="UTF-8"',
+            # needs to be set to overcome:
+            # 'Expect' => '100-continue'
+            # otherwise header and payload is send in two requests if payload
+            # is bigger then 1024byte
             "Expect": "",
         }
 
@@ -842,9 +818,15 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
         """Prepare call to vimar webserver."""
         url = "%s://%s:%s/%s" % (self._schema, self._host, self._port, path)
 
+        # _LOGGER.error("calling url: " + url)
+        # _LOGGER.info("in _request_vimar")
+        # _LOGGER.info(post)
         response = self._request(url, post, headers)
         if response is not None and response is not False:
             responsexml = self._parse_xml(response)
+            # _LOGGER.info("responsexml: ")
+            # _LOGGER.info(responsexml)
+
             return responsexml
 
         return response
@@ -865,6 +847,7 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
 
     def _request(self, url, post=None, headers=None, check_ssl=False):
         """Call web server using post variables."""
+        # _LOGGER.info("request to " + url)
         try:
             # connection, read timeout
             timeouts = (int(self._timeout / 2), self._timeout)
@@ -880,6 +863,7 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
 
             with requests.Session() as s:
                 s.mount("https://", HTTPAdapter())
+                # s.verify = False
 
                 if post is None:
                     response = s.get(url, headers=headers, verify=check_ssl, timeout=timeouts)
@@ -899,6 +883,7 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
             self.request_last_exception = http_err
             _LOGGER.error("HTTP error occurred: %s", str(http_err))
             return False
+        # except ReadTimeoutError:
         except requests.exceptions.Timeout as ex:
             self.request_last_exception = ex
             _LOGGER.error("HTTP timeout occurred")
@@ -934,16 +919,10 @@ class VimarProject:
         """Get all devices from the vimar webserver, if object list is already there, only update states."""
         if self._devices is None:
             self._devices = {}
-
+        # DONE - only update the state - not the actual devices, so we do not need to parse device types again
         devices_count = len(self._devices)
 
-        _LOGGER.info(
-            "[Build:%s] VimarProject.update() called - forced=%s, current device count=%d",
-            VIMAR_BUILD,
-            forced,
-            devices_count,
-        )
-
+        # TODO - check which device states has changed and call device updates
         self._devices, state_count = self._link.get_paged_results(
             self._link.get_remote_devices, self._devices
         )
@@ -962,7 +941,7 @@ class VimarProject:
             for device_id, device in self._devices.items():
                 self.parse_device_type(device)
             if _LOGGER_isDebug:
-                _LOGGER.debug("check_devices end.... Devices: %s", str(self._devices))
+                _LOGGER.debug("check_devices end. Devices: %s", str(self._devices))
             return True
         else:
             return False
@@ -994,17 +973,14 @@ class VimarProject:
                 device_type = DEVICE_TYPE_LIGHTS
                 device_class = DEVICE_CLASS_SWITCH
                 icon = ["mdi:lightbulb-on", "mdi:lightbulb-off"]
-
             elif any(x in device["object_name"].upper() for x in ["STECKDOSE", "PULSANTE"]):
                 device_type = DEVICE_TYPE_SWITCHES
                 device_class = DEVICE_CLASS_OUTLET
                 icon = ["mdi:power-plug", "mdi:power-plug-off"]
-
             elif any(x in device["object_name"].upper() for x in ["HEIZUNG", "HEIZKÖRPER"]):
                 device_type = DEVICE_TYPE_SWITCHES
                 device_class = DEVICE_CLASS_SWITCH
                 icon = ["mdi:radiator", "mdi:radiator-off"]
-
             elif any(x in device["object_name"].upper() for x in [" IR "]):
                 device_type = DEVICE_TYPE_SWITCHES
                 device_class = DEVICE_CLASS_SWITCH
