@@ -440,6 +440,13 @@ ORDER BY o3.ID;""" % (
             return status_list
 
         return {}
+    def get_status_only(self, status_ids: list[int]) -> list[dict] | None:
+        """Slim poll: fetch only CURRENT_VALUE for known status IDs."""
+        if not status_ids:
+            return []
+        ids_csv = ",".join(str(int(sid)) for sid in status_ids)
+        select = f"SELECT ID AS status_id, CURRENT_VALUE AS status_value FROM DPADD_OBJECT WHERE ID IN ({ids_csv});"
+        return self._request_vimar_sql(select)
 
     # Device example:
     #   'room_id' => string '439' (length=3)
@@ -737,16 +744,17 @@ WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
             _LOGGER.info("Errorous SQL: %s", select)
         return None
 
-    def _parse_sql_payload(self, string):
-        """Split string payload into dictionary array."""
-        # DONE: we need to move parseSQLPayload over to pyton
-        # Example payload string:
-        # Response: DBMG-000
-        # NextRows: 2
-        # Row000001: 'MAIN_GROUPS'
-        # Row000002: '435,439,454,458,473,494,505,532,579,587,605,613,628,641,649,660,682,690,703,731,739,752,760,794,802,817,828,836,868,883,898,906,921,929,1777,1778'
-        # should be MAIN_GROUPS =
-        # '435,439,454,458,473,494,505,532,579,587,605,613,628,641,649,660,682,690,703,731,739,752,760,794,802,817,828,836,868,883,898,906,921,929,1777,1778'
+        except BaseException as err:
+            _, _, exc_tb = sys.exc_info()
+            _LOGGER.warning(
+                "Transient SQL parse error: %s at line %d - payload: %.200s",
+                err,
+                exc_tb.tb_lineno if exc_tb is not None else 0,
+                string,
+            )
+            # Transient error: return None instead of forcing relogin
+            # (relogin = SSL handshake storm on overloaded Vimar webserver)
+            return None
 
         return_list = []
 
