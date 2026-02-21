@@ -239,27 +239,29 @@ class VimarStatusSensor(BinarySensorEntity):
         """Initialize the sensor."""
         self._coordinator = coordinator
         vimarconfig = coordinator.vimarconfig
+        # Access connection attributes through _connection after refactoring
+        conn = coordinator.vimarconnection._connection
         self._name = (
             "Vimar Connection to "
-            + str(coordinator.vimarconnection._host)
+            + str(conn._host)
             + ":"
-            + str(coordinator.vimarconnection._port)
+            + str(conn._port)
         )
         self._type = BinarySensorDeviceClass.CONNECTIVITY
         self._attributes = {
-            "Host": coordinator.vimarconnection._host,
-            "Port": coordinator.vimarconnection._port,
-            "Secure": coordinator.vimarconnection._schema == "https",
-            "Verify SSL": coordinator.vimarconnection._schema == "https"
+            "Host": conn._host,
+            "Port": conn._port,
+            "Secure": conn._schema == "https",
+            "Verify SSL": conn._schema == "https"
             and vimarconfig.get(CONF_VERIFY_SSL),
             "Vimar Url": "%s://%s:%s"
             % (
-                coordinator.vimarconnection._schema,
-                coordinator.vimarconnection._host,
-                coordinator.vimarconnection._port,
+                conn._schema,
+                conn._host,
+                conn._port,
             ),
-            "Certificate": coordinator.vimarconnection._certificate,
-            "Username": coordinator.vimarconnection._username,
+            "Certificate": conn._certificate,
+            "Username": conn._username,
             "SessionID": coordinator.vimarconnection._session_id,
         }
         self._data = self._attributes
