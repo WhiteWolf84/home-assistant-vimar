@@ -75,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bug**: `AttributeError` in `VimarStatusSensor` when accessing connection attributes
 - **Bug**: Missing proper `available` property implementation in entities
+- **Critical Bug**: Cover physical button detection incorrectly triggered when using Home Assistant UI commands
+  - Added `_tb_ha_command_active` flag to distinguish HA commands from physical button presses
+  - Physical button detection now only triggers when no HA command is active
+  - Fixes false "Physical button OPEN/CLOSE" log messages during HA-initiated movements
 - Improved error messages for connection failures
 - Better handling of certificate download edge cases
 - Null-safe device attribute access
@@ -87,6 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SQL parser handles malformed payloads gracefully without exceptions
 - Coordinator now properly raises `ConfigEntryAuthFailed` for auth errors
 - Entity `available` property now follows Home Assistant standards
+- **Cover UI Updates**: Position updates now occur every 1% instead of every 2% during movement
+  - Changed `UI_UPDATE_THRESHOLD` from 2 to 1 for smoother visual feedback
+  - Provides more granular position tracking in Home Assistant UI
+  - Reduces perceived lag during cover movements
 
 ### Documentation
 
@@ -138,6 +146,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Translation coverage: 100% for all flows
 - European user coverage: ~85%
 - Global user coverage: ~40%
+
+**Cover Physical Button Detection Logic:**
+- Conditions for physical button detection:
+  1. No active tracking operation (`_tb_operation` is None)
+  2. State `up/down` has changed from last known value
+  3. No recent HA command active (`_tb_ha_command_active` is False)
+- HA command flag is set at tracking start and cleared at tracking stop
+- Physical STOP during HA tracking still correctly detected and handled
+
+**Cover Position Update Frequency:**
+- Update interval: 0.2s (unchanged)
+- UI update threshold: 2% → 1% (changed)
+- Result: More responsive UI with 2x more frequent position updates
 
 **Silver Compliance Status:**
 - ✅ Re-authentication flow
