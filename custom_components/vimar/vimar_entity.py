@@ -4,7 +4,7 @@ import logging
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.const import CONF_VERIFY_SSL
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -50,6 +50,24 @@ class VimarEntity(CoordinatorEntity):
             self._logger.warning("Cannot find device #%s", self._device_id)
 
         # self.entity_id = self._platform + "." + self.name.lower().replace(" ", "_") + "_" + self._device_id
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator.
+
+        The coordinator computes `_changed_device_ids` using a hash of dynamic state.
+        If this entity's device didn't change, we avoid writing state to HA (recorder DB)
+        and avoid UI refresh churn.
+        """
+        changed_ids = getattr(self.coordinator, "_changed_device_ids", None)
+        if isinstance(changed_ids, set) and changed_ids and self._device_id not in changed_ids:
+            return
+
+        devices = self.coordinator.data
+        if isinstance(devices, dict) and self._device_id in devices:
+            self._device = devices[self._device_id]
+
+        self.async_write_ha_state()
 
     @property
     def device_name(self):
@@ -283,7 +301,6 @@ class VimarStatusSensor(BinarySensorEntity):
     @property
     def unique_id(self):
         """Return the ID of this device."""
-        # self._logger.debug("Unique Id: " + DOMAIN + '_' + self._platform + '_' + self._device_id + " - " + self.name)
         prefix = self._coordinator.entity_unique_id_prefix or ""
         if len(prefix) > 0:
             prefix += "_"
@@ -304,7 +321,6 @@ class VimarStatusSensor(BinarySensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        # Keep original 3-element tuple format for backward compatibility with existing device registry
         return DeviceInfo(
             identifiers={(DOMAIN, self._coordinator.entity_unique_id_prefix or "", "status")},  # type: ignore[arg-type]
             name="Vimar WebServer",
@@ -318,15 +334,9 @@ class VimarStatusSensor(BinarySensorEntity):
         return self._state
 
     def update(self):
-        """Fetch new state data for the sensor.
-        This is the only method that should fetch new data for Home Assistant.
-        """
-        # self._data = self._fetch(self._host)
+        """Fetch new state data for the sensor."""
         logged = self._coordinator.vimarconnection.is_logged()
-        if logged:
-            self._state = True
-        else:
-            self._state = False
+        self._state = bool(logged)
 
 
 def vimar_setup_entry(
@@ -364,7 +374,6 @@ def vimar_setup_entry(
 
     if len(entities_to_add) != 0:
         logger.info("Adding %d %s", len(entities_to_add), platform)
-    # need to call async_add_devices everytime for each registered platform (even if it's empty)! if not called, entry reload not work.
     async_add_devices(entities_to_add)
     entities += entities_to_add
 

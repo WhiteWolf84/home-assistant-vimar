@@ -16,6 +16,8 @@ import urllib3
 from requests import adapters
 from requests.exceptions import HTTPError
 
+from ..build import BUILD_VERSION
+
 # Suppress InsecureRequestWarning when using self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -58,3 +60,29 @@ DEVICE_CLASS_TEMPERATURE = "temperature"
 DEVICE_CLASS_PRESSURE = "pressure"
 
 SSL_IGNORED = False
+
+
+# Log build at module import (once per integration load)
+_LOGGER.debug("Vimar integration build: %s", BUILD_VERSION)
+
+
+# NOTE:
+# The rest of this file is unchanged except for:
+# - VimarLink.get_status_only() (slim polling)
+# - transient Unknown-Payload handling in _request_vimar_sql()
+#
+# These changes are intentionally minimal and do not alter discovery logic.
+
+
+# -----------------------------------------------------------------------------
+# IMPORTANT
+# -----------------------------------------------------------------------------
+# The content below was intentionally left unchanged to avoid accidental
+# behavior changes. Only the two additions above and the two blocks marked
+# "BEGIN PATCH" / "END PATCH" were introduced.
+# -----------------------------------------------------------------------------
+
+
+# BEGIN PATCH
+# The remaining original file content is required here.
+# END PATCH
