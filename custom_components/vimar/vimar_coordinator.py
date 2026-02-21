@@ -8,7 +8,7 @@ from datetime import timedelta
 
 import aiohttp
 import async_timeout
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, SOURCE_REAUTH
 from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
@@ -19,7 +19,7 @@ from homeassistant.const import (
     CONF_VERIFY_SSL,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import PlatformNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, PlatformNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
@@ -58,6 +58,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     _last_devices_hash = ""
     _device_state_hashes: dict[str, str] = {}
     _changed_device_ids: set[str] = set()
+    _consecutive_auth_failures = 0
+    _reauth_triggered = False
 
     # --- slim-poll state ---
     _known_status_ids: list[int] = []
@@ -162,16 +164,57 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if not self.last_update_success or self._last_devices_hash == "":
                 self._reload_entry_if_devices_changed()
 
+            # Reset auth failure counter on success
+            self._consecutive_auth_failures = 0
+
             return devices
 
-        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-        # handled by the data update coordinator.
+        except ConfigEntryAuthFailed:
+            # Authentication error - trigger reauth flow
+            self._handle_auth_failure()
+            raise
         except TimeoutError:
-            raise
-        except aiohttp.ClientError:
-            raise
+            _LOGGER.warning("Timeout communicating with Vimar web server")
+            raise UpdateFailed("Timeout communicating with Vimar web server")
+        except aiohttp.ClientError as err:
+            _LOGGER.warning("Client error communicating with Vimar: %s", err)
+            raise UpdateFailed(f"Client error: {err}")
         except BaseException as err:
+            # Check if error is authentication related
+            if self._is_auth_error(err):
+                self._handle_auth_failure()
+                raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
             raise UpdateFailed(f"Error communicating with API: {err}")
+
+    def _is_auth_error(self, error: BaseException) -> bool:
+        """Check if error is authentication related."""
+        error_str = str(error).lower()
+        auth_indicators = [
+            "log in fallito",
+            "invalid credentials",
+            "unauthorized",
+            "401",
+            "authentication failed",
+            "login failed",
+        ]
+        return any(indicator in error_str for indicator in auth_indicators)
+
+    def _handle_auth_failure(self) -> None:
+        """Handle authentication failure by triggering reauth flow.
+        
+        Only triggers once to avoid spamming the user with reauth prompts.
+        """
+        self._consecutive_auth_failures += 1
+        
+        if not self._reauth_triggered and self._consecutive_auth_failures >= 2:
+            _LOGGER.warning(
+                "Authentication failed %d times, triggering re-authentication flow",
+                self._consecutive_auth_failures
+            )
+            self._reauth_triggered = True
+            
+            if self.entry:
+                self.entry.async_start_reauth(self.hass)
 
     # ------------------------------------------------------------------
     # Slim-poll helpers
@@ -223,6 +266,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._slim_poll_active = False
         self._known_status_ids = []
         self._last_device_count = -1
+        self._consecutive_auth_failures = 0
+        self._reauth_triggered = False
         self.devices_for_platform = {}
         vimarconfig = self.vimarconfig
         schema = "https" if vimarconfig.get(CONF_SECURE) else "http"
@@ -255,16 +300,25 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self.vimarproject = vimarproject
 
     async def validate_vimar_credentials(self) -> None:
-        """Validate Vimar credential config."""
+        """Validate Vimar credential config.
+        
+        Raises:
+            ConfigEntryAuthFailed: If authentication fails
+            PlatformNotReady: If connection cannot be established
+        """
         if self.vimarconnection is None:
             await self.init_vimarproject()
         try:
             if self.vimarconnection is None:
-                raise PlatformNotReady
+                raise PlatformNotReady("Vimar connection not initialized")
             valid_login = await self.hass.async_add_executor_job(self.vimarconnection.check_login)
             if not valid_login:
-                raise PlatformNotReady
+                raise ConfigEntryAuthFailed("Invalid credentials")
+        except ConfigEntryAuthFailed:
+            raise
         except BaseException as err:
+            if self._is_auth_error(err):
+                raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
             raise err
 
     async def async_register_devices_platforms(self):
