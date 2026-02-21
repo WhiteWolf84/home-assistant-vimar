@@ -34,7 +34,7 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_TRAVEL_TIME_UP = 28
 DEFAULT_TRAVEL_TIME_DOWN = 26
 POSITION_UPDATE_INTERVAL = 0.2
-UI_UPDATE_THRESHOLD = 2  # Aggiorna UI solo se la % cambia di almeno 2 punti
+UI_UPDATE_THRESHOLD = 1  # Aggiorna UI ogni 1% di variazione
 RELAY_DELAY = 0.5        # Compensazione ritardo relè Vimar in secondi
 
 # Chiavi per storage entity options
@@ -102,6 +102,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_unsub = None
         self._tb_last_updown = None
         self._tb_last_reported_position = None  # Per threshold UI
+        self._tb_ha_command_active = False  # Flag per distinguere comandi HA da pulsanti fisici
 
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
@@ -225,22 +226,29 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             self._tb_check_vimar_state()
 
     def _tb_check_vimar_state(self):
-        """Controlla stato Vimar e gestisci movimenti."""
+        """Controlla stato Vimar e gestisci movimenti fisici."""
         current_updown = self.get_state("up/down")
 
+        # Durante tracking da comandi HA, verifica solo interruzioni (STOP fisico)
         if self._tb_operation:
             expected_updown = "0" if self._tb_operation == "opening" else "1"
 
+            # Se lo stato cambia inaspettatamente durante tracking HA
             if current_updown != expected_updown:
                 _LOGGER.info(
-                    f"{self.name}: ⏸️ STOP detected during HA tracking! "
+                    f"{self.name}: ⏸️ Physical STOP detected during HA tracking! "
                     f"up/down={current_updown} (was {self._tb_operation})"
                 )
+                # Reset del flag comando HA perché è stato interrotto fisicamente
+                self._tb_ha_command_active = False
                 self.hass.async_create_task(self._tb_stop_tracking())
-                return
+            return
 
-        if current_updown != self._tb_last_updown and not self._tb_operation:
-
+        # Rileva movimenti da pulsanti fisici solo quando:
+        # 1. NON c'è tracking attivo (_tb_operation è None)
+        # 2. Lo stato up/down è cambiato rispetto all'ultimo valore
+        # 3. NON è un comando HA recente
+        if current_updown != self._tb_last_updown and not self._tb_ha_command_active:
             if current_updown == "0":
                 self._tb_position = 100
                 _LOGGER.info(
@@ -271,6 +279,9 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_start_position = self._tb_position
         self._tb_target = target if target is not None else (100 if opening else 0)
         self._tb_last_reported_position = self._tb_position
+        
+        # Imposta flag comando HA per evitare false detection di pulsanti fisici
+        self._tb_ha_command_active = True
 
         if self._tb_unsub:
             self._tb_unsub()
@@ -301,12 +312,15 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_start_time = None
         self._tb_target = None
         self._tb_last_reported_position = self._tb_position
+        
+        # Reset flag comando HA - ora i pulsanti fisici possono essere rilevati
+        self._tb_ha_command_active = False
 
         self.async_write_ha_state()
 
     @callback
     def _tb_update_position(self, now):
-        """Aggiorna posizione durante tracking."""
+        """Aggiorna posizione durante tracking ogni 1%."""
         self._tb_calculate_position()
 
         should_stop = False
@@ -347,7 +361,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
             self.hass.async_create_task(self._tb_stop_tracking())
         else:
-            # Se non deve fermarsi, aggiorna l'UI solo se la variazione supera la soglia (anti-spam db)
+            # Aggiorna UI ogni 1% di variazione (o più frequente se UI_UPDATE_THRESHOLD < 1)
             if self._tb_last_reported_position is None or \
                abs(self._tb_position - self._tb_last_reported_position) >= UI_UPDATE_THRESHOLD:
                 self._tb_last_reported_position = self._tb_position
