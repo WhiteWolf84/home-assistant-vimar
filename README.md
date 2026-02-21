@@ -1,9 +1,9 @@
-[![HACS Validate](https://github.com/WhiteWolf84/home-assistant-vimar/actions/workflows/validate.yml/badge.svg)](https://github.com/WhiteWolf84/home-assistant-vimar/actions/workflows/validate.yml)
-[![hassfest Validate](https://github.com/WhiteWolf84/home-assistant-vimar/actions/workflows/hassfest.yml/badge.svg)](https://github.com/WhiteWolf84/home-assistant-vimar/actions/workflows/hassfest.yml)
-[![Github Release](https://img.shields.io/github/release/WhiteWolf84/home-assistant-vimar.svg)](https://github.com/WhiteWolf84/home-assistant-vimar/releases)
-[![Github Commit since](https://img.shields.io/github/commits-since/WhiteWolf84/home-assistant-vimar/latest?sort=semver)](https://github.com/WhiteWolf84/home-assistant-vimar/releases)
-[![Github Open Issues](https://img.shields.io/github/issues/WhiteWolf84/home-assistant-vimar.svg)](https://github.com/WhiteWolf84/home-assistant-vimar/issues)
-[![Github Open Pull Requests](https://img.shields.io/github/issues-pr/WhiteWolf84/home-assistant-vimar.svg)](https://github.com/WhiteWolf84/home-assistant-vimar/pulls)
+[![HACS Validate](https://github.com/h4de5/home-assistant-vimar/actions/workflows/validate.yml/badge.svg)](https://github.com/h4de5/home-assistant-vimar/actions/workflows/validate.yml)
+[![hassfest Validate](https://github.com/h4de5/home-assistant-vimar/actions/workflows/hassfest.yml/badge.svg)](https://github.com/h4de5/home-assistant-vimar/actions/workflows/hassfest.yml)
+[![Github Release](https://img.shields.io/github/release/h4de5/home-assistant-vimar.svg)](https://github.com/h4de5/home-assistant-vimar/releases)
+[![Github Commit since](https://img.shields.io/github/commits-since/h4de5/home-assistant-vimar/latest?sort=semver)](https://github.com/h4de5/home-assistant-vimar/releases)
+[![Github Open Issues](https://img.shields.io/github/issues/h4de5/home-assistant-vimar.svg)](https://github.com/h4de5/home-assistant-vimar/issues)
+[![Github Open Pull Requests](https://img.shields.io/github/issues-pr/h4de5/home-assistant-vimar.svg)](https://github.com/h4de5/home-assistant-vimar/pulls)
 
 # VIMAR By-Me / By-Web Integration for Home Assistant
 
@@ -63,13 +63,13 @@ Advanced position tracking engine for covers lacking native positional feedback:
 
 1. Open HACS in Home Assistant
 2. Go to **Integrations** → **Custom Repositories**
-3. Add: `https://github.com/WhiteWolf84/home-assistant-vimar`
+3. Add: `https://github.com/h4de5/home-assistant-vimar`
 4. Category: **Integration**
 5. Install and restart Home Assistant
 
 ### Manual Installation
 
-1. Download the [latest release](https://github.com/WhiteWolf84/home-assistant-vimar/releases)
+1. Download the [latest release](https://github.com/h4de5/home-assistant-vimar/releases)
 2. Extract and copy `custom_components/vimar` to your HA `custom_components` directory
 3. Restart Home Assistant
 
@@ -100,12 +100,6 @@ For accurate position tracking, configure travel times per cover:
    - `travel_time_up`: Seconds from 0% to 100%
    - `travel_time_down`: Seconds from 100% to 0%
 
-**How to measure:**
-1. Fully close the cover (0%)
-2. Start timer and open to 100%
-3. Record time as `travel_time_up`
-4. Repeat in reverse for `travel_time_down`
-
 ## 🎯 Supported Devices
 
 | Platform | Device Types | Status |
@@ -121,12 +115,11 @@ For accurate position tracking, configure travel times per cover:
 
 ## 🛤️ Architecture
 
-### Modular Structure
+### Modular Structure (v2026.2.0)
 
 ```
 custom_components/vimar/
 ├── vimarlink/              # Core library
-│   ├── __init__.py        # Package exports
 │   ├── connection.py      # HTTP & authentication
 │   ├── device_queries.py  # SQL query builders
 │   ├── exceptions.py      # Error classes
@@ -135,17 +128,7 @@ custom_components/vimar/
 │   └── vimarlink.py       # Main API
 ├── light.py               # Light platform
 ├── cover.py               # Cover platform
-├── climate.py             # Climate platform
-├── sensor.py              # Sensor platform
 └── ...                    # Other platforms
-```
-
-### Data Flow
-
-```
-HA → Coordinator → VimarLink → VimarConnection → Web Server
-                   │
-                   └─ VimarProject (Device Registry)
 ```
 
 ## 🐛 Troubleshooting
@@ -166,107 +149,90 @@ logger:
 
 #### SSL/Certificate Errors
 
-**Problem:** `SSL: CERTIFICATE_VERIFY_FAILED` or similar SSL errors
+**Problem:** `SSL: CERTIFICATE_VERIFY_FAILED`
 
 **Solutions:**
-1. **Use custom certificate:** Configure the certificate path in integration settings
-2. **Update certificate:** The integration auto-downloads certificates on first connection
-3. **Disable SSL verification:** (Not recommended) Use HTTP instead of HTTPS
+1. Configure certificate path in integration settings
+2. Integration auto-downloads certificates on first connection
+3. Use HTTP instead of HTTPS (not recommended)
 
 #### Connection Timeout
 
-**Problem:** Web server doesn't respond or times out
+**Problem:** Web server doesn't respond
 
 **Solutions:**
-1. Check network connectivity to the Vimar web server
-2. Verify firewall rules allow HA to reach the web server
-3. Increase timeout in integration options (default: 6s)
-4. Check web server load - avoid multiple simultaneous connections
+1. Check network connectivity
+2. Verify firewall rules
+3. Increase timeout in integration options
+4. Check web server load
 
 #### Session Conflicts
 
-**Problem:** Web server GUI becomes unresponsive when HA is connected
+**Problem:** Web GUI becomes unresponsive when HA is connected
 
-**Solution:** Create a **dedicated user** on the Vimar web server specifically for Home Assistant. The server drops sessions if the same user logs in from multiple clients.
+**Solution:** Create a **dedicated user** on the Vimar web server for Home Assistant.
 
 #### Cover Position Drift
 
-**Problem:** Cover position becomes inaccurate over time
+**Problem:** Cover position becomes inaccurate
 
 **Solutions:**
-1. Recalibrate travel times (measure multiple times and use average)
-2. Perform a full open/close cycle to re-sync with end-stops
-3. Switch to `auto` mode to use hardware sensors when available
+1. Recalibrate travel times
+2. Perform full open/close cycle to re-sync
+3. Use `auto` mode for hardware sensors
 
 ## 🏆 Quality Roadmap to Silver
 
-### Current Status: 🥉 Bronze
+### Current: 🥉 Bronze
 
 **Completed:**
 - ✅ Stable core functionality
 - ✅ Config flow (UI configuration)
 - ✅ Device registry integration
 - ✅ Graceful error recovery
-- ✅ Code refactoring and optimization
+- ✅ Modular architecture
 
-### 🎯 Silver Requirements
+### Target: 🥈 Silver
 
 **In Progress:**
-- 🔄 Re-authentication flow (when credentials change/expire)
-- 🔄 Enhanced documentation (troubleshooting, FAQs)
+- 🔄 Re-authentication flow
+- 🔄 Enhanced documentation
 - 🔄 Proper unavailable state handling
 
 **Planned:**
-- 📝 Comprehensive entity documentation
-- 📝 Integration quality scale compliance
+- 📝 Comprehensive troubleshooting guide
 - 🧪 Unit test suite
-- ⚡ Exponential backoff retry logic
+- ⚡ Exponential backoff retry
 - 📦 Reduced log verbosity
 
-**Track Progress:** [GitHub Project Board](https://github.com/WhiteWolf84/home-assistant-vimar/projects)
+## ⚠️ Disclaimer
 
-## ⚠️ Limitations & Disclaimer
-
-**Supported:** Lights, dimmers, audio devices, energy meters, covers, fans, switches, climates, scenes  
-**Limited Support:** Specialized hardware types may require additional development
-
-**DISCLAIMER: THIS IS A COMMUNITY-DRIVEN PROJECT.**
+**THIS IS A COMMUNITY-DRIVEN PROJECT.**
 
 Use at your own risk. This integration mimics HTTP calls made through the official Vimar By-me web interface. While extensively tested, it is not officially supported by Vimar.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Whether you:
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-- 🐛 Found a bug
-- ✨ Have a feature request  
-- 📝 Want to improve documentation
-- 🔧 Can contribute code
-
-**Steps:**
-1. Check [existing issues](https://github.com/WhiteWolf84/home-assistant-vimar/issues)
-2. Open a new issue or discussion
-3. Fork the repo and create a feature branch
-4. Submit a pull request
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+- 🐛 Report bugs via [Issues](https://github.com/h4de5/home-assistant-vimar/issues)
+- ✨ Request features
+- 🔧 Submit pull requests
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file
 
 ## 🙏 Credits
 
-**Original Authors:**
+**Maintainers:**
 - [@h4de5](https://github.com/h4de5)
-- [@robigan](https://github.com/robigan)
+- [@robigan](https://github.com/robigan)  
 - [@davideciarmiello](https://github.com/davideciarmiello)
 
-**Current Maintainer:**
-- [@WhiteWolf84](https://github.com/WhiteWolf84)
-
-**Community Contributors:**
-Thank you to everyone who has contributed code, reported bugs, or helped with testing!
+**Contributors:**
+- [@WhiteWolf84](https://github.com/WhiteWolf84) - Architecture refactoring, performance optimizations
+- And all community members who reported issues and tested features!
 
 ---
 
