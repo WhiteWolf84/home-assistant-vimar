@@ -1,0 +1,20 @@
+# Code Owners for home-assistant-vimar
+#
+# These users will be automatically requested for review when someone opens a pull request.
+# More info: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repo
+* @WhiteWolf84
+
+# Integration core components
+/custom_components/vimar/ @WhiteWolf84
+
+# Vimar link library
+/custom_components/vimar/vimarlink/ @WhiteWolf84
+
+# Documentation
+*.md @WhiteWolf84
+/docs/ @WhiteWolf84
+
+# GitHub workflows and CI/CD
+/.github/ @WhiteWolf84
