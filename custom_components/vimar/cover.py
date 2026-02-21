@@ -34,6 +34,8 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_TRAVEL_TIME_UP = 28
 DEFAULT_TRAVEL_TIME_DOWN = 26
 POSITION_UPDATE_INTERVAL = 0.2
+UI_UPDATE_THRESHOLD = 2  # Aggiorna UI solo se la % cambia di almeno 2 punti
+RELAY_DELAY = 0.5        # Compensazione ritardo relè Vimar in secondi
 
 # Chiavi per storage entity options
 CONF_TRAVEL_TIME_UP = "travel_time_up"
@@ -83,8 +85,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             return not self.has_state("position")
         
         # TIME_BASED or AUTO modes:
-        # - Time-based tracking provides calculated position → False (known)
-        # - Native sensor provides hardware position → False (known)
+        # - Time-based tracking provides calculated position -> False (known)
+        # - Native sensor provides hardware position -> False (known)
         return False
 
     def __init__(self, coordinator, device_id: int):
@@ -99,6 +101,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_operation = None
         self._tb_unsub = None
         self._tb_last_updown = None
+        self._tb_last_reported_position = None  # Per threshold UI
 
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
@@ -206,6 +209,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 _LOGGER.debug(f"{self.name}: Using native position from webserver")
 
         self._tb_last_updown = self.get_state("up/down")
+        self._tb_last_reported_position = self._tb_position
         _LOGGER.debug(f"{self.name}: === async_added_to_hass END ===")
 
     async def async_will_remove_from_hass(self):
@@ -242,6 +246,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 _LOGGER.info(
                     f"{self.name}: ⬆️ Physical button OPEN → Position set to 100%"
                 )
+                self._tb_last_reported_position = 100
                 self.async_write_ha_state()
 
             elif current_updown == "1":
@@ -249,6 +254,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 _LOGGER.info(
                     f"{self.name}: ⬇️ Physical button CLOSE → Position set to 0%"
                 )
+                self._tb_last_reported_position = 0
                 self.async_write_ha_state()
 
         self._tb_last_updown = current_updown
@@ -264,6 +270,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_start_time = datetime.now()
         self._tb_start_position = self._tb_position
         self._tb_target = target if target is not None else (100 if opening else 0)
+        self._tb_last_reported_position = self._tb_position
 
         if self._tb_unsub:
             self._tb_unsub()
@@ -293,6 +300,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_operation = None
         self._tb_start_time = None
         self._tb_target = None
+        self._tb_last_reported_position = self._tb_position
 
         self.async_write_ha_state()
 
@@ -338,21 +346,28 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 )
 
             self.hass.async_create_task(self._tb_stop_tracking())
-
-        self.async_write_ha_state()
+        else:
+            # Se non deve fermarsi, aggiorna l'UI solo se la variazione supera la soglia (anti-spam db)
+            if self._tb_last_reported_position is None or \
+               abs(self._tb_position - self._tb_last_reported_position) >= UI_UPDATE_THRESHOLD:
+                self._tb_last_reported_position = self._tb_position
+                self.async_write_ha_state()
 
     def _tb_calculate_position(self):
-        """Calcola posizione attuale basata sul tempo trascorso."""
+        """Calcola posizione attuale basata sul tempo trascorso con compensazione ritardo relè."""
         if not self._tb_start_time:
             return
 
-        elapsed = (datetime.now() - self._tb_start_time).total_seconds()
+        elapsed_total = (datetime.now() - self._tb_start_time).total_seconds()
+        # Sottrae il ritardo stimato del relè (non scende sotto zero)
+        elapsed_effective = max(0.0, elapsed_total - RELAY_DELAY)
+
         travel_time = (
             self._travel_time_up
             if self._tb_operation == "opening"
             else self._travel_time_down
         )
-        percentage = (elapsed / travel_time) * 100
+        percentage = (elapsed_effective / travel_time) * 100
 
         if self._tb_operation == "opening":
             self._tb_position = min(100, self._tb_start_position + percentage)
@@ -386,8 +401,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 return False
             else:
                 return None
-        # Time-based mode
-        return self._tb_position == 0 if self._tb_position is not None else None
+        
+        # Time-based mode: handle robustly
+        if self._tb_position is not None:
+            return self._tb_position == 0
+        return None
 
     @property
     def is_opening(self) -> bool:
