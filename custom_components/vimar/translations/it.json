@@ -1,103 +1,87 @@
 {
-  "title": "VIMAR By-Me Hub",
   "config": {
     "step": {
       "user": {
-        "title": "Configura VIMAR By-Me Hub",
+        "title": "Configurazione Vimar By-Me Hub",
+        "description": "Configura la connessione al web server Vimar By-me.",
         "data": {
-          "title": "Titolo Istanza",
-          "host": "Host",
-          "username": "Nome Utente",
-          "password": "Password",
+          "title": "Nome per questa integrazione",
+          "host": "Host (IP o hostname)",
           "port": "Porta",
-          "certificate": "Nome file certificato",
-          "secure": "Sicuro (Https)",
-          "verify_ssl": "Verifica SSL"
+          "secure": "Usa HTTPS",
+          "verify_ssl": "Verifica certificato SSL",
+          "username": "Nome utente",
+          "password": "Password",
+          "certificate": "Percorso certificato personalizzato (opzionale)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Ri-autenticazione Vimar By-Me Hub",
+        "description": "Le credenziali per {host} non sono più valide. Inserisci le credenziali aggiornate.",
+        "data": {
+          "username": "Nome utente",
+          "password": "Password"
         }
       }
     },
     "error": {
-      "cannot_connect": "Connessione fallita, riprova",
-      "invalid_auth": "Autenticazione non valida",
-      "invalid_cert": "Certificato non valido, prova a cambiare o rimuovere",
-      "save_cert_failed": "Salvataggio certificato fallito. Controlla il percorso e riprova",
-      "unknown": "Errore imprevisto"
+      "invalid_auth": "Nome utente o password non validi. Verifica le credenziali.",
+      "cannot_connect": "Impossibile connettersi al web server Vimar. Verifica host, porta e connettività di rete.",
+      "invalid_cert": "Validazione certificato SSL fallita. Verifica la configurazione del certificato o disabilita la verifica SSL.",
+      "save_cert_failed": "Impossibile salvare il certificato SSL. Verifica i permessi del file.",
+      "unknown": "Si è verificato un errore imprevisto. Controlla i log per maggiori dettagli."
     },
     "abort": {
-      "already_configured": "Il dispositivo è già configurato"
+      "already_configured": "Questo web server Vimar è già configurato.",
+      "reauth_successful": "Ri-autenticazione completata con successo! L'integrazione è stata aggiornata.",
+      "reauth_failed": "Ri-autenticazione fallita. Riprova o riconfigura l'integrazione.",
+      "single_instance_allowed": "È consentita una sola istanza dell'integrazione Vimar."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Configura VIMAR By-Me Hub (Auth)",
+        "title": "Impostazioni Connessione",
+        "description": "Configura i parametri di connessione.",
         "data": {
           "host": "Host",
-          "username": "Nome Utente",
-          "password": "Password",
           "port": "Porta",
-          "certificate": "Nome file certificato",
-          "secure": "Sicuro (Https)",
-          "verify_ssl": "Verifica SSL"
+          "secure": "Usa HTTPS",
+          "verify_ssl": "Verifica SSL",
+          "username": "Nome utente",
+          "password": "Password",
+          "certificate": "Percorso certificato"
         }
       },
       "two": {
-        "title": "Configura VIMAR By-Me Hub (2)",
+        "title": "Impostazioni Integrazione",
+        "description": "Configura polling, filtri e opzioni piattaforma.",
         "data": {
-          "timeout": "Timeout Richiesta (secondi)",
-          "scan_interval": "Intervallo Scansione (secondi)",
-          "global_channel_id": "ID Canale Globale MediaPlayer",
-          "ignore": "Piattaforme ignorate",
-          "cover_position_mode": "Modalità posizionamento tapparelle",
-          "use_vimar_naming": "Usa nomenclatura Vimar",
-          "friendly_name_room_name_at_begin": "Imposta nome stanza all'inizio del nome",
-          "devices_as_lights_re": "RegEx per impostare entità come luci (CH_Main_Automation), altre come interruttori",
-          "devices_as_binary_sensor_re": "RegEx per impostare entità interruttori come sensori binari"
-        },
-        "data_description": {
-          "cover_position_mode": "Scegli come gestire la posizione delle tapparelle:\n- 'auto': usa tracking temporale se non c'è sensore, altrimenti nativo\n- 'native': usa solo feedback webserver\n- 'time_based': forza sempre tracking temporale\n- 'legacy': comportamento originale master (no tracking)"
+          "timeout": "Timeout connessione (secondi)",
+          "scan_interval": "Intervallo polling (secondi)",
+          "global_channel_id": "ID canale globale (opzionale)",
+          "ignore_platform": "Piattaforme da ignorare",
+          "cover_position_mode": "Modalità posizione cover",
+          "use_vimar_naming": "Usa nomi dispositivi Vimar",
+          "friendly_name_room_name_at_begin": "Anteponi nome stanza ai nomi dispositivi",
+          "devices_lights_re": "Filtro dispositivi luci (regex)",
+          "devices_binary_sensor_re": "Filtro sensori binari (regex)"
         }
       },
       "three": {
-        "title": "Configura VIMAR By-Me Hub (3)",
+        "title": "Opzioni Avanzate",
+        "description": "Opzioni di configurazione avanzate.",
         "data": {
-          "delete_and_reload_all_entities": "Elimina e ricarica tutte le entità (se la nomenclatura è cambiata)"
+          "delete_and_reload_all_entities": "Forza ricaricamento di tutte le entità (prossimo riavvio)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Connessione fallita, riprova",
-      "invalid_auth": "Autenticazione non valida",
-      "invalid_cert": "Certificato non valido, prova a cambiare o rimuovere",
-      "save_cert_failed": "Salvataggio certificato fallito. Controlla il percorso e riprova",
-      "unknown": "Errore imprevisto",
-      "regex_not_valid": "RegEx non valida"
-    }
-  },
-  "selector": {
-    "cover_position_mode": {
-      "options": {
-        "auto": "Automatico (ibrido intelligente)",
-        "native": "Nativo (solo webserver)",
-        "time_based": "Basato su tempo (sempre)",
-        "legacy": "Legacy (come master branch)"
-      }
-    }
-  },
-  "services": {
-    "set_travel_times": {
-      "name": "Configura Tempi Apertura/Chiusura",
-      "description": "Imposta i tempi di apertura e chiusura per una tapparella. I valori vengono salvati permanentemente e utilizzati per il tracking della posizione.",
-      "fields": {
-        "travel_time_up": {
-          "name": "Tempo Apertura (secondi)",
-          "description": "Tempo in secondi necessario per aprire completamente la tapparella"
-        },
-        "travel_time_down": {
-          "name": "Tempo Chiusura (secondi)",
-          "description": "Tempo in secondi necessario per chiudere completamente la tapparella"
-        }
-      }
+      "invalid_auth": "Credenziali non valide",
+      "cannot_connect": "Connessione fallita",
+      "invalid_cert": "Errore SSL",
+      "regex_not_valid": "Espressione regolare non valida",
+      "unknown": "Si è verificato un errore sconosciuto"
     }
   }
 }

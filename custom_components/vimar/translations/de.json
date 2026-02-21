@@ -1,103 +1,87 @@
 {
-  "title": "VIMAR By-Me Hub",
   "config": {
     "step": {
       "user": {
-        "title": "VIMAR By-Me Hub einrichten",
+        "title": "Vimar By-Me Hub Einrichtung",
+        "description": "Konfigurieren Sie Ihre Vimar By-me Webserver-Verbindung.",
         "data": {
-          "title": "Instanz Titel",
-          "host": "Host",
+          "title": "Name für diese Integration",
+          "host": "Host (IP oder Hostname)",
+          "port": "Port",
+          "secure": "HTTPS verwenden",
+          "verify_ssl": "SSL-Zertifikat überprüfen",
           "username": "Benutzername",
           "password": "Passwort",
-          "port": "Port",
-          "certificate": "Zertifikat Dateiname",
-          "secure": "Sicher (Https)",
-          "verify_ssl": "SSL verifizieren"
+          "certificate": "Benutzerdefinierter Zertifikatspfad (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Vimar By-Me Hub neu authentifizieren",
+        "description": "Die Anmeldedaten für {host} sind nicht mehr gültig. Bitte geben Sie Ihre aktualisierten Anmeldedaten ein.",
+        "data": {
+          "username": "Benutzername",
+          "password": "Passwort"
         }
       }
     },
     "error": {
-      "cannot_connect": "Verbindung fehlgeschlagen, bitte erneut versuchen",
-      "invalid_auth": "Ungültige Authentifizierung",
-      "invalid_cert": "Ungültiges Zertifikat, ändern oder entfernen",
-      "save_cert_failed": "Zertifikat speichern fehlgeschlagen. Pfad prüfen und erneut versuchen",
-      "unknown": "Unerwarteter Fehler"
+      "invalid_auth": "Ungültiger Benutzername oder Passwort. Bitte überprüfen Sie Ihre Anmeldedaten.",
+      "cannot_connect": "Verbindung zum Vimar-Webserver nicht möglich. Überprüfen Sie Host, Port und Netzwerkverbindung.",
+      "invalid_cert": "SSL-Zertifikatsvalidierung fehlgeschlagen. Überprüfen Sie die Zertifikatskonfiguration oder deaktivieren Sie die SSL-Überprüfung.",
+      "save_cert_failed": "SSL-Zertifikat konnte nicht gespeichert werden. Überprüfen Sie die Dateiberechtigungen.",
+      "unknown": "Ein unerwarteter Fehler ist aufgetreten. Weitere Details finden Sie in den Protokollen."
     },
     "abort": {
-      "already_configured": "Gerät ist bereits konfiguriert"
+      "already_configured": "Dieser Vimar-Webserver ist bereits konfiguriert.",
+      "reauth_successful": "Neuauthentifizierung erfolgreich! Ihre Integration wurde aktualisiert.",
+      "reauth_failed": "Neuauthentifizierung fehlgeschlagen. Bitte versuchen Sie es erneut oder konfigurieren Sie die Integration neu.",
+      "single_instance_allowed": "Nur eine Vimar-Integrationsinstanz ist zulässig."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "VIMAR By-Me Hub einrichten (Auth)",
+        "title": "Verbindungseinstellungen",
+        "description": "Verbindungsparameter konfigurieren.",
         "data": {
           "host": "Host",
+          "port": "Port",
+          "secure": "HTTPS verwenden",
+          "verify_ssl": "SSL überprüfen",
           "username": "Benutzername",
           "password": "Passwort",
-          "port": "Port",
-          "certificate": "Zertifikat Dateiname",
-          "secure": "Sicher (Https)",
-          "verify_ssl": "SSL verifizieren"
+          "certificate": "Zertifikatspfad"
         }
       },
       "two": {
-        "title": "VIMAR By-Me Hub einrichten (2)",
+        "title": "Integrationseinstellungen",
+        "description": "Polling, Filter und Plattformoptionen konfigurieren.",
         "data": {
-          "timeout": "Anforderungs-Timeout (Sekunden)",
-          "scan_interval": "Scan-Intervall (Sekunden)",
-          "global_channel_id": "MediaPlayer Globale Kanal-ID",
-          "ignore": "Ignorierte Plattformen",
-          "cover_position_mode": "Rolladen-Positionierungsmodus",
-          "use_vimar_naming": "Vimar-Benennung verwenden",
-          "friendly_name_room_name_at_begin": "Raumname am Anfang des Namens setzen",
-          "devices_as_lights_re": "RegEx für Entitäten als Lichter (CH_Main_Automation), andere als Schalter",
-          "devices_as_binary_sensor_re": "RegEx für Entitäten Schalter als Binärsensor"
-        },
-        "data_description": {
-          "cover_position_mode": "Wählen Sie, wie die Rollladenpositionen verwaltet werden:\n- 'auto': verwendet zeitbasierte Verfolgung wenn kein Sensor, sonst nativ\n- 'native': verwendet nur Webserver-Feedback\n- 'time_based': erzwingt immer zeitbasierte Verfolgung\n- 'legacy': ursprüngliches Master-Branch-Verhalten (keine Verfolgung)"
+          "timeout": "Verbindungstimeout (Sekunden)",
+          "scan_interval": "Polling-Intervall (Sekunden)",
+          "global_channel_id": "Globale Kanal-ID (optional)",
+          "ignore_platform": "Zu ignorierende Plattformen",
+          "cover_position_mode": "Rollladenpositionsmodus",
+          "use_vimar_naming": "Vimar-Gerätenamen verwenden",
+          "friendly_name_room_name_at_begin": "Raumname vor Gerätenamen stellen",
+          "devices_lights_re": "Lichtgerätefilter (Regex)",
+          "devices_binary_sensor_re": "Binärsensorfilter (Regex)"
         }
       },
       "three": {
-        "title": "VIMAR By-Me Hub einrichten (3)",
+        "title": "Erweiterte Optionen",
+        "description": "Erweiterte Konfigurationsoptionen.",
         "data": {
-          "delete_and_reload_all_entities": "Alle Entitäten löschen und neu laden (wenn Benennung geändert)"
+          "delete_and_reload_all_entities": "Alle Entitäten neu laden erzwingen (nächster Neustart)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Verbindung fehlgeschlagen, bitte erneut versuchen",
-      "invalid_auth": "Ungültige Authentifizierung",
-      "invalid_cert": "Ungültiges Zertifikat, ändern oder entfernen",
-      "save_cert_failed": "Zertifikat speichern fehlgeschlagen. Pfad prüfen und erneut versuchen",
-      "unknown": "Unerwarteter Fehler",
-      "regex_not_valid": "RegEx ungültig"
-    }
-  },
-  "selector": {
-    "cover_position_mode": {
-      "options": {
-        "auto": "Automatisch (intelligenter Hybrid)",
-        "native": "Nativ (nur Webserver)",
-        "time_based": "Zeitbasiert (immer)",
-        "legacy": "Legacy (wie Master-Branch)"
-      }
-    }
-  },
-  "services": {
-    "set_travel_times": {
-      "name": "Öffnungs-/Schließzeiten konfigurieren",
-      "description": "Legt die Öffnungs- und Schließzeiten für einen Rolladen fest. Die Werte werden permanent gespeichert und für die Positionsverfolgung verwendet.",
-      "fields": {
-        "travel_time_up": {
-          "name": "Öffnungszeit (Sekunden)",
-          "description": "Zeit in Sekunden, die zum vollständigen Öffnen des Rolladens benötigt wird"
-        },
-        "travel_time_down": {
-          "name": "Schließzeit (Sekunden)",
-          "description": "Zeit in Sekunden, die zum vollständigen Schließen des Rolladens benötigt wird"
-        }
-      }
+      "invalid_auth": "Ungültige Anmeldedaten",
+      "cannot_connect": "Verbindung fehlgeschlagen",
+      "invalid_cert": "SSL-Fehler",
+      "regex_not_valid": "Ungültiger regulärer Ausdruck",
+      "unknown": "Unbekannter Fehler aufgetreten"
     }
   }
 }
