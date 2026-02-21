@@ -59,6 +59,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     _device_state_hashes: dict[str, str] = {}
     _changed_device_ids: set[str] = set()
 
+    # --- slim-poll state ---
+    _known_status_ids: list[int] = []
+    _slim_poll_active: bool = False
+    _last_device_count: int = -1
+
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, vimarconfig: ConfigType) -> None:
         """Initialize."""
         self.hass = hass
@@ -96,35 +101,128 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
             async with async_timeout.timeout(self._timeout):
                 forced = not self._first_update_data_executed or not self._platforms_registered
-                devices = await self.hass.async_add_executor_job(self.vimarproject.update, forced)
+
+                if forced or not self._slim_poll_active:
+                    # FULL DISCOVERY: first run, login refresh, or topology change
+                    _LOGGER.debug("Vimar: running full discovery")
+                    devices = await self.hass.async_add_executor_job(self.vimarproject.update, True)
+
+                    if devices and len(devices) > 0:
+                        # Build the status-id index for subsequent slim polls
+                        self._known_status_ids = self._collect_status_ids(devices)
+                        self._last_device_count = len(devices)
+                        self._slim_poll_active = True
+                        _LOGGER.debug(
+                            "Vimar: discovery complete - %d devices, %d status IDs indexed for slim poll",
+                            len(devices),
+                            len(self._known_status_ids),
+                        )
+                else:
+                    # SLIM POLL: single-table query on known primary keys
+                    _LOGGER.debug(
+                        "Vimar: slim poll (%d status IDs)", len(self._known_status_ids)
+                    )
+                    slim_results = await self.hass.async_add_executor_job(
+                        self.vimarconnection.get_status_only, self._known_status_ids
+                    )
+
+                    if slim_results is None:
+                        # Transient error (Unknown-Payload, timeout) - keep previous state
+                        _LOGGER.debug(
+                            "Vimar: slim poll returned None (transient), keeping previous state"
+                        )
+                        self._changed_device_ids = set()
+                        return self.vimarproject.devices
+
+                    # Patch status values into the existing device tree (no meta rewrite)
+                    self._apply_slim_results(self.vimarproject.devices, slim_results)
+                    devices = self.vimarproject.devices
+
+                    # Topology check: if device count drifted, force rediscovery next cycle
+                    current_count = len(devices)
+                    if current_count != self._last_device_count:
+                        _LOGGER.info(
+                            "Vimar: topology change detected (%d → %d devices), scheduling rediscovery",
+                            self._last_device_count,
+                            current_count,
+                        )
+                        self._slim_poll_active = False
+                        self._last_device_count = current_count
 
             if not devices or len(devices) == 0:
                 raise UpdateFailed("Could not find any devices on Vimar Webserver")
+
             if not self._first_update_data_executed:
                 self._first_update_data_executed = True
+
+            # Hash-based change detection: populate _changed_device_ids for entity filtering
+            self._changed_device_ids = self._detect_state_changes(devices)
+
             # if last update failed, check devices changes and reload if need
             if not self.last_update_success or self._last_devices_hash == "":
                 self._reload_entry_if_devices_changed()
+
             return devices
+
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
         except TimeoutError:
             raise
         except aiohttp.ClientError:
             raise
-        # except ApiAuthError as err:
-        #    # Raising ConfigEntryAuthFailed will cancel future updates
-        #    # and start a config flow with SOURCE_REAUTH (async_step_reauth)
-        #    raise ConfigEntryAuthFailed from err
-        # except ApiError as err:
         except BaseException as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
+
+    # ------------------------------------------------------------------
+    # Slim-poll helpers
+    # ------------------------------------------------------------------
+
+    def _collect_status_ids(self, devices: dict) -> list[int]:
+        """Extract all status_id integers from all known devices."""
+        ids: set[int] = set()
+        for device in devices.values():
+            for status in device.get("status", {}).values():
+                sid = status.get("status_id")
+                if sid is not None:
+                    try:
+                        ids.add(int(sid))
+                    except (ValueError, TypeError):
+                        pass
+        return list(ids)
+
+    def _apply_slim_results(self, devices: dict, slim_results: list) -> None:
+        """Patch CURRENT_VALUE from slim poll into existing device tree.
+
+        Builds a reverse index (status_id -> (device_id, status_name)) once,
+        then applies all updates in O(n) without touching metadata.
+        """
+        # Build reverse index on first call or if devices changed
+        index: dict[str, tuple[str, str]] = {}
+        for device_id, device in devices.items():
+            for status_name, status in device.get("status", {}).items():
+                sid = status.get("status_id")
+                if sid is not None:
+                    index[str(sid)] = (device_id, status_name)
+
+        for row in slim_results:
+            sid = str(row.get("status_id", ""))
+            val = row.get("status_value")
+            if sid in index:
+                dev_id, sname = index[sid]
+                devices[dev_id]["status"][sname]["status_value"] = val
+
+    # ------------------------------------------------------------------
+    # Existing methods (unchanged)
+    # ------------------------------------------------------------------
 
     async def init_vimarproject(self) -> None:
         """Init VimarLink and VimarProject from entry config."""
         self._last_devices_hash = ""
         self._first_update_data_executed = False
         self._platforms_registered = False
+        self._slim_poll_active = False
+        self._known_status_ids = []
+        self._last_device_count = -1
         self.devices_for_platform = {}
         vimarconfig = self.vimarconfig
         schema = "https" if vimarconfig.get(CONF_SECURE) else "http"
@@ -137,8 +235,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             certificate = vimarconfig.get(CONF_CERTIFICATE, DEFAULT_CERTIFICATE)
         timeout = vimarconfig.get(CONF_TIMEOUT)
         global_channel_id = vimarconfig.get(CONF_GLOBAL_CHANNEL_ID)
-        # ignored_platforms = vimarconfig.get(CONF_IGNORE_PLATFORM)
-        # spunto per override: https://github.com/teharris1/insteon2/blob/master/__init__.py
         device_overrides = vimarconfig.get(CONF_OVERRIDE, [])
 
         # initialize a new VimarLink object
@@ -162,26 +258,14 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         """Validate Vimar credential config."""
         if self.vimarconnection is None:
             await self.init_vimarproject()
-        # Verify that passed in configuration works
-        # starting it outside MainThread
-        # host = self.vimarconfig.get(CONF_HOST)
         try:
             if self.vimarconnection is None:
                 raise PlatformNotReady
             valid_login = await self.hass.async_add_executor_job(self.vimarconnection.check_login)
             if not valid_login:
                 raise PlatformNotReady
-            # res = await self.hass.async_add_executor_job(self.vimarconnection.check_session)
-            # res1 = res
-        # except VimarApiError as err:
-        #    _LOGGER.error("Webserver %s: %s", host, str(err))
-        #    valid_login = False
         except BaseException as err:
-            # _LOGGER.error("Login Exception: %s", str(err))
             raise err
-        # self._valid_login = valid_login
-        # if not valid_login:
-        #    raise PlatformNotReady
 
     async def async_register_devices_platforms(self):
         """Execute async_forward_entry_setup for each platform."""
@@ -222,7 +306,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
     def reload_entry(self):
         """Reload_entry function if platforms_registered (updating entry)."""
-        # updating entry, force to reload it :) because added event in entry.add_update_listener(async_reload_entry)
         options = self.entry.options.copy()
         if options.get("fake_update_value", "") == "1":
             options.pop("fake_update_value")
