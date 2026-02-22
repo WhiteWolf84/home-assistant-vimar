@@ -31,7 +31,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     _logger = _LOGGER
     _logger_is_debug = False
     _device: VimarDevice | None = None
-    _device_id = 0
+    _device_id: str = "0"
     _vimarconnection: VimarLink | None = None
     _vimarproject: VimarProject | None = None
     _coordinator: VimarDataUpdateCoordinator | None = None
@@ -43,7 +43,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """Initialize the base entity."""
         super().__init__(coordinator)
         self._coordinator = coordinator
-        self._device_id = device_id
+        self._device_id = str(device_id)
         self._vimarconnection = coordinator.vimarconnection
         self._vimarproject = coordinator.vimarproject
         self._reset_status()
@@ -54,6 +54,15 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             self._logger_is_debug = self._logger.isEnabledFor(logging.DEBUG)
         else:
             self._logger.warning("Cannot find device #%s", self._device_id)
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if self._device_id in self.coordinator._changed_device_ids:
+            super()._handle_coordinator_update()
+        elif self.coordinator._logger.isEnabledFor(logging.DEBUG):
+            self.coordinator._logger.debug(
+                "Skipping update for %s (no changes detected)", self.name
+            )
 
     @property
     def available(self) -> bool:
