@@ -59,8 +59,8 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """Handle updated data from the coordinator."""
         if self._device_id in self.coordinator._changed_device_ids:
             super()._handle_coordinator_update()
-        elif self.coordinator._logger.isEnabledFor(logging.DEBUG):
-            self.coordinator._logger.debug(
+        elif self.coordinator.logger.isEnabledFor(logging.DEBUG):
+            self.coordinator.logger.debug(
                 "Skipping update for %s (no changes detected)", self.name
             )
 
