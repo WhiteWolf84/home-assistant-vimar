@@ -40,7 +40,11 @@ from .exceptions import VimarApiError, VimarConnectionError
 from .sql_parser import parse_sql_payload
 
 _LOGGER = logging.getLogger(__name__)
-_LOGGER_isDebug = _LOGGER.isEnabledFor(logging.DEBUG)
+# FIX #11: removed module-level _LOGGER_isDebug constant.
+# A module-level bool is evaluated once at import time, before HA configures
+# log levels. If debug logging is enabled after import, the cached False value
+# would cause all debug branches to be silently skipped for the entire session.
+# All callers now use _LOGGER.isEnabledFor(logging.DEBUG) evaluated at runtime.
 MAX_ROWS_PER_REQUEST = 300
 
 # Device class constants
@@ -477,7 +481,8 @@ class VimarProject:
         for device_id, device in self._devices.items():
             self.parse_device_type(device)
 
-        if _LOGGER_isDebug:
+        # FIX #11: use isEnabledFor() at runtime instead of module-level cached bool
+        if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("check_devices end. Devices: %s", str(self._devices))
         return True
 

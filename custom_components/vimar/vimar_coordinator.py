@@ -74,8 +74,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
         # FIX #2: initialize mutable attributes as instance-level to avoid sharing
         # across multiple coordinator instances (e.g. two Vimar config entries).
-        # Class-level mutable dicts/sets/lists are shared between ALL instances;
-        # any mutation (dict[key]=val) would affect every coordinator.
         self._device_state_hashes: dict[str, str] = {}
         self._changed_device_ids: set[str] = set()
         self._known_status_ids: list[int] = []
@@ -91,18 +89,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         )
 
     async def _async_update_data(self):
-        """Fetch data from API endpoint.
-
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-        """
+        """Fetch data from API endpoint."""
         _LOGGER.debug("Updating coordinator..")
 
         try:
             if self.vimarproject is None:
                 raise PlatformNotReady
 
-            # if not logged, execute login with another timeout
             if self.vimarconnection is None or not self.vimarconnection.is_logged():
                 async with async_timeout.timeout(self._timeout):
                     await self.validate_vimar_credentials()
@@ -111,12 +104,10 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 forced = not self._first_update_data_executed or not self._platforms_registered
 
                 if forced or not self._slim_poll_active:
-                    # FULL DISCOVERY: first run, login refresh, or topology change
                     _LOGGER.debug("Vimar: running full discovery")
                     devices = await self.hass.async_add_executor_job(self.vimarproject.update, True)
 
                     if devices and len(devices) > 0:
-                        # Build the status-id index for subsequent slim polls
                         self._known_status_ids = self._collect_status_ids(devices)
                         self._last_device_count = len(devices)
                         self._slim_poll_active = True
@@ -126,7 +117,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                             len(self._known_status_ids),
                         )
                 else:
-                    # SLIM POLL: single-table query on known primary keys
                     _LOGGER.debug(
                         "Vimar: slim poll (%d status IDs)", len(self._known_status_ids)
                     )
@@ -135,18 +125,15 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                     )
 
                     if slim_results is None:
-                        # Transient error (Unknown-Payload, timeout) - keep previous state
                         _LOGGER.debug(
                             "Vimar: slim poll returned None (transient), keeping previous state"
                         )
                         self._changed_device_ids = set()
                         return self.vimarproject.devices
 
-                    # Patch status values into the existing device tree (no meta rewrite)
                     self._apply_slim_results(self.vimarproject.devices, slim_results)
                     devices = self.vimarproject.devices
 
-                    # Topology check: if device count drifted, force rediscovery next cycle
                     current_count = len(devices)
                     if current_count != self._last_device_count:
                         _LOGGER.info(
@@ -163,20 +150,16 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if not self._first_update_data_executed:
                 self._first_update_data_executed = True
 
-            # Hash-based change detection: populate _changed_device_ids for entity filtering
             self._changed_device_ids = self._detect_state_changes(devices)
 
-            # if last update failed, check devices changes and reload if need
             if not self.last_update_success or self._last_devices_hash == "":
                 self._reload_entry_if_devices_changed()
 
-            # Reset auth failure counter on success
             self._consecutive_auth_failures = 0
 
             return devices
 
         except ConfigEntryAuthFailed:
-            # Authentication error - trigger reauth flow
             self._handle_auth_failure()
             raise
         except TimeoutError:
@@ -186,7 +169,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Client error communicating with Vimar: %s", err)
             raise UpdateFailed(f"Client error: {err}")
         except Exception as err:
-            # Check if error is authentication related
             if self._is_auth_error(err):
                 self._handle_auth_failure()
                 raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
@@ -206,10 +188,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         return any(indicator in error_str for indicator in auth_indicators)
 
     def _handle_auth_failure(self) -> None:
-        """Handle authentication failure by triggering reauth flow.
-
-        Only triggers once to avoid spamming the user with reauth prompts.
-        """
+        """Handle authentication failure by triggering reauth flow."""
         self._consecutive_auth_failures += 1
 
         if not self._reauth_triggered and self._consecutive_auth_failures >= 2:
@@ -240,12 +219,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         return list(ids)
 
     def _apply_slim_results(self, devices: dict, slim_results: list) -> None:
-        """Patch CURRENT_VALUE from slim poll into existing device tree.
-
-        Builds a reverse index (status_id -> (device_id, status_name)) once,
-        then applies all updates in O(n) without touching metadata.
-        """
-        # Build reverse index on first call or if devices changed
+        """Patch CURRENT_VALUE from slim poll into existing device tree."""
         index: dict[str, tuple[str, str]] = {}
         for device_id, device in devices.items():
             for status_name, status in device.get("status", {}).items():
@@ -261,7 +235,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 devices[dev_id]["status"][sname]["status_value"] = val
 
     # ------------------------------------------------------------------
-    # Existing methods (unchanged)
+    # Existing methods
     # ------------------------------------------------------------------
 
     async def init_vimarproject(self) -> None:
@@ -274,8 +248,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._last_device_count = -1
         self._consecutive_auth_failures = 0
         self._reauth_triggered = False
-        # FIX #2b: reset hash-map on reload/re-init to prevent stale cache
-        # from a previous session causing missed state changes after restart.
         self._device_state_hashes = {}
         self.devices_for_platform = {}
         vimarconfig = self.vimarconfig
@@ -291,15 +263,12 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         global_channel_id = vimarconfig.get(CONF_GLOBAL_CHANNEL_ID)
         device_overrides = vimarconfig.get(CONF_OVERRIDE) or []
 
-        # initialize a new VimarLink object
         vimarconnection = VimarLink(schema, host, port, username, password, certificate, timeout)
-
         device_customizer = VimarDeviceCustomizer(vimarconfig, device_overrides)
 
         def device_customizer_fn(device):
             device_customizer.customize_device(device)
 
-        # will hold all the devices and their states
         vimarproject = VimarProject(vimarconnection, device_customizer_fn)
 
         if global_channel_id is not None:
@@ -309,12 +278,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self.vimarproject = vimarproject
 
     async def validate_vimar_credentials(self) -> None:
-        """Validate Vimar credential config.
-
-        Raises:
-            ConfigEntryAuthFailed: If authentication fails
-            PlatformNotReady: If connection cannot be established
-        """
+        """Validate Vimar credential config."""
         if self.vimarconnection is None:
             await self.init_vimarproject()
         try:
@@ -334,7 +298,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         """Execute async_forward_entry_setup for each platform."""
         self.devices_for_platform = {}
         ignored_platforms = self.vimarconfig.get(CONF_IGNORE_PLATFORM) or []
-        # DEVICE_TYPE_BINARY_SENSOR needed for webserver status sensor
         platforms = [
             i for i in PLATFORMS if i not in ignored_platforms or i == DEVICE_TYPE_BINARY_SENSOR
         ]
@@ -348,9 +311,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         if self.vimarproject:
             devices = self.vimarproject.devices
             if devices is not None and len(devices) > 0:
-                devices_hash = ""
+                # FIX #13: O(n) join instead of O(n^2) string concatenation in loop.
+                # The old `devices_hash = devices_hash + "_" + device_hash` creates a
+                # new string object on every iteration; with hundreds of devices this
+                # becomes expensive. Collecting into a list and joining once is O(n).
+                hash_parts: list[str] = []
                 for device_id, device in devices.items():
-                    device_hash = (
+                    hash_parts.append(
                         str(device["object_id"])
                         + "_"
                         + str(device["room_ids"])
@@ -358,7 +325,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         + device["object_name"]
                         + device["room_name"]
                     )
-                    devices_hash = devices_hash + "_" + device_hash
+                devices_hash = "_".join(hash_parts)
                 if devices_hash != self._last_devices_hash:
                     if self._last_devices_hash == "":
                         self._last_devices_hash = devices_hash
@@ -377,18 +344,30 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self.hass.config_entries.async_update_entry(self.entry, options=options)
 
     async def async_remove_old_devices(self):
-        """Clear unused devices and entities."""
-        configured_devices = []
-        configured_entities = []
-        entities_to_be_removed = []
-        devices_to_be_removed = []
+        """Clear unused devices and entities.
+
+        FIX #12: configured_devices was built as a list of str(identifiers),
+        but device_registry entries expose identifiers as a frozenset of tuples.
+        The string comparison `str(frozenset) in list_of_str` would almost never
+        match because Python's frozenset str representation is non-deterministic
+        in ordering. Fix: store identifiers as the native frozenset and compare
+        with the frozenset from the registry directly.
+        """
+        configured_device_ids: set[frozenset] = set()
+        configured_entities: list[str] = []
+        entities_to_be_removed: list[str] = []
+        devices_to_be_removed: list[str] = []
+
         for devices in self.devices_for_platform.values():
             for device in devices:
-                if hasattr(device, "device_info"):
-                    identifier = str((device.device_info or {}).get("identifiers", ""))
-                    configured_devices.append(identifier)
+                if hasattr(device, "device_info") and device.device_info:
+                    raw_identifiers = (device.device_info or {}).get("identifiers")
+                    if raw_identifiers:
+                        # identifiers is a set of tuples; freeze for hashable comparison
+                        configured_device_ids.add(frozenset(raw_identifiers))
                 unique_id = device.unique_id
-                configured_entities.append(unique_id)
+                if unique_id:
+                    configured_entities.append(unique_id)
 
         entity_registry = er.async_get(self.hass)
         entity_entries = er.async_entries_for_config_entry(entity_registry, self.entry.entry_id)
@@ -401,18 +380,19 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             ):
                 entities_to_be_removed.append(entity_entry.entity_id)
 
-        for enity_id in entities_to_be_removed:
-            entity_registry.async_remove(enity_id)
+        for entity_id in entities_to_be_removed:
+            entity_registry.async_remove(entity_id)
 
         device_registry = dr.async_get(self.hass)
-        device_registry_entities = dr.async_entries_for_config_entry(
+        device_registry_entries = dr.async_entries_for_config_entry(
             device_registry, self.entry.entry_id
         )
-        for device_entry in device_registry_entities:
-            identifier = str(device_entry.identifiers)
+        for device_entry in device_registry_entries:
+            # FIX #12: compare frozenset against frozenset, not str against str.
+            # device_entry.identifiers is a set of tuples; frozenset it for lookup.
+            device_identifiers_frozen = frozenset(device_entry.identifiers)
             if (
-                identifier
-                and identifier not in configured_devices
+                device_identifiers_frozen not in configured_device_ids
                 and device_entry.id not in devices_to_be_removed
             ):
                 devices_to_be_removed.append(device_entry.id)
@@ -421,11 +401,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             device_registry.async_remove_device(device_id)
 
     def _hash_device_state(self, device: dict) -> str:
-        """Generate hash of device state for change detection.
-
-        Only includes dynamic state values, not static properties.
-        object_id is included to prevent hash collisions.
-        """
+        """Generate hash of device state for change detection."""
         state_data = {
             "object_id": device["object_id"],
             "status": device.get("status", {}),
@@ -434,11 +410,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         return hashlib.md5(state_json.encode()).hexdigest()
 
     def _detect_state_changes(self, devices: dict[str, dict]) -> set[str]:
-        """Detect which devices have changed states.
-
-        Returns:
-            Set of object_ids that changed
-        """
+        """Detect which devices have changed states."""
         changed_ids = set()
 
         for device_id, device in devices.items():
@@ -446,20 +418,17 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             old_hash = self._device_state_hashes.get(device_id)
 
             if old_hash is None:
-                # New device
                 changed_ids.add(device_id)
                 log.debug("New device detected: %s", device_id)
             elif new_hash != old_hash:
-                # State changed
                 changed_ids.add(device_id)
-                if log.isEnabledFor(10):  # DEBUG level
+                if log.isEnabledFor(10):
                     log.debug(
                         "Device %s (%s) state changed",
                         device_id,
                         device.get("device_friendly_name", "unknown"),
                     )
 
-            # Update hash
             self._device_state_hashes[device_id] = new_hash
 
         return changed_ids

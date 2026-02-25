@@ -45,7 +45,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         self._device_id = str(device_id)
         self._vimarconnection = coordinator.vimarconnection
         self._vimarproject = coordinator.vimarproject
-        # FIX #1: _attributes must be instance-level, not class-level.
+        # _attributes must be instance-level, not class-level.
         # A class-level mutable dict is shared across ALL instances, causing
         # every entity to overwrite the others' extra_state_attributes.
         self._attributes: dict = {}
@@ -111,27 +111,59 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
 
     @property
     def extra_state_attributes(self):
-        """Return device specific state attributes."""
-        if self._device is None:
-            return self._attributes
+        """Return device specific state attributes.
 
-        # mostro gli attributi importati da vimar
+        FIX #8: build and return a fresh dict each time instead of mutating
+        self._attributes in place. The old approach accumulated keys across
+        calls: if a field was removed from the device, its stale value
+        remained visible in Lovelace indefinitely.
+        """
+        if self._device is None:
+            return {}
+
+        attrs: dict = {}
         for key in self._device:
             value = self._device[key]
-            if self._logger_is_debug is False and (
-                key == "status"
-                or key == "device_class"
-                or key == "device_friendly_name"
-                or key == "vimar_icon"
+            if self._logger_is_debug is False and key in (
+                "status",
+                "device_class",
+                "device_friendly_name",
+                "vimar_icon",
             ):
                 continue
-            self._attributes["vimar_" + key] = value
-        return self._attributes
+            attrs["vimar_" + key] = value
+        return attrs
 
     def request_statemachine_update(self):
         """Update the hass status."""
-        # with polling, we need to schedule another poll request
         self.async_schedule_update_ha_state()
+
+    def _apply_state_change(self, state: str, value) -> bool:
+        """Apply a single state change to the device and schedule a bus write.
+
+        FIX #9: extracted from change_state() to remove duplicate logic between
+        the *args and **kwargs code paths. Returns True if the state was found
+        and the write was scheduled.
+        """
+        if state not in self._device["status"]:
+            self._logger.warning(
+                "Could not find state %s in device %s - %s - could not change value to: %s",
+                state,
+                self.name,
+                self._device_id,
+                value,
+            )
+            return False
+
+        optionals = self._vimarconnection.get_optionals_param(state)
+        self.hass.async_add_executor_job(
+            self._vimarconnection.set_device_status,
+            self._device["status"][state]["status_id"],
+            str(value),
+            optionals,
+        )
+        self._device["status"][state]["status_value"] = str(value)
+        return True
 
     def change_state(self, *args, **kwargs):
         """Change state on bus system and the local device state."""
@@ -143,52 +175,20 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             return
 
         state_changed = False
+
         if self._device["status"]:
-            if args and len(args) > 0:
+            if args:
                 iter_args = iter(args)
                 for state, value in zip(iter_args, iter_args, strict=False):
-                    if state in self._device["status"]:
+                    if self._apply_state_change(state, value):
                         state_changed = True
-                        optionals = self._vimarconnection.get_optionals_param(state)
-                        self.hass.async_add_executor_job(
-                            self._vimarconnection.set_device_status,
-                            self._device["status"][state]["status_id"],
-                            str(value),
-                            optionals,
-                        )
-                        self._device["status"][state]["status_value"] = str(value)
-                    else:
-                        self._logger.warning(
-                            "Could not find state %s in device %s - %s - could not change value to: %s",
-                            state,
-                            self.name,
-                            self._device_id,
-                            value,
-                        )
 
-            if kwargs and len(kwargs) > 0:
-                for state, value in kwargs.items():
-                    if state in self._device["status"]:
-                        state_changed = True
-                        optionals = self._vimarconnection.get_optionals_param(state)
-                        self.hass.async_add_executor_job(
-                            self._vimarconnection.set_device_status,
-                            self._device["status"][state]["status_id"],
-                            str(value),
-                            optionals,
-                        )
-                        self._device["status"][state]["status_value"] = str(value)
-                    else:
-                        self._logger.warning(
-                            "Could not find state %s in device %s - %s - could not change value to: %s",
-                            state,
-                            self.name,
-                            self._device_id,
-                            value,
-                        )
+            for state, value in kwargs.items():
+                if self._apply_state_change(state, value):
+                    state_changed = True
 
-            if state_changed:
-                self.request_statemachine_update()
+        if state_changed:
+            self.request_statemachine_update()
 
     def get_state(self, state):
         """Get state of the local device state."""
@@ -337,9 +337,15 @@ class VimarStatusSensor(BinarySensorEntity):
         )
 
     def update(self):
-        """Fetch new state data for the sensor."""
-        logged = self._coordinator.vimarconnection.is_logged()
-        self._attr_is_on = logged
+        """Fetch new state data for the sensor.
+
+        FIX #10: this method is called by HA on the executor thread
+        (because _attr_should_poll = True and update() is synchronous),
+        so the blocking is_logged() network call is safe here.
+        The previous implementation was correct but lacked this comment,
+        which caused confusion during reviews. No functional change.
+        """
+        self._attr_is_on = self._coordinator.vimarconnection.is_logged()
 
 
 def vimar_setup_entry(
