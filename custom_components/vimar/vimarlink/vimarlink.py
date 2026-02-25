@@ -68,7 +68,7 @@ class VimarLink:
     ):
         """Initialize Vimar link with connection parameters."""
         _LOGGER.info("Vimar link initialized")
-        
+
         self._connection = VimarConnection(
             schema=schema or "https",
             host=host or "",
@@ -78,7 +78,7 @@ class VimarLink:
             certificate=certificate,
             timeout=timeout or 6,
         )
-        
+
         self._room_ids = None
         self._rooms = None
 
@@ -164,7 +164,7 @@ class VimarLink:
         status_list = {}
         select = get_device_status_query(object_id)
         payload = self._request_vimar_sql(select)
-        
+
         if payload is not None:
             for device in payload:
                 if device["status_name"] != "":
@@ -176,7 +176,7 @@ class VimarLink:
 
     def get_status_only(self, status_ids: list[int]) -> list[dict] | None:
         """Slim poll: fetch only CURRENT_VALUE for known status IDs.
-        
+
         PATCH #1: Optimized polling method that avoids expensive JOINs.
         """
         if not status_ids:
@@ -193,7 +193,14 @@ class VimarLink:
         objectlist: dict[str, VimarDevice] | None = None,
         start: int = 0,
     ):
-        """Page results from a method automatically."""
+        """Page results from a method automatically.
+
+        FIX #7: converted from recursive to iterative implementation.
+        The recursive version would call itself once per batch of MAX_ROWS_PER_REQUEST
+        rows; on large installations (many devices/statuses) this could exhaust
+        Python's default recursion limit (1000 frames) and raise RecursionError.
+        The while-loop below is functionally identical but has O(1) stack depth.
+        """
         if objectlist is None:
             objectlist = {}
         limit = MAX_ROWS_PER_REQUEST
@@ -201,16 +208,22 @@ class VimarLink:
         if not callable(method):
             raise VimarApiError(f"Invalid method for paged results: {method}")
 
-        result = method(objectlist, start, limit)
-        if result is None:
-            raise VimarApiError(f"Invalid method results: {method}")
+        total_count = 0
+        while True:
+            result = method(objectlist, start, limit)
+            if result is None:
+                raise VimarApiError(f"Invalid method results: {method}")
 
-        objectlist, state_count = result
-        if state_count == limit:
-            objectlist, state_count = self.get_paged_results(
-                method, objectlist, start + state_count
-            )
-        return objectlist, start + state_count
+            objectlist, state_count = result
+            total_count += state_count
+
+            # If we got fewer rows than the page size, we've reached the last page
+            if state_count < limit:
+                break
+
+            start += state_count
+
+        return objectlist, total_count
 
     def get_room_devices(
         self,
@@ -259,26 +272,26 @@ class VimarLink:
         return start, limit
 
     def _generate_device_list(
-        self, 
-        select: str, 
-        devices: dict[str, VimarDevice] | None = None, 
+        self,
+        select: str,
+        devices: dict[str, VimarDevice] | None = None,
         only_update: bool = False
     ):
         """Generate device list from SQL query."""
         if devices is None:
             devices = {}
-            
+
         payload = self._request_vimar_sql(select)
         if payload is None:
             return None
 
         for device in payload:
             object_id = device["object_id"]
-            
+
             if object_id not in devices:
                 if only_update:
                     continue
-                    
+
                 deviceItem: VimarDevice = {
                     "room_ids": [],
                     "room_names": [],
@@ -314,7 +327,7 @@ class VimarLink:
                         room = self._rooms[roomId]
                         room_ids.append(roomId)
                         room_names.append(room["name"])
-                        
+
                 deviceItem["room_ids"] = room_ids
                 deviceItem["room_names"] = room_names
                 deviceItem["room_name"] = room_names[0] if room_names else ""
@@ -329,14 +342,14 @@ class VimarLink:
         _LOGGER.debug("get_main_groups start")
         select = get_room_ids_query()
         payload = self._request_vimar_sql(select)
-        
+
         if payload is None:
             return None
 
         _LOGGER.debug("get_room_ids ends - payload: %s", str(payload))
         roomIds = []
         rooms = {}
-        
+
         for group in payload:
             room_id = str(group["id"])
             roomIds.append(room_id)
@@ -344,7 +357,7 @@ class VimarLink:
                 "id": room_id,
                 "name": str(group["name"]),
             }
-            
+
         self._rooms = rooms
         self._room_ids = ",".join(roomIds)
         _LOGGER.info("get_room_ids ends - found %d rooms", len(roomIds))
@@ -353,7 +366,7 @@ class VimarLink:
 
     def _request_vimar_sql(self, select: str):
         """Build and execute SQL request.
-        
+
         PATCH #2: Changed error handling from ERROR+relogin to WARNING+return None.
         """
         select = (
@@ -382,7 +395,7 @@ class VimarLink:
             _LOGGER.warning("Unparseable response from SQL")
             _LOGGER.info("Erroneous SQL: %s", select)
             return None
-            
+
         if response is False:
             return None
 
@@ -414,7 +427,7 @@ class VimarLink:
         """Prepare call to Vimar webserver."""
         url = f"{self._connection._schema}://{self._connection._host}:{self._connection._port}/{path}"
         response = self._connection._request(url, post, headers)
-        
+
         if response is None or response is False:
             return response
 
@@ -441,7 +454,7 @@ class VimarProject:
         """Get all devices from Vimar webserver, update states only."""
         if self._devices is None:
             self._devices = {}
-            
+
         devices_count = len(self._devices)
 
         self._devices, state_count = self._link.get_paged_results(
@@ -460,10 +473,10 @@ class VimarProject:
         """Parse device types and names to determine correct platform."""
         if not self._devices:
             return False
-            
+
         for device_id, device in self._devices.items():
             self.parse_device_type(device)
-            
+
         if _LOGGER_isDebug:
             _LOGGER.debug("check_devices end. Devices: %s", str(self._devices))
         return True
@@ -632,7 +645,7 @@ class VimarProject:
     def format_name(self, name):
         """Format device name to remove unused terms."""
         parts = name.split(" ")
-        
+
         if len(parts) >= 4:
             device_type, entity_number, room_name, *level_parts = parts
             level_name = " ".join(level_parts)
@@ -658,7 +671,7 @@ class VimarProject:
             "STECKDOSE": "",
             "THERMOSTAT": "",
         }
-        
+
         for old, new in replacements.items():
             if old == "LUCE" and device_type == "LICHT":
                 continue

@@ -39,9 +39,13 @@ LIMIT {start}, {limit};"""
 
 
 def get_remote_devices_query(start: int, limit: int) -> str:
-    """Generate SQL query to fetch remotely triggerable devices."""
+    """Generate SQL query to fetch remotely triggerable devices.
+
+    FIX #4: removed duplicate columns object_name and object_type that appeared
+    twice in the SELECT due to a copy-paste residue. The parser would silently
+    overwrite the first value with the second; now each column appears once.
+    """
     return f"""SELECT '' AS room_ids, o2.id AS object_id, o2.name AS object_name, o2.VALUES_TYPE AS object_type,
-o2.NAME AS object_name, o2.VALUES_TYPE AS object_type,
 o3.ID AS status_id, o3.NAME AS status_name, o3.OPTIONALP as status_range, o3.CURRENT_VALUE AS status_value
 FROM DPADD_OBJECT AS o2
 INNER JOIN (SELECT CLASSNAME,IS_EVENT,IS_EXECUTABLE FROM DPAD_WEB_PHPCLASS) AS D_WP ON o2.PHPCLASS=D_WP.CLASSNAME
@@ -62,7 +66,7 @@ ORDER BY o3.ID;"""
 
 def get_status_only_query(status_ids: list[int]) -> str:
     """Generate lightweight SQL query to fetch only current values.
-    
+
     This is optimized for polling - only fetches CURRENT_VALUE without JOINs.
     """
     if not status_ids:
