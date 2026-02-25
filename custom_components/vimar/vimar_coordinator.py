@@ -56,13 +56,10 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     _first_update_data_executed = False
     _platforms_registered = False
     _last_devices_hash = ""
-    _device_state_hashes: dict[str, str] = {}
-    _changed_device_ids: set[str] = set()
     _consecutive_auth_failures = 0
     _reauth_triggered = False
 
-    # --- slim-poll state ---
-    _known_status_ids: list[int] = []
+    # --- slim-poll state (class-level defaults, overridden as instance attrs in __init__) ---
     _slim_poll_active: bool = False
     _last_device_count: int = -1
 
@@ -74,6 +71,15 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self.devices_for_platform = {}
         if entry:
             self.entity_unique_id_prefix = entry.unique_id or ""
+
+        # FIX #2: initialize mutable attributes as instance-level to avoid sharing
+        # across multiple coordinator instances (e.g. two Vimar config entries).
+        # Class-level mutable dicts/sets/lists are shared between ALL instances;
+        # any mutation (dict[key]=val) would affect every coordinator.
+        self._device_state_hashes: dict[str, str] = {}
+        self._changed_device_ids: set[str] = set()
+        self._known_status_ids: list[int] = []
+
         timeout = vimarconfig.get(CONF_TIMEOUT) or DEFAULT_TIMEOUT
         if timeout > 0:
             self._timeout = float(timeout)
@@ -144,7 +150,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                     current_count = len(devices)
                     if current_count != self._last_device_count:
                         _LOGGER.info(
-                            "Vimar: topology change detected (%d → %d devices), scheduling rediscovery",
+                            "Vimar: topology change detected (%d \u2192 %d devices), scheduling rediscovery",
                             self._last_device_count,
                             current_count,
                         )
@@ -179,14 +185,14 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         except aiohttp.ClientError as err:
             _LOGGER.warning("Client error communicating with Vimar: %s", err)
             raise UpdateFailed(f"Client error: {err}")
-        except BaseException as err:
+        except Exception as err:
             # Check if error is authentication related
             if self._is_auth_error(err):
                 self._handle_auth_failure()
                 raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
             raise UpdateFailed(f"Error communicating with API: {err}")
 
-    def _is_auth_error(self, error: BaseException) -> bool:
+    def _is_auth_error(self, error: Exception) -> bool:
         """Check if error is authentication related."""
         error_str = str(error).lower()
         auth_indicators = [
@@ -201,18 +207,18 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
     def _handle_auth_failure(self) -> None:
         """Handle authentication failure by triggering reauth flow.
-        
+
         Only triggers once to avoid spamming the user with reauth prompts.
         """
         self._consecutive_auth_failures += 1
-        
+
         if not self._reauth_triggered and self._consecutive_auth_failures >= 2:
             _LOGGER.warning(
                 "Authentication failed %d times, triggering re-authentication flow",
                 self._consecutive_auth_failures
             )
             self._reauth_triggered = True
-            
+
             if self.entry:
                 self.entry.async_start_reauth(self.hass)
 
@@ -268,6 +274,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._last_device_count = -1
         self._consecutive_auth_failures = 0
         self._reauth_triggered = False
+        # FIX #2b: reset hash-map on reload/re-init to prevent stale cache
+        # from a previous session causing missed state changes after restart.
+        self._device_state_hashes = {}
         self.devices_for_platform = {}
         vimarconfig = self.vimarconfig
         schema = "https" if vimarconfig.get(CONF_SECURE) else "http"
@@ -280,7 +289,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             certificate = vimarconfig.get(CONF_CERTIFICATE, DEFAULT_CERTIFICATE)
         timeout = vimarconfig.get(CONF_TIMEOUT)
         global_channel_id = vimarconfig.get(CONF_GLOBAL_CHANNEL_ID)
-        device_overrides = vimarconfig.get(CONF_OVERRIDE, [])
+        device_overrides = vimarconfig.get(CONF_OVERRIDE) or []
 
         # initialize a new VimarLink object
         vimarconnection = VimarLink(schema, host, port, username, password, certificate, timeout)
@@ -301,7 +310,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def validate_vimar_credentials(self) -> None:
         """Validate Vimar credential config.
-        
+
         Raises:
             ConfigEntryAuthFailed: If authentication fails
             PlatformNotReady: If connection cannot be established
@@ -316,7 +325,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed("Invalid credentials")
         except ConfigEntryAuthFailed:
             raise
-        except BaseException as err:
+        except Exception as err:
             if self._is_auth_error(err):
                 raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
             raise err

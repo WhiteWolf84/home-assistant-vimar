@@ -65,25 +65,25 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     @property
     def assumed_state(self) -> bool:
         """Return True if state is assumed (estimated), False if known (certain).
-        
+
         True = State is ASSUMED/ESTIMATED (cannot access real position)
         False = State is KNOWN/CERTAIN (have accurate position info)
-        
+
         LEGACY mode: Always True (like original master branch)
         NATIVE mode: True if no sensor, False if has sensor
         TIME_BASED mode: False (calculated position is "known")
         AUTO mode: False (either native sensor or time-based calculation)
         """
         mode = self._get_position_mode()
-        
+
         if mode == COVER_POSITION_MODE_LEGACY:
             # LEGACY: Always True (original master behavior)
             return True
-        
+
         if mode == COVER_POSITION_MODE_NATIVE:
             # NATIVE: True if no sensor (assumed), False if has sensor (known)
             return not self.has_state("position")
-        
+
         # TIME_BASED or AUTO modes:
         # - Time-based tracking provides calculated position -> False (known)
         # - Native sensor provides hardware position -> False (known)
@@ -153,16 +153,17 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             )
 
         _LOGGER.info(
-            f"{self.name}: Travel times updated - up: {travel_time_up}s, down: {travel_time_down}s"
+            "%s: Travel times updated - up: %ds, down: %ds",
+            self.name, travel_time_up, travel_time_down
         )
 
     async def async_added_to_hass(self):
         """Restore state when added to hass."""
         await super().async_added_to_hass()
 
-        _LOGGER.debug(f"{self.name}: === async_added_to_hass START ===")
-        _LOGGER.debug(f"{self.name}: Position mode: {self._get_position_mode()}")
-        _LOGGER.debug(f"{self.name}: Use time-based tracking: {self._use_time_based_tracking()}")
+        _LOGGER.debug("%s: === async_added_to_hass START ===", self.name)
+        _LOGGER.debug("%s: Position mode: %s", self.name, self._get_position_mode())
+        _LOGGER.debug("%s: Use time-based tracking: %s", self.name, self._use_time_based_tracking())
 
         # Carica travel times dalle entity options
         if hasattr(self, "registry_entry") and self.registry_entry:
@@ -181,37 +182,37 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 or self._travel_time_down != DEFAULT_TRAVEL_TIME_DOWN
             ):
                 _LOGGER.info(
-                    f"{self.name}: Custom travel times loaded - up: {self._travel_time_up}s, "
-                    f"down: {self._travel_time_down}s"
+                    "%s: Custom travel times loaded - up: %ds, down: %ds",
+                    self.name, self._travel_time_up, self._travel_time_down
                 )
 
         # Ripristina posizione solo se usiamo time-based tracking
         if self._use_time_based_tracking():
             old_state = await self.async_get_last_state()
 
-            _LOGGER.debug(f"{self.name}: old_state exists = {old_state is not None}")
+            _LOGGER.debug("%s: old_state exists = %s", self.name, old_state is not None)
 
             if old_state:
-                _LOGGER.debug(f"{self.name}: old_state.state = '{old_state.state}'")
+                _LOGGER.debug("%s: old_state.state = '%s'", self.name, old_state.state)
                 position_attr = old_state.attributes.get("current_position")
-                _LOGGER.debug(f"{self.name}: current_position value = {position_attr}")
+                _LOGGER.debug("%s: current_position value = %s", self.name, position_attr)
 
             if old_state and old_state.attributes.get("current_position") is not None:
                 self._tb_position = old_state.attributes["current_position"]
-                _LOGGER.info(f"{self.name}: ✅ Position restored: {self._tb_position}%")
+                _LOGGER.info("%s: Position restored: %s%%", self.name, self._tb_position)
             else:
                 self._tb_position = 0
-                _LOGGER.info(f"{self.name}: ⚠️ New cover, default position: 0% (closed)")
+                _LOGGER.info("%s: New cover, default position: 0%% (closed)", self.name)
         else:
             mode = self._get_position_mode()
             if mode == COVER_POSITION_MODE_LEGACY:
-                _LOGGER.debug(f"{self.name}: LEGACY mode - no time-based tracking")
+                _LOGGER.debug("%s: LEGACY mode - no time-based tracking", self.name)
             else:
-                _LOGGER.debug(f"{self.name}: Using native position from webserver")
+                _LOGGER.debug("%s: Using native position from webserver", self.name)
 
         self._tb_last_updown = self.get_state("up/down")
         self._tb_last_reported_position = self._tb_position
-        _LOGGER.debug(f"{self.name}: === async_added_to_hass END ===")
+        _LOGGER.debug("%s: === async_added_to_hass END ===", self.name)
 
     async def async_will_remove_from_hass(self):
         """Cleanup when removed."""
@@ -236,8 +237,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             # Se lo stato cambia inaspettatamente durante tracking HA
             if current_updown != expected_updown:
                 _LOGGER.info(
-                    f"{self.name}: ⏸️ Physical STOP detected during HA tracking! "
-                    f"up/down={current_updown} (was {self._tb_operation})"
+                    "%s: Physical STOP detected during HA tracking! up/down=%s (was %s)",
+                    self.name, current_updown, self._tb_operation
                 )
                 # Reset del flag comando HA perché è stato interrotto fisicamente
                 self._tb_ha_command_active = False
@@ -251,17 +252,13 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if current_updown != self._tb_last_updown and not self._tb_ha_command_active:
             if current_updown == "0":
                 self._tb_position = 100
-                _LOGGER.info(
-                    f"{self.name}: ⬆️ Physical button OPEN → Position set to 100%"
-                )
+                _LOGGER.info("%s: Physical button OPEN -> Position set to 100%%", self.name)
                 self._tb_last_reported_position = 100
                 self.async_write_ha_state()
 
             elif current_updown == "1":
                 self._tb_position = 0
-                _LOGGER.info(
-                    f"{self.name}: ⬇️ Physical button CLOSE → Position set to 0%"
-                )
+                _LOGGER.info("%s: Physical button CLOSE -> Position set to 0%%", self.name)
                 self._tb_last_reported_position = 0
                 self.async_write_ha_state()
 
@@ -279,7 +276,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_start_position = self._tb_position
         self._tb_target = target if target is not None else (100 if opening else 0)
         self._tb_last_reported_position = self._tb_position
-        
+
         # Imposta flag comando HA per evitare false detection di pulsanti fisici
         self._tb_ha_command_active = True
 
@@ -293,7 +290,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         )
 
         _LOGGER.debug(
-            f"{self.name}: ▶️ Tracking {operation} from {self._tb_position}% to {self._tb_target}%"
+            "%s: Tracking %s from %s%% to %s%%",
+            self.name, operation, self._tb_position, self._tb_target
         )
         self.async_write_ha_state()
 
@@ -306,13 +304,13 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if self._tb_start_time:
             self._tb_calculate_position()
 
-        _LOGGER.info(f"{self.name}: ⏹️ Stopped at {self._tb_position}%")
+        _LOGGER.info("%s: Stopped at %s%%", self.name, self._tb_position)
 
         self._tb_operation = None
         self._tb_start_time = None
         self._tb_target = None
         self._tb_last_reported_position = self._tb_position
-        
+
         # Reset flag comando HA - ora i pulsanti fisici possono essere rilevati
         self._tb_ha_command_active = False
 
@@ -350,13 +348,14 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if should_stop:
             if send_stop_command:
                 _LOGGER.info(
-                    f"{self.name}: 🎯 Reached target {self._tb_position}%, sending STOP"
+                    "%s: Reached target %s%%, sending STOP",
+                    self.name, self._tb_position
                 )
                 self.hass.async_create_task(self.async_stop_cover())
             else:
                 _LOGGER.info(
-                    f"{self.name}: 🏁 Reached end-stop {self._tb_position}%, "
-                    "mechanical stop (no STOP command)"
+                    "%s: Reached end-stop %s%%, mechanical stop (no STOP command)",
+                    self.name, self._tb_position
                 )
 
             self.hass.async_create_task(self._tb_stop_tracking())
@@ -397,7 +396,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     @property
     def is_closed(self) -> bool | None:
         mode = self._get_position_mode()
-        
+
         if mode == COVER_POSITION_MODE_LEGACY:
             # LEGACY mode: original behavior from master branch
             if self.get_state("up/down") == "1":
@@ -406,7 +405,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 return False
             else:
                 return None
-        
+
         if not self._use_time_based_tracking():
             # Native mode - use traditional logic
             if self.get_state("up/down") == "1":
@@ -415,7 +414,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 return False
             else:
                 return None
-        
+
         # Time-based mode: handle robustly
         if self._tb_position is not None:
             return self._tb_position == 0
@@ -424,7 +423,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     @property
     def is_opening(self) -> bool:
         """Return True only during active opening operation.
-        
+
         Home Assistant disables buttons based on is_closed and current_cover_position,
         NOT based on is_opening/is_closing. These properties only indicate ACTIVE movement.
         """
@@ -435,7 +434,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     @property
     def is_closing(self) -> bool:
         """Return True only during active closing operation.
-        
+
         Home Assistant disables buttons based on is_closed and current_cover_position,
         NOT based on is_opening/is_closing. These properties only indicate ACTIVE movement.
         """
@@ -446,13 +445,13 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     @property
     def current_cover_position(self):
         mode = self._get_position_mode()
-        
+
         if mode == COVER_POSITION_MODE_LEGACY:
             # LEGACY mode: only return position if native sensor available
             if self.has_state("position"):
                 return 100 - int(self.get_state("position"))
             return None  # No position in legacy mode without sensor
-        
+
         if not self._use_time_based_tracking() and self.has_state("position"):
             # Native mode
             return 100 - int(self.get_state("position"))
@@ -472,18 +471,18 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     @property
     def supported_features(self) -> CoverEntityFeature:
         """Flag supported features.
-        
+
         In LEGACY mode, SET_POSITION is only available if hardware sensor exists.
         In other modes, SET_POSITION is always available.
         """
         mode = self._get_position_mode()
-        
+
         flags = (
             CoverEntityFeature.OPEN
             | CoverEntityFeature.CLOSE
             | CoverEntityFeature.STOP
         )
-        
+
         # SET_POSITION logic based on mode
         if mode == COVER_POSITION_MODE_LEGACY:
             # LEGACY mode: SET_POSITION only if native sensor available
@@ -542,6 +541,15 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     # Native mode (or LEGACY with sensor)
                     self.change_state("position", 100 - target)
                 else:
+                    # FIX #3: _tb_position is None until async_added_to_hass runs.
+                    # Guard against TypeError from comparing int with None.
+                    if self._tb_position is None:
+                        _LOGGER.warning(
+                            "%s: set_cover_position called before position was initialized, "
+                            "defaulting to 0 (closed)",
+                            self.name,
+                        )
+                        self._tb_position = 0
                     # Time-based mode
                     if target > self._tb_position:
                         await self._tb_start_tracking(True, target=target)

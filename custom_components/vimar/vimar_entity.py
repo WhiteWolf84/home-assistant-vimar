@@ -21,7 +21,7 @@ from .vimarlink.vimarlink import VimarDevice, VimarLink, VimarProject
 
 class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     """Vimar abstract base entity.
-    
+
     Implements proper availability handling according to Home Assistant standards:
     - Entity is unavailable when coordinator update fails
     - Entity is unavailable when device data is missing from coordinator
@@ -35,7 +35,6 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     _vimarconnection: VimarLink | None = None
     _vimarproject: VimarProject | None = None
     _coordinator: VimarDataUpdateCoordinator | None = None
-    _attributes = {}
 
     ICON = "mdi:checkbox-marked"
 
@@ -46,6 +45,10 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         self._device_id = str(device_id)
         self._vimarconnection = coordinator.vimarconnection
         self._vimarproject = coordinator.vimarproject
+        # FIX #1: _attributes must be instance-level, not class-level.
+        # A class-level mutable dict is shared across ALL instances, causing
+        # every entity to overwrite the others' extra_state_attributes.
+        self._attributes: dict = {}
         self._reset_status()
 
         if self._vimarproject is not None and self._device_id in self._vimarproject.devices:
@@ -67,12 +70,12 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     @property
     def available(self) -> bool:
         """Return True if entity is available.
-        
+
         Entity is considered available when:
         1. Coordinator update is successful (super().available)
         2. Device data exists in coordinator
         3. Device has not been removed
-        
+
         This ensures entities correctly show 'unavailable' state when:
         - Vimar web server is offline
         - Authentication fails
@@ -81,14 +84,14 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """
         if not super().available:
             return False
-        
+
         # Check if device still exists in coordinator data
         if self.coordinator.data is None:
             return False
-        
+
         if self._device_id not in self.coordinator.data:
             return False
-        
+
         return True
 
     @property
@@ -111,7 +114,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """Return device specific state attributes."""
         if self._device is None:
             return self._attributes
-        
+
         # mostro gli attributi importati da vimar
         for key in self._device:
             value = self._device[key]
@@ -138,7 +141,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
                 self._device_id
             )
             return
-        
+
         state_changed = False
         if self._device["status"]:
             if args and len(args) > 0:
@@ -213,7 +216,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """Icon to use in the frontend, if any."""
         if self._device is None:
             return self.ICON
-        
+
         device_icon = self._device.get("icon")
         if isinstance(device_icon, str):
             return device_icon
@@ -250,7 +253,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """Return device information for device registry."""
         if self._device is None:
             return None
-        
+
         room_name = None
         if self._device.get("room_friendly_name") and self._device["room_friendly_name"] != "":
             room_name = self._device["room_friendly_name"]
