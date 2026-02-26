@@ -46,8 +46,6 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         self._vimarconnection = coordinator.vimarconnection
         self._vimarproject = coordinator.vimarproject
         # _attributes must be instance-level, not class-level.
-        # A class-level mutable dict is shared across ALL instances, causing
-        # every entity to overwrite the others' extra_state_attributes.
         self._attributes: dict = {}
         self._reset_status()
 
@@ -59,17 +57,18 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             self._logger.warning("Cannot find device #%s", self._device_id)
 
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
+        """Handle updated data from the coordinator.
+
+        FIX #23: il log per entity (updated/skipped) e' stato spostato
+        interamente nel coordinator (_log_poll_summary), che emette due
+        sole righe DEBUG per ciclo. Qui si filtra solo l'aggiornamento
+        effettivo dell'entity senza produrre log.
+        """
         if self._device_id in self.coordinator._changed_device_ids:
             super()._handle_coordinator_update()
-        elif self.coordinator.logger.isEnabledFor(logging.DEBUG):
-            self.coordinator.logger.debug(
-                "Skipping update for %s (no changes detected)", self.name
-            )
 
     @property
     def available(self) -> bool:
-    
         """Return True if entity is available.
 
         Entity is considered available when:
@@ -86,7 +85,6 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         if not super().available:
             return False
 
-        # Check if device still exists in coordinator data
         if self.coordinator.data is None:
             return False
 
@@ -115,9 +113,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """Return device specific state attributes.
 
         FIX #8: build and return a fresh dict each time instead of mutating
-        self._attributes in place. The old approach accumulated keys across
-        calls: if a field was removed from the device, its stale value
-        remained visible in Lovelace indefinitely.
+        self._attributes in place.
         """
         if self._device is None:
             return {}
@@ -155,9 +151,8 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     def _apply_state_change(self, state: str, value) -> bool:
         """Apply a single state change to the device and schedule a bus write.
 
-        FIX #9: extracted from change_state() to remove duplicate logic between
-        the *args and **kwargs code paths. Returns True if the state was found
-        and the write was scheduled.
+        FIX #9: extracted from change_state() to remove duplicate logic.
+        Returns True if the state was found and the write was scheduled.
         """
         if state not in self._device["status"]:
             self._logger.warning(
@@ -272,7 +267,6 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         if self._device.get("room_friendly_name") and self._device["room_friendly_name"] != "":
             room_name = self._device["room_friendly_name"]
 
-        # Keep original 3-element tuple format for backward compatibility
         device: DeviceInfo = {
             "identifiers": {
                 (
@@ -310,7 +304,6 @@ class VimarStatusSensor(BinarySensorEntity):
         """Initialize the sensor."""
         self._coordinator = coordinator
         vimarconfig = coordinator.vimarconfig
-        # Access connection attributes through _connection after refactoring
         conn = coordinator.vimarconnection._connection
         self._attr_name = (
             "Vimar Connection to "
@@ -342,7 +335,6 @@ class VimarStatusSensor(BinarySensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        # Keep original 3-element tuple format for backward compatibility
         return DeviceInfo(
             identifiers={(DOMAIN, self._coordinator.entity_unique_id_prefix or "", "status")},  # type: ignore[arg-type]
             name="Vimar WebServer",
@@ -356,8 +348,6 @@ class VimarStatusSensor(BinarySensorEntity):
         FIX #10: this method is called by HA on the executor thread
         (because _attr_should_poll = True and update() is synchronous),
         so the blocking is_logged() network call is safe here.
-        The previous implementation was correct but lacked this comment,
-        which caused confusion during reviews. No functional change.
         """
         self._attr_is_on = self._coordinator.vimarconnection.is_logged()
 
@@ -397,7 +387,6 @@ def vimar_setup_entry(
 
     if len(entities_to_add) != 0:
         logger.info("Adding %d %s", len(entities_to_add), platform)
-    # need to call async_add_devices everytime for each registered platform (even if it's empty)!
     async_add_devices(entities_to_add)
     entities += entities_to_add
 

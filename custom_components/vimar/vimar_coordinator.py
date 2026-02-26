@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import timedelta
 
 import aiohttp
@@ -151,13 +152,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 self._first_update_data_executed = True
 
             # FIX #22 (coordinator side): usa UPDATE invece di replace.
-            # _changed_device_ids puo' contenere device_id aggiunti da
-            # request_statemachine_update() durante un'azione manuale
-            # dell'utente (es. press del pulsante garage) avvenuta *tra*
-            # due cicli slim poll. Se sovrascrivessimo il set con quello
-            # calcolato da _detect_state_changes perderemmo quelle entry
-            # e l'UI non si aggiornerebbe mai. Con update() i due insiemi
-            # vengono uniti e nessun device_id va perso.
             newly_changed = self._detect_state_changes(devices)
             self._changed_device_ids.update(newly_changed)
 
@@ -165,6 +159,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 self._reload_entry_if_devices_changed()
 
             self._consecutive_auth_failures = 0
+
+            # FIX #23: log compatto - solo se DEBUG attivo e non e' il primo
+            # ciclo (full discovery) dove tutti i device sarebbero "Updated".
+            if _LOGGER.isEnabledFor(logging.DEBUG) and self._platforms_registered:
+                self._log_poll_summary(devices)
 
             return devices
 
@@ -182,6 +181,48 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 self._handle_auth_failure()
                 raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
             raise UpdateFailed(f"Error communicating with API: {err}")
+
+    # ------------------------------------------------------------------
+    # Poll summary log
+    # ------------------------------------------------------------------
+
+    def _log_poll_summary(self, devices: dict) -> None:
+        """Emit two DEBUG lines: one for updated entities, one for skipped.
+
+        Iterates devices_for_platform to resolve device_id -> friendly name,
+        then splits into updated / skipped sets based on _changed_device_ids.
+        Skips the VimarStatusSensor (binary_sensor connectivity) which has no
+        device_id and is not part of the Vimar device tree.
+        """
+        updated_names: list[str] = []
+        skipped_names: list[str] = []
+
+        for platform_entities in self.devices_for_platform.values():
+            for entity in platform_entities:
+                device_id = getattr(entity, "_device_id", None)
+                if device_id is None:
+                    continue
+                # VimarStatusSensor does not appear in the device tree
+                if device_id not in devices:
+                    continue
+                friendly = (
+                    devices[device_id].get("device_friendly_name")
+                    or devices[device_id].get("object_name")
+                    or device_id
+                )
+                if device_id in self._changed_device_ids:
+                    updated_names.append(friendly)
+                else:
+                    skipped_names.append(friendly)
+
+        if updated_names:
+            _LOGGER.debug("Updated  (%d): %s", len(updated_names), ", ".join(updated_names))
+        if skipped_names:
+            _LOGGER.debug("Skipped  (%d): %s", len(skipped_names), ", ".join(skipped_names))
+
+    # ------------------------------------------------------------------
+    # Auth helpers
+    # ------------------------------------------------------------------
 
     def _is_auth_error(self, error: Exception) -> bool:
         """Check if error is authentication related."""
