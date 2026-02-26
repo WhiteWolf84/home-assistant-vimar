@@ -140,12 +140,23 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         legge direttamente le property dell'entity (cache locale gia'
         aggiornata da _apply_state_change) senza refetch dal webserver.
 
-        Il coordinator usa .update() invece di replace su _changed_device_ids
-        (vedi vimar_coordinator.py) cosi' questo device_id non viene perso
-        al ciclo slim poll successivo.
+        FIX #24: invalida l'hash del device nel coordinator.
+        Senza questa invalidazione, se il webserver risponde con lo stesso
+        valore gia' presente in cache prima dell'azione ottimistica
+        (es. device monostabile che torna a 0 per la seconda volta
+        consecutiva), _detect_state_changes trova hash identico e non
+        aggiunge il device_id a _changed_device_ids -> la UI resta
+        desincronizzata.
+        Con il .pop() l'hash viene cancellato: al ciclo successivo
+        old_hash e' None -> il device e' sempre considerato changed ->
+        la UI si risincronizza con il valore reale del webserver.
+        Vale per tutti i device, non solo i monostabili: termostati che
+        arrotondano il setpoint, tapparelle che non si muovono, ecc.
         """
         if self._coordinator is not None:
             self._coordinator._changed_device_ids.add(self._device_id)
+            # FIX #24: forza rilettura hash al prossimo poll
+            self._coordinator._device_state_hashes.pop(self._device_id, None)
         self.async_write_ha_state()
 
     def _apply_state_change(self, state: str, value) -> bool:
