@@ -37,6 +37,21 @@ CONF_DEVICES_LIGHTS_RE = "devices_as_lights_re"
 CONF_DEVICES_BINARY_SENSOR_RE = "devices_as_binary_sensor_re"
 CONF_DELETE_AND_RELOAD_ALL_ENTITIES = "delete_and_reload_all_entities"
 
+# Cover position mode
+CONF_COVER_POSITION_MODE = "cover_position_mode"
+COVER_POSITION_MODE_AUTO = "auto"
+COVER_POSITION_MODE_NATIVE = "native"
+COVER_POSITION_MODE_TIME_BASED = "time_based"
+COVER_POSITION_MODE_LEGACY = "legacy"  # Original master branch behavior
+DEFAULT_COVER_POSITION_MODE = COVER_POSITION_MODE_AUTO
+
+COVER_POSITION_MODES = [
+    COVER_POSITION_MODE_AUTO,
+    COVER_POSITION_MODE_NATIVE,
+    COVER_POSITION_MODE_TIME_BASED,
+    COVER_POSITION_MODE_LEGACY,
+]
+
 # vimar integration specific const
 
 DEVICE_TYPE_LIGHTS = "light"

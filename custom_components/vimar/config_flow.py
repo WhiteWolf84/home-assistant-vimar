@@ -1,11 +1,7 @@
 """Config flow for the Vimar Security System component."""
 
-# https://aiqianji.com/home-assistant/core/raw/frenck-2020-0790/homeassistant/components/abode/config_flow.py
-
 import re
 
-# from Vimarpy import Vimar
-# from Vimarpy.exceptions import VimarException
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant import config_entries
@@ -19,11 +15,13 @@ from homeassistant.const import (
     CONF_VERIFY_SSL,
 )
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import FlowResult
 from homeassistant.util import slugify
 
 from .const import (
     _LOGGER,
     CONF_CERTIFICATE,
+    CONF_COVER_POSITION_MODE,
     CONF_DELETE_AND_RELOAD_ALL_ENTITIES,
     CONF_DEVICES_BINARY_SENSOR_RE,
     CONF_DEVICES_LIGHTS_RE,
@@ -35,7 +33,9 @@ from .const import (
     CONF_SECURE,
     CONF_TITLE,
     CONF_USE_VIMAR_NAMING,
+    COVER_POSITION_MODES,
     DEFAULT_CERTIFICATE,
+    DEFAULT_COVER_POSITION_MODE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SECURE,
@@ -46,14 +46,6 @@ from .const import (
 )
 from .vimar_coordinator import VimarDataUpdateCoordinator
 
-# def get_vol_optional(name, config, default) -> Optional:
-#    if name not in config and default is None:
-#        return vol.Optional(name)
-#    def_value = config.get(name, default)
-#    if def_value:
-#        return vol.Optional(name, default=def_value)
-#    return vol.Optional(name)
-
 
 @config_entries.HANDLERS.register(DOMAIN)
 class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -63,8 +55,8 @@ class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self):
-        # self.data: dict[str, Any] = {}
         """Initialize."""
+        self.reauth_entry: config_entries.ConfigEntry | None = None
 
     @staticmethod
     @callback
@@ -98,6 +90,62 @@ class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=title, data=user_input)
 
         return self.async_show_form(step_id="user", data_schema=vol.Schema(schema), errors=errors)
+
+    async def async_step_reauth(self, entry_data: dict) -> FlowResult:
+        """Handle re-authentication when credentials become invalid.
+        
+        This flow is triggered automatically when:
+        - Login fails with invalid credentials
+        - Session expires and cannot be renewed
+        - Certificate validation fails
+        """
+        self.reauth_entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None) -> FlowResult:
+        """Confirm re-authentication and update credentials."""
+        errors: dict[str, str] = {}
+        
+        if self.reauth_entry is None:
+            return self.async_abort(reason="reauth_failed")
+
+        if user_input is not None:
+            # Merge existing config with new credentials
+            new_config = {**self.reauth_entry.data, **user_input}
+            
+            try:
+                coordinator = VimarDataUpdateCoordinator(
+                    self.hass, entry=None, vimarconfig=new_config
+                )
+                await coordinator.validate_vimar_credentials()
+            except BaseException as ex:
+                set_errors_from_ex(ex, errors)
+            
+            if not errors:
+                self.hass.config_entries.async_update_entry(
+                    self.reauth_entry,
+                    data=new_config,
+                )
+                await self.hass.config_entries.async_reload(self.reauth_entry.entry_id)
+                return self.async_abort(reason="reauth_successful")
+
+        # Show form with only credentials that might have changed
+        schema = vol.Schema({
+            vol.Required(
+                CONF_USERNAME,
+                default=self.reauth_entry.data.get(CONF_USERNAME)
+            ): str,
+            vol.Required(CONF_PASSWORD): str,
+        })
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "host": self.reauth_entry.data.get(CONF_HOST, "unknown"),
+            },
+        )
 
     async def async_step_import(self, import_config):
         """Import a config entry from configuration.yaml."""
@@ -161,11 +209,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 re.search(search_regex, "x", re.IGNORECASE)
             except BaseException as err:
                 _LOGGER.error(
-                    "Error occurred in validate_regex. Key: '"
-                    + key
-                    + "', Regex: '"
-                    + search_regex
-                    + "' - %s",
+                    "Error occurred in validate_regex. Key: '%s', Regex: '%s' - %s",
+                    key,
+                    search_regex,
                     str(err),
                 )
                 self.errors[key] = "regex_not_valid"
@@ -186,7 +232,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     def _async_save_options(self):
         self._options_update()
         self.hass.config_entries.async_update_entry(self.config_entry, data=self.options)
-        # return self.async_create_entry(title="", data=self.options)
         return self.async_create_entry(title="", data={})
 
     async def async_step_init(self, user_input=None):
@@ -244,15 +289,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         """Manage domain and entity filters."""
         self._init_schema(user_input, get_schema_options_three(user_input or self.options))
 
-        # if user_input is not None:
-        #    try:
-        #        coordinator = VimarDataUpdateCoordinator(self.hass, entry=self.config_entry, vimarconfig=self.options_with_user_input)
-        #        await coordinator.validate_vimar_credentials()
-        #        await self.hass.async_add_executor_job(coordinator.vimarproject.update)
-        #        coordinator.vimarproject.check_devices()
-        #    except BaseException as ex:
-        #        set_errors_from_ex(ex, self.errors)
-
         if user_input is not None and not self.errors:
             return self._async_save_options()
 
@@ -260,6 +296,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
 
 def set_errors_from_ex(ex: BaseException, errors: dict[str, str]):
+    """Map exceptions to user-friendly error messages."""
     exstr = str(ex)
     if "Log In Fallito" in exstr:  # message returned from vimar
         errors["base"] = "invalid_auth"
@@ -275,6 +312,7 @@ def set_errors_from_ex(ex: BaseException, errors: dict[str, str]):
     elif "Saving certificate failed" in exstr:
         errors["base"] = "save_cert_failed"
     else:
+        _LOGGER.error("Unexpected error during validation: %s", exstr)
         errors["base"] = "unknown"
 
 
@@ -343,6 +381,10 @@ def get_schema_options_two(config: dict | None = None) -> dict:
             CONF_IGNORE_PLATFORM, description=get_vol_descr(config, CONF_IGNORE_PLATFORM)
         ): cv.multi_select(domains),
         vol.Optional(
+            CONF_COVER_POSITION_MODE,
+            description=get_vol_descr(config, CONF_COVER_POSITION_MODE, DEFAULT_COVER_POSITION_MODE),
+        ): vol.In(COVER_POSITION_MODES),
+        vol.Optional(
             CONF_USE_VIMAR_NAMING, description=get_vol_descr(config, CONF_USE_VIMAR_NAMING)
         ): bool,
         vol.Optional(
@@ -362,8 +404,6 @@ def get_schema_options_two(config: dict | None = None) -> dict:
 
 def get_schema_options_three(config: dict | None = None) -> dict:
     """Return a shcema configuration dict for HACS."""
-    # config = config or {}
-    # config = config if CONF_TIMEOUT in config else None
     schema = {
         vol.Optional(
             CONF_DELETE_AND_RELOAD_ALL_ENTITIES,
