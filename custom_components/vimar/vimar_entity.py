@@ -69,6 +69,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
 
     @property
     def available(self) -> bool:
+    
         """Return True if entity is available.
 
         Entity is considered available when:
@@ -137,18 +138,15 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     def request_statemachine_update(self):
         """Push local state change to HA UI immediately.
 
-        FIX #22: il vecchio async_schedule_update_ha_state() passava per
-        _handle_coordinator_update() che filtrava via il device se non era
-        in _changed_device_ids. Quel set viene popolato solo alla fine del
-        ciclo slim poll (in _detect_state_changes), NON durante un'azione
-        manuale dell'utente. Risultato: lo switch rimaneva visivamente nel
-        vecchio stato dopo il press (es. garage bistabile).
+        FIX #22: bypassa il filtro _changed_device_ids di
+        _handle_coordinator_update aggiungendo esplicitamente il device_id
+        al set del coordinator, poi chiama async_write_ha_state() che
+        legge direttamente le property dell'entity (cache locale gia'
+        aggiornata da _apply_state_change) senza refetch dal webserver.
 
-        Fix in due passi:
-        1. Aggiunge esplicitamente device_id a _changed_device_ids così
-           il prossimo _handle_coordinator_update() non lo salta.
-        2. Chiama async_write_ha_state() (sincrono, senza refetch) perché
-           la cache locale è già stata aggiornata da _apply_state_change().
+        Il coordinator usa .update() invece di replace su _changed_device_ids
+        (vedi vimar_coordinator.py) cosi' questo device_id non viene perso
+        al ciclo slim poll successivo.
         """
         if self._coordinator is not None:
             self._coordinator._changed_device_ids.add(self._device_id)

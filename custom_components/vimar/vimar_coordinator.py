@@ -150,7 +150,16 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if not self._first_update_data_executed:
                 self._first_update_data_executed = True
 
-            self._changed_device_ids = self._detect_state_changes(devices)
+            # FIX #22 (coordinator side): usa UPDATE invece di replace.
+            # _changed_device_ids puo' contenere device_id aggiunti da
+            # request_statemachine_update() durante un'azione manuale
+            # dell'utente (es. press del pulsante garage) avvenuta *tra*
+            # due cicli slim poll. Se sovrascrivessimo il set con quello
+            # calcolato da _detect_state_changes perderemmo quelle entry
+            # e l'UI non si aggiornerebbe mai. Con update() i due insiemi
+            # vengono uniti e nessun device_id va perso.
+            newly_changed = self._detect_state_changes(devices)
+            self._changed_device_ids.update(newly_changed)
 
             if not self.last_update_success or self._last_devices_hash == "":
                 self._reload_entry_if_devices_changed()
@@ -312,9 +321,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             devices = self.vimarproject.devices
             if devices is not None and len(devices) > 0:
                 # FIX #13: O(n) join instead of O(n^2) string concatenation in loop.
-                # The old `devices_hash = devices_hash + "_" + device_hash` creates a
-                # new string object on every iteration; with hundreds of devices this
-                # becomes expensive. Collecting into a list and joining once is O(n).
                 hash_parts: list[str] = []
                 for device_id, device in devices.items():
                     hash_parts.append(
@@ -363,7 +369,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 if hasattr(device, "device_info") and device.device_info:
                     raw_identifiers = (device.device_info or {}).get("identifiers")
                     if raw_identifiers:
-                        # identifiers is a set of tuples; freeze for hashable comparison
                         configured_device_ids.add(frozenset(raw_identifiers))
                 unique_id = device.unique_id
                 if unique_id:
@@ -388,8 +393,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             device_registry, self.entry.entry_id
         )
         for device_entry in device_registry_entries:
-            # FIX #12: compare frozenset against frozenset, not str against str.
-            # device_entry.identifiers is a set of tuples; frozenset it for lookup.
             device_identifiers_frozen = frozenset(device_entry.identifiers)
             if (
                 device_identifiers_frozen not in configured_device_ids
@@ -410,7 +413,14 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         return hashlib.md5(state_json.encode()).hexdigest()
 
     def _detect_state_changes(self, devices: dict[str, dict]) -> set[str]:
-        """Detect which devices have changed states."""
+        """Detect which devices have changed states.
+
+        Returns only the set of newly-changed device IDs detected in this
+        poll cycle. The caller is responsible for merging into
+        _changed_device_ids (use .update(), NOT direct assignment) so that
+        IDs added by request_statemachine_update() between two poll cycles
+        are preserved.
+        """
         changed_ids = set()
 
         for device_id, device in devices.items():
