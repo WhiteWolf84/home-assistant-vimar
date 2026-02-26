@@ -135,8 +135,24 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         return attrs
 
     def request_statemachine_update(self):
-        """Update the hass status."""
-        self.async_schedule_update_ha_state()
+        """Push local state change to HA UI immediately.
+
+        FIX #22: il vecchio async_schedule_update_ha_state() passava per
+        _handle_coordinator_update() che filtrava via il device se non era
+        in _changed_device_ids. Quel set viene popolato solo alla fine del
+        ciclo slim poll (in _detect_state_changes), NON durante un'azione
+        manuale dell'utente. Risultato: lo switch rimaneva visivamente nel
+        vecchio stato dopo il press (es. garage bistabile).
+
+        Fix in due passi:
+        1. Aggiunge esplicitamente device_id a _changed_device_ids così
+           il prossimo _handle_coordinator_update() non lo salta.
+        2. Chiama async_write_ha_state() (sincrono, senza refetch) perché
+           la cache locale è già stata aggiornata da _apply_state_change().
+        """
+        if self._coordinator is not None:
+            self._coordinator._changed_device_ids.add(self._device_id)
+        self.async_write_ha_state()
 
     def _apply_state_change(self, state: str, value) -> bool:
         """Apply a single state change to the device and schedule a bus write.
