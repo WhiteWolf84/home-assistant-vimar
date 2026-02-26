@@ -561,6 +561,8 @@ class VimarProject:
             "CH_HVAC_RiscaldamentoNoZonaNeutra",
             "CH_Fancoil",
             "CH_HVAC",
+            "CH_HVAC_FanCoil",
+            "CH_HVAC_FanCoilWithNeutralZone",
         ]:
             device_type = DEVICE_TYPE_CLIMATES
             icon = "mdi:thermometer-lines"

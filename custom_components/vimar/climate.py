@@ -42,6 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 # 'velocita_fancoil' status keys with value '0' even when no fan coil is
 # physically present. The only reliable discriminant is therefore object_type.
 FANCOIL_OBJECT_TYPES = (
+    "CH_Fancoil",
     "CH_HVAC_FanCoil",
     "CH_HVAC_FanCoilWithNeutralZone",
 )
@@ -122,7 +123,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
             | ClimateEntityFeature.TURN_OFF
             | ClimateEntityFeature.TURN_ON
         )
-        if self.climate_type == "heat_cool_fancoil":
+        if self._has_fancoil:
             flags |= ClimateEntityFeature.FAN_MODE
         return flags
 
@@ -212,14 +213,14 @@ class VimarClimate(VimarEntity, ClimateEntity):
     @property
     def fan_modes(self) -> list[str] | None:
         """Return the list of available fan modes. Requires ClimateEntityFeature.FAN_MODE."""
-        if self.climate_type != "heat_cool_fancoil":
+        if not self._has_fancoil:
             return None
         return [FAN_ON, FAN_OFF, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
 
     @property
     def fan_mode(self) -> str | None:
         """Return the current fan mode. Requires ClimateEntityFeature.FAN_MODE."""
-        if self.climate_type != "heat_cool_fancoil":
+        if not self._has_fancoil:
             return None
 
         if self.has_state("modalita_fancoil") and self.get_state("modalita_fancoil") == "0":
@@ -239,7 +240,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
     async def async_set_fan_mode(self, fan_mode):
         """Set new target fan mode."""
-        if self.climate_type != "heat_cool_fancoil":
+        if not self._has_fancoil:
             return
         _LOGGER.info("Vimar Climate setting fan_mode: %s", fan_mode)
 
@@ -331,22 +332,31 @@ class VimarClimate(VimarEntity, ClimateEntity):
     # helper
 
     @property
+    def _has_fancoil(self):
+        """Return True only if the device has a physical fan coil unit.
+
+        CH_HVAC_NoZonaNeutra and similar thermostats expose 'modalita_fancoil'
+        and 'velocita_fancoil' status keys with value '0' even though no
+        physical fan coil is present. The only reliable discriminant is
+        object_type matching against FANCOIL_OBJECT_TYPES.
+        """
+        if self._device is None:
+            return False
+        return self._device.get("object_type", "") in FANCOIL_OBJECT_TYPES
+
+    @property
     def climate_type(self):
         """Return type of climate control: 'heat_cool' or 'heat_cool_fancoil'.
 
-        FIX: CH_HVAC_NoZonaNeutra exposes 'modalita_fancoil' and 'velocita_fancoil'
-        status keys with value '0' even though no physical fan coil is present.
-        Using has_state() as discriminant incorrectly classified all thermostats
-        as fancoil units.
+        Determines which HVAC constant set and state keys to use:
+        - 'heat_cool' (Type I): uses 'stagione', funzionamento 0=off/6=manual/8=auto
+        - 'heat_cool_fancoil' (Type II): uses 'regolazione', funzionamento 0=auto/1=manual/6=off
 
-        The only reliable discriminant is object_type: Vimar fancoil types always
-        contain 'fancoil' in their object_type name (e.g. CH_HVAC_FanCoil,
-        CH_HVAC_FanCoilWithNeutralZone). No fallback to status keys.
+        NOTE: this property is intentionally decoupled from fan coil presence.
+        A Type II thermostat (e.g. CH_HVAC_NoZonaNeutra) uses 'regolazione'
+        but has no physical fan coil. Fan UI is controlled by _has_fancoil.
         """
-        if self._device is None:
-            return "heat_cool"
-        object_type = self._device.get("object_type", "") or ""
-        if "fancoil" in object_type.lower():
+        if self.has_state("regolazione"):
             return "heat_cool_fancoil"
         return "heat_cool"
 
