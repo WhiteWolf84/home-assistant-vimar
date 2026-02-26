@@ -93,6 +93,16 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         """Fetch data from API endpoint."""
         _LOGGER.debug("Updating coordinator..")
 
+        # FIX #23b: svuota il set a inizio ciclo cosi' ogni poll parte pulito.
+        # I listener (_handle_coordinator_update) vengono chiamati DOPO il
+        # return di questo metodo, quindi il set e' ancora pieno quando serve.
+        # request_statemachine_update() puo' aggiungere device_id in qualsiasi
+        # momento: se arriva DOPO questo reset ma PRIMA di _detect_state_changes
+        # verra' comunque incluso nel newly_changed del ciclo successivo tramite
+        # il confronto hash (lo stato locale e' gia' stato aggiornato da
+        # _apply_state_change).
+        self._changed_device_ids = set()
+
         try:
             if self.vimarproject is None:
                 raise PlatformNotReady
@@ -129,7 +139,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         _LOGGER.debug(
                             "Vimar: slim poll returned None (transient), keeping previous state"
                         )
-                        self._changed_device_ids = set()
                         return self.vimarproject.devices
 
                     self._apply_slim_results(self.vimarproject.devices, slim_results)
@@ -151,7 +160,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if not self._first_update_data_executed:
                 self._first_update_data_executed = True
 
-            # FIX #22 (coordinator side): usa UPDATE invece di replace.
+            # FIX #22 + #23b: _changed_device_ids e' stato resettato a inizio
+            # ciclo; ora lo popola con le novita' rilevate in questo poll.
             newly_changed = self._detect_state_changes(devices)
             self._changed_device_ids.update(newly_changed)
 
@@ -160,8 +170,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
             self._consecutive_auth_failures = 0
 
-            # FIX #23: log compatto - solo se DEBUG attivo e non e' il primo
-            # ciclo (full discovery) dove tutti i device sarebbero "Updated".
+            # FIX #23: log compatto, solo slim poll (platforms_registered=True).
             if _LOGGER.isEnabledFor(logging.DEBUG) and self._platforms_registered:
                 self._log_poll_summary(devices)
 
@@ -187,24 +196,32 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
 
     def _log_poll_summary(self, devices: dict) -> None:
-        """Emit two DEBUG lines: one for updated entities, one for skipped.
+        """Emit two DEBUG lines: updated device names and skipped device names.
 
-        Iterates devices_for_platform to resolve device_id -> friendly name,
-        then splits into updated / skipped sets based on _changed_device_ids.
-        Skips the VimarStatusSensor (binary_sensor connectivity) which has no
-        device_id and is not part of the Vimar device tree.
+        FIX #23b: usa un set seen_ids per deduplicare i device fisici.
+        I sensori multi-entity (es. CHMisuratore con 7 sub-sensori) hanno
+        tutte le sub-entity con lo stesso _device_id: senza deduplicazione
+        lo stesso nome verrebbe listato N volte. Con seen_ids ogni device
+        fisico appare una sola volta, indipendentemente da quante entity
+        HA ha creato per esso.
         """
         updated_names: list[str] = []
         skipped_names: list[str] = []
+        seen_ids: set[str] = set()
 
         for platform_entities in self.devices_for_platform.values():
             for entity in platform_entities:
                 device_id = getattr(entity, "_device_id", None)
                 if device_id is None:
                     continue
-                # VimarStatusSensor does not appear in the device tree
+                # VimarStatusSensor non e' nel device tree
                 if device_id not in devices:
                     continue
+                # deduplicazione: ogni device fisico una sola volta
+                if device_id in seen_ids:
+                    continue
+                seen_ids.add(device_id)
+
                 friendly = (
                     devices[device_id].get("device_friendly_name")
                     or devices[device_id].get("object_name")
