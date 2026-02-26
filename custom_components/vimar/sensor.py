@@ -49,6 +49,12 @@ async def async_setup_entry(hass, entry, async_add_devices):
     if temp_sensors:
         _LOGGER.info("Adding %d companion temperature sensors from climate devices", len(temp_sensors))
         async_add_devices(temp_sensors)
+        # Register companion sensors so async_remove_old_devices does not
+        # purge them (it only keeps entities listed in devices_for_platform).
+        if CURR_PLATFORM in coordinator.devices_for_platform:
+            coordinator.devices_for_platform[CURR_PLATFORM].extend(temp_sensors)
+        else:
+            coordinator.devices_for_platform[CURR_PLATFORM] = list(temp_sensors)
 
 
 class VimarSensor(VimarEntity, SensorEntity):
