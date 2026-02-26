@@ -40,14 +40,8 @@ from .exceptions import VimarApiError, VimarConnectionError
 from .sql_parser import parse_sql_payload
 
 _LOGGER = logging.getLogger(__name__)
-# FIX #11: removed module-level _LOGGER_isDebug constant.
-# A module-level bool is evaluated once at import time, before HA configures
-# log levels. If debug logging is enabled after import, the cached False value
-# would cause all debug branches to be silently skipped for the entire session.
-# All callers now use _LOGGER.isEnabledFor(logging.DEBUG) evaluated at runtime.
 MAX_ROWS_PER_REQUEST = 300
 
-# Device class constants
 DEVICE_CLASS_OUTLET = "outlet"
 DEVICE_CLASS_SWITCH = "switch"
 DEVICE_CLASS_SHUTTER = "shutter"
@@ -118,7 +112,10 @@ class VimarLink:
             "Content-Type": "application/x-www-form-urlencoded",
             "Expect": "",
         }
-        post = f"sessionid={self._session_id}&op=getjScriptEnvironment&context=runtime"
+        post = (
+            f"sessionid={self._session_id}"
+            "&op=getjScriptEnvironment&context=runtime"
+        )
         return self._request_vimar(post, "vimarbyweb/modules/system/dpadaction.php", headers)
 
     def set_device_status(self, object_id, status, optionals="NO-OPTIONALS"):
@@ -199,11 +196,7 @@ class VimarLink:
     ):
         """Page results from a method automatically.
 
-        FIX #7: converted from recursive to iterative implementation.
-        The recursive version would call itself once per batch of MAX_ROWS_PER_REQUEST
-        rows; on large installations (many devices/statuses) this could exhaust
-        Python's default recursion limit (1000 frames) and raise RecursionError.
-        The while-loop below is functionally identical but has O(1) stack depth.
+        FIX #7: iterative instead of recursive (no stack overflow risk).
         """
         if objectlist is None:
             objectlist = {}
@@ -221,7 +214,6 @@ class VimarLink:
             objectlist, state_count = result
             total_count += state_count
 
-            # If we got fewer rows than the page size, we've reached the last page
             if state_count < limit:
                 break
 
@@ -279,7 +271,7 @@ class VimarLink:
         self,
         select: str,
         devices: dict[str, VimarDevice] | None = None,
-        only_update: bool = False
+        only_update: bool = False,
     ):
         """Generate device list from SQL query."""
         if devices is None:
@@ -313,21 +305,21 @@ class VimarLink:
             else:
                 deviceItem = devices[object_id]
 
-            # Update status
             if device["status_name"] != "":
                 deviceItem["status"][device["status_name"]] = {
                     "status_id": device["status_id"],
                     "status_value": device["status_value"],
                 }
                 if "status_range" in device:
-                    deviceItem["status"][device["status_name"]]["status_range"] = device["status_range"]
+                    deviceItem["status"][device["status_name"]]["status_range"] = (
+                        device["status_range"]
+                    )
 
-            # Update room info
             if device["room_ids"] is not None and device["room_ids"] != "":
                 room_ids = []
                 room_names = []
                 for roomId in device["room_ids"].split(","):
-                    if roomId and roomId in self._rooms:
+                    if roomId and self._rooms and roomId in self._rooms:
                         room = self._rooms[roomId]
                         room_ids.append(roomId)
                         room_names.append(room["name"])
@@ -369,10 +361,7 @@ class VimarLink:
         return self._room_ids
 
     def _request_vimar_sql(self, select: str):
-        """Build and execute SQL request.
-
-        PATCH #2: Changed error handling from ERROR+relogin to WARNING+return None.
-        """
+        """Build and execute SQL request."""
         select = (
             select.replace("\r\n", " ")
             .replace("\n", " ")
@@ -429,7 +418,10 @@ class VimarLink:
 
     def _request_vimar(self, post: str, path: str, headers: dict):
         """Prepare call to Vimar webserver."""
-        url = f"{self._connection._schema}://{self._connection._host}:{self._connection._port}/{path}"
+        url = (
+            f"{self._connection._schema}://{self._connection._host}"
+            f":{self._connection._port}/{path}"
+        )
         response = self._connection._request(url, post, headers)
 
         if response is None or response is False:
@@ -445,8 +437,9 @@ class VimarProject:
         """Create new container to hold all states."""
         self._link = link
         self._device_customizer_action = device_customizer_action
+        # FIX: class-level mutable defaults rimossi; inizializzati per-istanza
         self._devices: dict[str, VimarDevice] = {}
-        self._platforms_exists = {}
+        self._platforms_exists: dict[str, int] = {}
         self.global_channel_id = None
 
     @property
@@ -465,7 +458,6 @@ class VimarProject:
             self._link.get_remote_devices, self._devices
         )
 
-        # Parse device types on first run or forced update
         if devices_count != len(self._devices) or forced:
             self._link.get_room_ids()
             self._link.get_paged_results(self._link.get_room_devices, self._devices)
@@ -481,7 +473,6 @@ class VimarProject:
         for device_id, device in self._devices.items():
             self.parse_device_type(device)
 
-        # FIX #11: use isEnabledFor() at runtime instead of module-level cached bool
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug("check_devices end. Devices: %s", str(self._devices))
         return True
@@ -495,14 +486,13 @@ class VimarProject:
         return self._platforms_exists.get(platform, False)
 
     def parse_device_type(self, device):
-        """Classify devices into supported groups based on their types and names."""
+        """Classify devices into supported groups based on types and names."""
         device_type = DEVICE_TYPE_OTHERS
         device_class = None
         icon = "mdi:home-assistant"
         obj_type = device["object_type"]
         obj_name = device["object_name"].upper()
 
-        # Main automation devices
         if obj_type == "CH_Main_Automation":
             if any(x in obj_name for x in ["VENTILATOR", "FANCOIL"]):
                 device_type = DEVICE_TYPE_SWITCHES
@@ -516,7 +506,7 @@ class VimarProject:
                 device_type = DEVICE_TYPE_SWITCHES
                 device_class = DEVICE_CLASS_OUTLET
                 icon = ["mdi:power-plug", "mdi:power-plug-off"]
-            elif any(x in obj_name for x in ["HEIZUNG", "HEIZKÖRPER"]):
+            elif any(x in obj_name for x in ["HEIZUNG", "HEIZK\u00d6RPER"]):
                 device_type = DEVICE_TYPE_SWITCHES
                 device_class = DEVICE_CLASS_SWITCH
                 icon = ["mdi:radiator", "mdi:radiator-off"]
@@ -529,7 +519,6 @@ class VimarProject:
                 device_type = DEVICE_TYPE_LIGHTS
                 icon = "mdi:ceiling-light"
 
-        # KNX generic devices
         elif obj_type in [
             "CH_KNX_GENERIC_ONOFF",
             "CH_KNX_GENERIC_TIME_S",
@@ -541,7 +530,6 @@ class VimarProject:
             device_class = DEVICE_CLASS_SWITCH
             icon = ["mdi:toggle-switch", "mdi:toggle-switch-off"]
 
-        # Dimmers
         elif obj_type in [
             "CH_Dimmer_Automation",
             "CH_Dimmer_RGB",
@@ -551,7 +539,6 @@ class VimarProject:
             device_type = DEVICE_TYPE_LIGHTS
             icon = ["mdi:speedometer", "mdi:speedometer-slow"]
 
-        # Shutters/Covers
         elif obj_type in [
             "CH_ShutterWithoutPosition_Automation",
             "CH_ShutterBlindWithoutPosition_Automation",
@@ -568,7 +555,6 @@ class VimarProject:
                 device_class = DEVICE_CLASS_SHUTTER
                 icon = ["mdi:window-shutter", "mdi:window-shutter-open"]
 
-        # Climate devices
         elif obj_type in [
             "CH_Clima",
             "CH_HVAC_NoZonaNeutra",
@@ -580,13 +566,11 @@ class VimarProject:
             icon = "mdi:thermometer-lines"
             _LOGGER.debug("Climate: %s / %s", obj_type, device["object_name"])
 
-        # Scenes
         elif obj_type == "CH_Scene":
             device_type = DEVICE_TYPE_SCENES
             icon = "hass:palette"
             _LOGGER.debug("Scene: %s / %s", obj_type, device["object_name"])
 
-        # Power sensors
         elif obj_type in [
             "CH_Misuratore",
             "CH_Carichi_Custom",
@@ -598,62 +582,61 @@ class VimarProject:
             device_class = DEVICE_CLASS_POWER
             icon = "mdi:chart-bell-curve-cumulative"
 
-        # Counter sensors
-        elif "CH_Contatore_" in obj_type.upper():
+        elif "CH_CONTATORE_" in obj_type.upper():
             device_type = DEVICE_TYPE_SENSORS
             icon = "mdi:pulse"
 
-        # Temperature sensors
         elif obj_type == "CH_KNX_GENERIC_TEMPERATURE_C":
             device_type = DEVICE_TYPE_SENSORS
             device_class = DEVICE_CLASS_TEMPERATURE
             icon = "mdi:thermometer"
 
-        # Wind sensors
         elif obj_type == "CH_KNX_GENERIC_WINDSPEED":
             device_type = DEVICE_TYPE_SENSORS
             device_class = DEVICE_CLASS_PRESSURE
             icon = "mdi:windsock"
 
-        # Weather stations
         elif obj_type == "CH_WEATHERSTATION":
             device_type = DEVICE_TYPE_SENSORS
             icon = "mdi:weather-partly-snowy-rainy"
 
-        # Audio/Media players
         elif obj_type == "CH_Audio":
             device_type = DEVICE_TYPE_MEDIA_PLAYERS
             icon = ["mdi:radio", "mdi:radio-off"]
             _LOGGER.debug("Audio: %s / %s", obj_type, device["object_name"])
 
-        # Unsupported types
         elif obj_type in ["CH_SAI", "CH_Event", "CH_KNX_GENERIC_TIMEPERIODMIN"]:
             _LOGGER.debug("Unsupported: %s / %s", obj_type, device["object_name"])
         else:
             _LOGGER.warning("Unknown: %s / %s", obj_type, device["object_name"])
 
-        # Set device properties
         friendly_name = self.format_name(device["object_name"])
         device["device_type"] = device_type
         device["device_class"] = device_class
         device["device_friendly_name"] = friendly_name
         device["icon"] = icon
 
-        # Apply customizer
         if self._device_customizer_action:
             self._device_customizer_action(device)
 
-        # Track platform count
         device_type = device["device_type"]
         self._platforms_exists[device_type] = self._platforms_exists.get(device_type, 0) + 1
 
     def format_name(self, name):
-        """Format device name to remove unused terms."""
+        """Format device name to remove unused terms.
+
+        FIX #21: la logica precedente con loop replace() e continue per
+        LUCE/LICHT era sbagliata: il continue saltava solo l'iterazione LUCE
+        ma non proteggeva il replace LICHT->''. Ripristinata la catena
+        replace() sequenziale del master con guard esplicito per LICHT.
+        """
         parts = name.split(" ")
 
         if len(parts) >= 4:
-            device_type, entity_number, room_name, *level_parts = parts
-            level_name = " ".join(level_parts)
+            device_type = parts[0]
+            entity_number = parts[1]
+            room_name = parts[2]
+            level_name = " ".join(parts[3:])
         elif len(parts) >= 2:
             device_type = parts[0]
             entity_number = ""
@@ -665,24 +648,17 @@ class VimarProject:
             room_name = ""
             level_name = ""
 
-        # Clean up device type
-        replacements = {
-            "LUCE": "",
-            "TAPPARELLA": "",
-            "ROLLLADEN": "",
-            "F-FERNBEDIENUNG": "FENSTER",
-            "VENTILATORE": "",
-            "VENTILATOR": "",
-            "STECKDOSE": "",
-            "THERMOSTAT": "",
-        }
+        device_type = device_type.replace("LUCE", "")
+        device_type = device_type.replace("TAPPARELLA", "")
+        if device_type != "LICHT":
+            device_type = device_type.replace("LICHT", "")
+        device_type = device_type.replace("ROLLLADEN", "")
+        device_type = device_type.replace("F-FERNBEDIENUNG", "FENSTER")
+        device_type = device_type.replace("VENTILATORE", "")
+        device_type = device_type.replace("VENTILATOR", "")
+        device_type = device_type.replace("STECKDOSE", "")
+        device_type = device_type.replace("THERMOSTAT", "")
 
-        for old, new in replacements.items():
-            if old == "LUCE" and device_type == "LICHT":
-                continue
-            device_type = device_type.replace(old, new)
-
-        # Build final name
-        parts = [level_name, room_name, device_type, entity_number]
-        name = " ".join(p for p in parts if p)
+        parts_out = [level_name, room_name, device_type, entity_number]
+        name = " ".join(p for p in parts_out if p)
         return name.title().strip()

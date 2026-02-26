@@ -14,7 +14,10 @@ from .http_adapter import HTTPAdapter
 from requests.exceptions import HTTPError
 
 _LOGGER = logging.getLogger(__name__)
-SSL_IGNORED = False
+# FIX #19: rimosso SSL_IGNORED module-level global. Come globale non veniva
+# mai resettato tra reload della config-entry nello stesso processo, quindi
+# il messaggio debug "ignoring ssl" veniva soppresso anche per nuove istanze.
+# Spostato come attributo _ssl_ignore_logged per istanza.
 
 
 class VimarConnection:
@@ -40,6 +43,8 @@ class VimarConnection:
         self._timeout = timeout
         self._session_id: str | None = None
         self.request_last_exception: BaseException | None = None
+        # FIX #19: per-instance flag (era SSL_IGNORED globale di modulo)
+        self._ssl_ignore_logged: bool = False
 
     @property
     def session_id(self) -> str | None:
@@ -49,22 +54,26 @@ class VimarConnection:
     def install_certificate(self) -> bool:
         """Download CA certificate from web server."""
         cert_changed = False
-        
+
         if not self._certificate:
             return False
 
         temp_certificate = self._certificate
         self._certificate = None
 
-        download_url = f"{self._schema}://{self._host}:{self._port}/vimarbyweb/modules/vimar-byme/script/rootCA.VIMAR.crt"
+        download_url = (
+            f"{self._schema}://{self._host}:{self._port}"
+            "/vimarbyweb/modules/vimar-byme/script/rootCA.VIMAR.crt"
+        )
 
         certificate_file = self._request(download_url)
         self._certificate = temp_certificate
 
         if certificate_file is None or certificate_file is False:
-            raise VimarConnectionError(f"Certificate download failed: {self.request_last_exception}")
+            raise VimarConnectionError(
+                f"Certificate download failed: {self.request_last_exception}"
+            )
 
-        # Compare with existing cert
         old_cert = None
         try:
             with open(self._certificate, 'r') as f:
@@ -86,19 +95,18 @@ class VimarConnection:
     def login(self) -> str | None:
         """Authenticate and get session ID."""
         login_url = (
-            f"{self._schema}://{self._host}:{self._port}/vimarbyweb/modules/system/user_login.php?"
+            f"{self._schema}://{self._host}:{self._port}"
+            f"/vimarbyweb/modules/system/user_login.php?"
             f"sessionid=&username={self._username}&password={self._password}&remember=0&op=login"
         )
 
         use_cert = bool(self._certificate)
-        
-        # Download certificate if needed
+
         if self._schema == "https" and use_cert and not os.path.isfile(self._certificate):
             self.install_certificate()
 
         result = self._request(login_url)
 
-        # Retry with fresh certificate on SSL errors
         if result is False and use_cert:
             curr_ex_str = str(self.request_last_exception)
             if "SSLError" in curr_ex_str or "TLS CA" in curr_ex_str:
@@ -111,29 +119,26 @@ class VimarConnection:
         if result is None:
             _LOGGER.warning("Empty response from webserver login")
             return None
-            
+
         if result is False:
             raise VimarConnectionError(f"Error during login: {self.request_last_exception}")
 
-        # Parse XML response
         try:
             xml = self._parse_xml(result)
             if not xml:
                 raise Exception("Login failed - check username, password and certificate path")
-                
             logincode = xml.find("result")
             loginmessage = xml.find("message")
-            
         except BaseException as err:
             raise VimarConnectionError(f"Error parsing login response: {err} - {result}")
 
         if logincode is not None and logincode.text != "0":
             msg = loginmessage.text if loginmessage is not None else logincode.text
             raise VimarConfigError(f"Error during login: {msg}")
-            
+
         _LOGGER.info("Vimar login ok")
         loginsession = xml.find("sessionid")
-        
+
         if loginsession is not None and loginsession.text:
             _LOGGER.debug("Got new Vimar Session id: %s", loginsession.text)
             self._session_id = loginsession.text
@@ -152,7 +157,13 @@ class VimarConnection:
             self.login()
         return self._session_id is not None
 
-    def _request(self, url: str, post: str | None = None, headers: dict | None = None, check_ssl: bool = False) -> str | bool | None:
+    def _request(
+        self,
+        url: str,
+        post: str | None = None,
+        headers: dict | None = None,
+        check_ssl: bool = False,
+    ) -> str | bool | None:
         """Execute HTTP request."""
         try:
             timeouts = (int(self._timeout / 2), self._timeout)
@@ -161,10 +172,10 @@ class VimarConnection:
                 check_ssl = self._certificate
             else:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-                global SSL_IGNORED
-                if not SSL_IGNORED:
+                # FIX #19: attributo di istanza invece di globale di modulo
+                if not self._ssl_ignore_logged:
                     _LOGGER.debug("Request ignores ssl certificate")
-                    SSL_IGNORED = True
+                    self._ssl_ignore_logged = True
 
             with requests.Session() as s:
                 s.mount("https://", HTTPAdapter())
@@ -172,7 +183,9 @@ class VimarConnection:
                 if post is None:
                     response = s.get(url, headers=headers, verify=check_ssl, timeout=timeouts)
                 else:
-                    response = s.post(url, data=post, headers=headers, verify=check_ssl, timeout=timeouts)
+                    response = s.post(
+                        url, data=post, headers=headers, verify=check_ssl, timeout=timeouts
+                    )
 
             response.raise_for_status()
             return response.text

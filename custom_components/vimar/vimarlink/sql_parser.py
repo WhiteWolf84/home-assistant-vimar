@@ -8,48 +8,51 @@ import sys
 _LOGGER = logging.getLogger(__name__)
 
 
-def parse_sql_payload(string: str) -> list[dict] | None:
+def parse_sql_payload(string: str | None) -> list[dict] | None:
     """Split string payload into dictionary array.
-    
+
+    FIX #20: aggiunto None guard in cima. Quando il webserver restituisce
+    un tag payload vuoto, xml.find('.//payload').text e' None; chiamare
+    None.split() sollevava AttributeError catturato dal BaseException handler
+    e loggato come errore fuorviante. Ora restituisce None immediatamente.
+
     Example payload string:
     Response: DBMG-000
     NextRows: 2
     Row000001: 'MAIN_GROUPS'
     Row000002: '435,439,...'
     """
+    if not string:
+        return None
+
     return_list = []
 
     try:
         lines = string.split("\n")
         keys = []
-        
+
         for line in lines:
             if not line:
                 continue
-                
+
             if line.find(":") == -1:
                 raise Exception(f"Missing :-character in response line: {line}")
 
-            # Split prefix from values
             prefix, values = line.split(":", 1)
             prefix = prefix.strip()
 
-            # Skip unused prefixes
             if prefix in ["Response", "NextRows"]:
                 continue
-                
-            # Remove outer quotes, split each quoted string
+
             values = values.strip()[1:-1].split("','")
 
             idx = 0
             row_dict = {}
-            
+
             for value in values:
-                # Row000001 holds field names
                 if prefix == "Row000001":
                     keys.append(value)
                 else:
-                    # All other rows have values
                     row_dict[keys[idx]] = value
                     idx += 1
 
@@ -64,8 +67,6 @@ def parse_sql_payload(string: str) -> list[dict] | None:
             exc_tb.tb_lineno if exc_tb is not None else 0,
             string,
         )
-        # Transient error: return None instead of forcing relogin
-        # (relogin = SSL handshake storm on overloaded Vimar webserver)
         return None
 
     return return_list
