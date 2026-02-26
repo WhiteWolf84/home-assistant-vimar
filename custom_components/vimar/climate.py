@@ -37,6 +37,15 @@ from .vimar_entity import VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
 
+# Known Vimar object types that include a physical fan coil unit.
+# CH_HVAC_NoZonaNeutra and similar thermostats expose 'modalita_fancoil' and
+# 'velocita_fancoil' status keys with value '0' even when no fan coil is
+# physically present. The only reliable discriminant is therefore object_type.
+FANCOIL_OBJECT_TYPES = (
+    "CH_HVAC_FanCoil",
+    "CH_HVAC_FanCoilWithNeutralZone",
+)
+
 
 async def async_setup_entry(hass, entry, async_add_devices):
     """Set up the Vimar Climate platform."""
@@ -92,8 +101,6 @@ class VimarClimate(VimarEntity, ClimateEntity):
         """Initialize the climate."""
         VimarEntity.__init__(self, coordinator, device_id)
 
-        # self.entity_id = "climate." + self._name.lower() + "_" + self._device_id
-
     # climate properties
     @property
     def entity_platform(self):
@@ -109,7 +116,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
     @property
     def supported_features(self):
-        """Flag supported features. The device supports a target temperature."""
+        """Flag supported features."""
         flags = (
             ClimateEntityFeature.TARGET_TEMPERATURE
             | ClimateEntityFeature.TURN_OFF
@@ -117,9 +124,6 @@ class VimarClimate(VimarEntity, ClimateEntity):
         )
         if self.climate_type == "heat_cool_fancoil":
             flags |= ClimateEntityFeature.FAN_MODE
-        # NO LONGER SUPPORTED https://developers.home-assistant.io/blog/2024/03/10/climate-aux-heater-deprecated/
-        # if self.has_state("stato_boost on/off"):
-        #     flags |= ClimateEntityFeature.AUX_HEAT
         return flags
 
     @property
@@ -148,53 +152,43 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
     @property
     def temperature_unit(self):
-        """Return unit of temperature measurement for the system (UnitOfTemperature.CELSIUS or UnitOfTemperature.FAHRENHEIT)."""
-        # TODO - find a way to handle different units from vimar device
+        """Return unit of temperature measurement."""
         if self.has_state("unita"):
             return (UnitOfTemperature.FAHRENHEIT, UnitOfTemperature.CELSIUS)[
                 self.get_state("unita") == "0"
             ]
-        else:
-            return UnitOfTemperature.CELSIUS
+        return UnitOfTemperature.CELSIUS
 
     @property
     def hvac_mode(self):
-        """Return target operation (e.g.heat, cool, auto, off). Used to determine state."""
-        # can be HVACMode.HEAT, HVACMode.COOL, HVACMode.OFF
-        # will never be HVACMode.AUTO, because funzionamento can be auto in both (HEAT and COOL) hvac modes.
-        # if its not on, its off
+        """Return target operation (e.g.heat, cool, auto, off)."""
         if not self.is_on:
             return HVACMode.OFF
 
         if self.climate_type == "heat_cool":
             if self.get_const_value(VIMAR_CLIMATE_AUTO) == self.get_state("funzionamento"):
                 return HVACMode.AUTO
-            else:
-                return (HVACMode.HEAT, HVACMode.COOL)[
-                    self.get_state("stagione") == self.get_const_value(VIMAR_CLIMATE_COOL)
-                ]
+            return (HVACMode.HEAT, HVACMode.COOL)[
+                self.get_state("stagione") == self.get_const_value(VIMAR_CLIMATE_COOL)
+            ]
         else:
             if self.get_const_value(VIMAR_CLIMATE_AUTO) == self.get_state("funzionamento"):
                 return HVACMode.AUTO
-            else:
-                return (HVACMode.HEAT, HVACMode.COOL)[
-                    self.get_state("regolazione") == self.get_const_value(VIMAR_CLIMATE_COOL)
-                ]
+            return (HVACMode.HEAT, HVACMode.COOL)[
+                self.get_state("regolazione") == self.get_const_value(VIMAR_CLIMATE_COOL)
+            ]
 
     @property
     def hvac_modes(self):
-        """List of available operation modes. See below."""
-        # button for auto is still there, to clear manual mode, but will not change highlighted icon
+        """List of available operation modes."""
         return [HVACMode.HEAT, HVACMode.COOL, HVACMode.OFF, HVACMode.AUTO]
 
     @property
     def hvac_action(self):
         """Return current HVAC action (heating, cooling, idle, off)."""
-        # HVACAction.HEATING, HVACAction.COOLING, HVACAction.OFF, HVACAction.IDLE
         if not self.is_on:
             return HVACAction.OFF
 
-        # on/off is only available in heat_cool
         if self.has_state("on/off") and self.get_state("on/off") == "0":
             return HVACAction.IDLE
 
@@ -213,8 +207,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
                 and self.get_state("stato_principale_riscaldamento on/off") == "1"
             ):
                 return HVACAction.HEATING
-            else:
-                return HVACAction.IDLE
+            return HVACAction.IDLE
 
     @property
     def fan_modes(self) -> list[str] | None:
@@ -224,26 +217,25 @@ class VimarClimate(VimarEntity, ClimateEntity):
         return [FAN_ON, FAN_OFF, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
 
     @property
-    def fan_mode(self):
+    def fan_mode(self) -> str | None:
         """Return the current fan mode. Requires ClimateEntityFeature.FAN_MODE."""
         if self.climate_type != "heat_cool_fancoil":
             return None
 
-        if self.has_state("modalita_fancoil"):
-            if self.get_state("modalita_fancoil") == "0":
-                return FAN_OFF
+        if self.has_state("modalita_fancoil") and self.get_state("modalita_fancoil") == "0":
+            return FAN_OFF
 
         if self.has_state("velocita_fancoil"):
             fancoil_speed = float(self.get_state("velocita_fancoil") or 0)
-
             if fancoil_speed == 0:
                 return FAN_ON
             elif fancoil_speed <= 33:
                 return FAN_LOW
             elif fancoil_speed <= 66:
                 return FAN_MEDIUM
-            elif fancoil_speed > 66:
+            else:
                 return FAN_HIGH
+        return None
 
     async def async_set_fan_mode(self, fan_mode):
         """Set new target fan mode."""
@@ -252,16 +244,10 @@ class VimarClimate(VimarEntity, ClimateEntity):
         _LOGGER.info("Vimar Climate setting fan_mode: %s", fan_mode)
 
         if self.has_state("velocita_fancoil") and self.has_state("modalita_fancoil"):
-            if fan_mode == FAN_ON or fan_mode == FAN_OFF:
+            if fan_mode in (FAN_ON, FAN_OFF):
                 self.change_state("modalita_fancoil", ("0", "1")[fan_mode == FAN_ON])
             else:
-                fancoil_speed = "0"
-                if fan_mode == FAN_LOW:
-                    fancoil_speed = "33"
-                elif fan_mode == FAN_MEDIUM:
-                    fancoil_speed = "66"
-                elif fan_mode == FAN_HIGH:
-                    fancoil_speed = "100"
+                fancoil_speed = {FAN_LOW: "33", FAN_MEDIUM: "66", FAN_HIGH: "100"}.get(fan_mode, "0")
                 self.change_state("modalita_fancoil", "1", "velocita_fancoil", fancoil_speed)
 
     async def async_set_hvac_mode(self, hvac_mode):
@@ -299,21 +285,15 @@ class VimarClimate(VimarEntity, ClimateEntity):
         if set_hvac_mode is not None:
             if self.climate_type == "heat_cool":
                 self.change_state(
-                    "funzionamento",
-                    set_function_mode,
-                    "stagione",
-                    set_hvac_mode,
-                    "setpoint",
-                    self.target_temperature,
+                    "funzionamento", set_function_mode,
+                    "stagione", set_hvac_mode,
+                    "setpoint", self.target_temperature,
                 )
             elif self.climate_type == "heat_cool_fancoil":
                 self.change_state(
-                    "funzionamento",
-                    set_function_mode,
-                    "regolazione",
-                    set_hvac_mode,
-                    "setpoint",
-                    self.target_temperature,
+                    "funzionamento", set_function_mode,
+                    "regolazione", set_hvac_mode,
+                    "setpoint", self.target_temperature,
                 )
 
     async def async_set_temperature(self, **kwargs) -> None:
@@ -321,10 +301,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
         set_temperature = kwargs.get(ATTR_TEMPERATURE)
         if set_temperature is None:
             return
-        if set_temperature > 50:
-            set_temperature = 50
-        if set_temperature < 0:
-            set_temperature = 0
+        set_temperature = max(0, min(50, set_temperature))
 
         set_function_mode = self.get_const_value(VIMAR_CLIMATE_MANUAL)
         set_hvac_mode = (
@@ -337,74 +314,53 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
         if self.climate_type == "heat_cool":
             self.change_state(
-                "setpoint",
-                str(set_temperature),
-                "unita",
-                self.get_state("unita"),
-                "stagione",
-                set_hvac_mode,
-                "centralizzato",
-                "1",
-                "funzionamento",
-                set_function_mode,
+                "setpoint", str(set_temperature),
+                "unita", self.get_state("unita"),
+                "stagione", set_hvac_mode,
+                "centralizzato", "1",
+                "funzionamento", set_function_mode,
             )
         elif self.climate_type == "heat_cool_fancoil":
             self.change_state(
-                "setpoint",
-                str(set_temperature),
-                "unita",
-                self.get_state("unita"),
-                "regolazione",
-                set_hvac_mode,
-                "funzionamento",
-                set_function_mode,
+                "setpoint", str(set_temperature),
+                "unita", self.get_state("unita"),
+                "regolazione", set_hvac_mode,
+                "funzionamento", set_function_mode,
             )
 
     # helper
 
     @property
     def climate_type(self):
-        """Return type of climate control.
+        """Return type of climate control: 'heat_cool' or 'heat_cool_fancoil'.
 
-        FIX: il webserver Vimar restituisce le chiavi 'velocita_fancoil' e
-        'modalita_fancoil' anche per termostati senza fancoil fisico
-        (es. CH_HVAC_NoZonaNeutra), con valore '0'.
-        has_state() controlla solo la presenza della chiave nel dizionario,
-        non il suo valore: tutti i termostati venivano erroneamente classificati
-        come 'heat_cool_fancoil', aggiungendo FAN_MODE ai supported_features
-        e mostrando i controlli ventola in UI.
+        FIX: CH_HVAC_NoZonaNeutra exposes 'modalita_fancoil' and 'velocita_fancoil'
+        status keys with value '0' even though no physical fan coil is present.
+        Using has_state() as discriminant incorrectly classified all thermostats
+        as fancoil units.
 
-        Soluzione: discriminante primario e' object_type.
-        - object_type contiene 'fancoil' (case-insensitive) -> heat_cool_fancoil
-        - fallback: ha ENTRAMBE le chiavi fancoil in status -> heat_cool_fancoil
-        - altrimenti -> heat_cool
+        The only reliable discriminant is object_type: Vimar fancoil types always
+        contain 'fancoil' in their object_type name (e.g. CH_HVAC_FanCoil,
+        CH_HVAC_FanCoilWithNeutralZone). No fallback to status keys.
         """
         if self._device is None:
             return "heat_cool"
         object_type = self._device.get("object_type", "") or ""
         if "fancoil" in object_type.lower():
             return "heat_cool_fancoil"
-        # fallback per object_type non noti: entrambe le chiavi devono essere presenti
-        if self.has_state("velocita_fancoil") and self.has_state("modalita_fancoil"):
-            return "heat_cool_fancoil"
         return "heat_cool"
 
     def get_const_value(self, const):
         """Return ids depending on the climate type."""
         # thermostat I (funzionamento)
-        # NO-OPTIONALS
         # 0 .. off  VIMAR_CLIMATE_OFF_I
         # 6 .. manual  VIMAR_CLIMATE_MANUAL_I
-        # 7 .. manual timed
         # 8 .. auto  VIMAR_CLIMATE_AUTO_I
 
         # thermostat II (funzionamento)
-        # 0 (automatic)  VIMAR_CLIMATE_AUTO_II
-        # 1 (manual)  VIMAR_CLIMATE_MANUAL_II
-        # 2 (so called 'reduction')  I guess a kind of energy saving mode, never used
-        # 3 (away)  Away mode (If you use an extreme setpoint - eg. 31° for cooling - is equivalent of being off)
-        # 5 (manual for a certain time)
-        # 6 (off)  VIMAR_CLIMATE_OFF_II
+        # 0 .. automatic  VIMAR_CLIMATE_AUTO_II
+        # 1 .. manual  VIMAR_CLIMATE_MANUAL_II
+        # 6 .. off  VIMAR_CLIMATE_OFF_II
 
         if self.climate_type == "heat_cool":
             if const == VIMAR_CLIMATE_OFF:
@@ -417,8 +373,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
                 return VIMAR_CLIMATE_COOL_I
             elif const == VIMAR_CLIMATE_HEAT:
                 return VIMAR_CLIMATE_HEAT_I
-            else:
-                return None
+            return None
         else:
             if const == VIMAR_CLIMATE_OFF:
                 return VIMAR_CLIMATE_OFF_II
@@ -430,8 +385,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
                 return VIMAR_CLIMATE_COOL_II
             elif const == VIMAR_CLIMATE_HEAT:
                 return VIMAR_CLIMATE_HEAT_II
-            else:
-                return None
+            return None
 
 
 # end class VimarClimate
