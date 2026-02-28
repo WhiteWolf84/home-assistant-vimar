@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from datetime import timedelta
 
 import aiohttp
@@ -120,6 +121,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
                     if devices and len(devices) > 0:
                         self._known_status_ids = self._collect_status_ids(devices)
+                        # Include SAI2 alarm CIDs in slim poll
+                        if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
+                            sai2_ids = self.vimarconnection.get_sai2_status_ids(
+                                self.vimarproject.sai2_groups,
+                                self.vimarproject.sai2_zones,
+                            )
+                            self._known_status_ids.extend(sai2_ids)
                         self._last_device_count = len(devices)
                         self._slim_poll_active = True
                         _LOGGER.debug(
@@ -142,6 +150,25 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         return self.vimarproject.devices
 
                     self._apply_slim_results(self.vimarproject.devices, slim_results)
+                    # Refresh SAI2 live area values — DPADD_OBJECT.CURRENT_VALUE
+                    # for SAI2 group IDs updates immediately after commands,
+                    # unlike the DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN view.
+                    if self.vimarproject.sai2_groups:
+                        group_ids = list(self.vimarproject.sai2_groups.keys())
+                        fresh_values = await self.hass.async_add_executor_job(
+                            self.vimarconnection.get_sai2_area_values, group_ids
+                        )
+                        if fresh_values is not None:
+                            # Merge fresh values but skip group_ids that have
+                            # a pending optimistic update (command in flight).
+                            now = time.monotonic()
+                            guard = self.vimarproject.sai2_optimistic_until
+                            if self.vimarproject.sai2_area_values is None:
+                                self.vimarproject.sai2_area_values = {}
+                            for gid, val in fresh_values.items():
+                                if guard.get(gid, 0) > now:
+                                    continue  # optimistic value still protected
+                                self.vimarproject.sai2_area_values[gid] = val
                     devices = self.vimarproject.devices
 
                     current_count = len(devices)

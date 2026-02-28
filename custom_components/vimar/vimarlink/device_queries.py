@@ -82,3 +82,44 @@ FROM DPADD_OBJECT o0
 INNER JOIN DPADD_OBJECT_RELATION r1 ON o0.ID = r1.PARENTOBJ_ID AND r1.RELATION_WEB_TIPOLOGY = "GENERIC_RELATION"
 INNER JOIN DPADD_OBJECT o1 ON r1.CHILDOBJ_ID = o1.ID AND o1.type = "GROUP"
 WHERE o0.NAME = "_DPAD_DBCONSTANT_GROUP_MAIN";"""
+
+
+# ---------------------------------------------------------------------------
+# SAI2 alarm diagnostic queries (temporary – remove after integration)
+# ---------------------------------------------------------------------------
+
+def get_sai2_groups_query() -> str:
+    """Fetch all SAI2 alarm areas (groups) with their child states.
+
+    Uses the existing DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN view which JOINs
+    SAI2_GROUP -> SAI2_GROUP_CHILD via SAI2_GROUP_CHILD_RELATION.
+    """
+    return """SELECT GID, GNAME, CID, CNAME, CURRENT_VALUE
+FROM DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN
+ORDER BY GID, CID;"""
+
+
+def get_sai2_zones_query() -> str:
+    """Fetch all SAI2 alarm zones with their child states.
+
+    Uses the existing DPAD_SAI2GATEWAY_SAI2ZONECHILDREN view which JOINs
+    SAI2_ZONE -> SAI2_ZONE_CHILD via SAI2_ZONE_CHILD_RELATION.
+    """
+    return """SELECT ZID, GNAME, CID, CNAME, CURRENT_VALUE
+FROM DPAD_SAI2GATEWAY_SAI2ZONECHILDREN
+ORDER BY ZID, CID;"""
+
+
+def get_sai2_area_values_query(group_ids: list[str]) -> str:
+    """Fetch live SAI2 area state from DPADD_OBJECT.CURRENT_VALUE.
+
+    Unlike DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN (whose CURRENT_VALUE never
+    updates after commands), the SAI2 group object rows in DPADD_OBJECT
+    are updated immediately by the Vimar web server after each command.
+    The value is an 8-character binary bitmask, e.g. '00001001' for PAR.
+    """
+    ids_csv = ",".join(str(int(gid)) for gid in group_ids)
+    return (
+        f"SELECT ID as gid, CURRENT_VALUE as current_value "
+        f"FROM DPADD_OBJECT WHERE ID IN ({ids_csv});"
+    )

@@ -16,6 +16,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 from homeassistant.util import slugify
 
 from .const import (
@@ -29,6 +30,7 @@ from .const import (
     CONF_GLOBAL_CHANNEL_ID,
     CONF_IGNORE_PLATFORM,
     CONF_OVERRIDE,
+    CONF_SAI_PIN,
     CONF_SCHEMA,
     CONF_SECURE,
     CONF_TITLE,
@@ -343,6 +345,10 @@ def get_schema_config_user(config: dict | None = None) -> dict:
         ): bool,
         vol.Required(CONF_USERNAME, description=get_vol_descr(config, CONF_USERNAME)): str,
         vol.Required(CONF_PASSWORD, description=get_vol_descr(config, CONF_PASSWORD)): str,
+        vol.Optional(
+            CONF_SAI_PIN,
+            description=get_vol_descr(config, CONF_SAI_PIN),
+        ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
         vol.Optional(
             CONF_CERTIFICATE,
             description=get_vol_descr(config, CONF_CERTIFICATE, DEFAULT_CERTIFICATE),

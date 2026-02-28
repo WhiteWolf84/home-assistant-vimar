@@ -34,6 +34,9 @@ from .device_queries import (
     get_remote_devices_query,
     get_room_devices_query,
     get_room_ids_query,
+    get_sai2_area_values_query,
+    get_sai2_groups_query,
+    get_sai2_zones_query,
     get_status_only_query,
 )
 from .exceptions import VimarApiError, VimarConnectionError
@@ -144,6 +147,58 @@ class VimarLink:
                 )
                 return parse_sql_payload(payload.text)
         return None
+
+    def set_sai2_status(
+        self, command: int, area_index: int, pin: str
+    ) -> bool:
+        """Send SAI2 alarm command via dedicated SOAP service.
+
+        Uses service-vimarsai2allgroupsset which includes the PIN
+        explicitly in each request.
+
+        Args:
+            command: 0=OFF (disarm), 1=ON, 2=INT, 3=PAR
+            area_index: 1-based area number (1, 2, 3, ...)
+            pin: SAI alarm PIN code
+
+        Returns:
+            True if server accepted the command, False otherwise.
+        """
+        # Build bitmask: area 1 = "00000001", area 2 = "00000010", etc.
+        bitmask = 1 << (area_index - 1)
+        groups_str = format(bitmask, "08b")
+
+        post = (
+            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<soapenv:Body><service-vimarsai2allgroupsset xmlns="urn:xmethods-dpadws">'
+            f"<command>{command}</command>"
+            f"<groups>{groups_str}</groups>"
+            f"<pin>{pin}</pin>"
+            "<callsource>WEB-DOMUSPAD_SOAP</callsource>"
+            f"<sessionid>{self._session_id}</sessionid>"
+            "<waittime>10</waittime>"
+            "</service-vimarsai2allgroupsset></soapenv:Body></soapenv:Envelope>"
+        )
+
+        _LOGGER.debug(
+            "SAI2 SOAP: command=%d groups=%s (area %d)",
+            command, groups_str, area_index,
+        )
+
+        response = self._request_vimar_soap(post)
+        if response is None or response is False:
+            _LOGGER.error("SAI2: no response from server")
+            return False
+
+        # Log full response for debugging
+        try:
+            from xml.etree import ElementTree
+            resp_str = ElementTree.tostring(response, encoding="unicode")
+            _LOGGER.warning("SAI2 SOAP response: %s", resp_str)
+        except Exception:
+            pass
+
+        return True
 
     def get_optionals_param(self, state):
         """Return SYNCDB for climate states."""
@@ -360,6 +415,135 @@ class VimarLink:
 
         return self._room_ids
 
+    # ------------------------------------------------------------------
+    # SAI2 alarm data retrieval
+    # ------------------------------------------------------------------
+
+    def get_sai2_devices(self) -> dict | None:
+        """Fetch SAI2 alarm areas (groups) with their child states.
+
+        Returns dict keyed by group ID:
+        {
+            "7560": {
+                "name": "Reparto Giorno",
+                "children": {
+                    "Disinserito": {"cid": "7561", "value": "0"},
+                    "Inserito INT": {"cid": "7562", "value": "0"},
+                    ...
+                }
+            }
+        }
+        """
+        select = get_sai2_groups_query()
+        payload = self._request_vimar_sql(select)
+        if not payload:
+            _LOGGER.debug("SAI2: no group data returned")
+            return None
+
+        groups: dict = {}
+        for row in payload:
+            gid = row["GID"]
+            gname = row["GNAME"]
+            if not gname:  # skip unnamed groups
+                continue
+            if gid not in groups:
+                groups[gid] = {"name": gname, "children": {}}
+            # Extract state label from CNAME: "Reparto Giorno (Disinserito)" -> "Disinserito"
+            cname = row["CNAME"]
+            label = cname.split("(")[-1].rstrip(")").strip() if "(" in cname else cname
+            groups[gid]["children"][label] = {
+                "cid": row["CID"],
+                "value": row["CURRENT_VALUE"],
+            }
+
+        _LOGGER.info("SAI2: found %d named alarm areas", len(groups))
+        return groups if groups else None
+
+    def get_sai2_zones(self) -> dict | None:
+        """Fetch SAI2 alarm zones with their child states.
+
+        Returns dict keyed by zone ID with same structure as groups.
+        """
+        select = get_sai2_zones_query()
+        payload = self._request_vimar_sql(select)
+        if not payload:
+            _LOGGER.debug("SAI2: no zone data returned")
+            return None
+
+        zones: dict = {}
+        for row in payload:
+            zid = row["ZID"]
+            zname = row["GNAME"]
+            if not zname:
+                continue
+            if zid not in zones:
+                zones[zid] = {"name": zname, "children": {}}
+            cname = row["CNAME"]
+            label = cname.split("(")[-1].rstrip(")").strip() if "(" in cname else cname
+            zones[zid]["children"][label] = {
+                "cid": row["CID"],
+                "value": row["CURRENT_VALUE"],
+            }
+
+        _LOGGER.info("SAI2: found %d alarm zones", len(zones))
+        return zones if zones else None
+
+    def get_sai2_status_ids(self, sai2_groups: dict | None, sai2_zones: dict | None) -> list[int]:
+        """Collect all SAI2 child CIDs for slim polling."""
+        ids = []
+        for source in (sai2_groups, sai2_zones):
+            if source:
+                for item in source.values():
+                    for child in item.get("children", {}).values():
+                        try:
+                            ids.append(int(child["cid"]))
+                        except (ValueError, KeyError):
+                            pass
+        return ids
+
+    def get_sai2_area_values(self, group_ids: list[str]) -> dict[str, str] | None:
+        """Fetch live SAI2 area state from DPADD_OBJECT.CURRENT_VALUE.
+
+        Unlike DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN (whose CURRENT_VALUE does
+        not update after commands), the SAI2 group object rows in DPADD_OBJECT
+        reflect the real-time alarm state immediately after a command.
+
+        Returns dict {group_id: current_value_bitmask_string} or None on error.
+        e.g. {'7560': '00000000', '7615': '00000000', '7663': '00001001'}
+        """
+        if not group_ids:
+            return {}
+        select = get_sai2_area_values_query(group_ids)
+        payload = self._request_vimar_sql(select)
+        if payload is None:
+            return None
+        return {
+            str(row["gid"]): str(row.get("current_value") or "00000000")
+            for row in payload
+        }
+
+    def update_sai2_from_slim(
+        self, sai2_groups: dict | None, sai2_zones: dict | None, slim_results: list[dict]
+    ) -> None:
+        """Update SAI2 data from slim poll results."""
+        if not slim_results:
+            return
+        # Build lookup: status_id -> value
+        lookup = {}
+        for row in slim_results:
+            sid = str(row.get("status_id", ""))
+            val = row.get("status_value", "")
+            if sid:
+                lookup[sid] = val
+
+        for source in (sai2_groups, sai2_zones):
+            if source:
+                for item in source.values():
+                    for child in item.get("children", {}).values():
+                        cid = child.get("cid", "")
+                        if cid in lookup:
+                            child["value"] = lookup[cid]
+
     def _request_vimar_sql(self, select: str):
         """Build and execute SQL request."""
         select = (
@@ -441,6 +625,14 @@ class VimarProject:
         self._devices: dict[str, VimarDevice] = {}
         self._platforms_exists: dict[str, int] = {}
         self.global_channel_id = None
+        # SAI2 alarm data
+        self.sai2_groups: dict | None = None
+        self.sai2_zones: dict | None = None
+        # Live SAI2 area bitmask values from DPADD_OBJECT
+        self.sai2_area_values: dict[str, str] | None = None
+        # Guard: {group_id: monotonic_deadline} — prevents slim poll from
+        # overwriting optimistic values while a command is being processed.
+        self.sai2_optimistic_until: dict[str, float] = {}
 
     @property
     def devices(self):
@@ -461,6 +653,14 @@ class VimarProject:
         if devices_count != len(self._devices) or forced:
             self._link.get_room_ids()
             self._link.get_paged_results(self._link.get_room_devices, self._devices)
+            # Fetch SAI2 alarm structure (names, children)
+            self.sai2_groups = self._link.get_sai2_devices()
+            self.sai2_zones = self._link.get_sai2_zones()
+            # Fetch initial live area values
+            if self.sai2_groups:
+                self.sai2_area_values = self._link.get_sai2_area_values(
+                    list(self.sai2_groups.keys())
+                )
             self.check_devices()
 
         return self._devices
@@ -608,7 +808,7 @@ class VimarProject:
             _LOGGER.debug("Audio: %s / %s", obj_type, device["object_name"])
 
         elif obj_type in ["CH_SAI", "CH_Event", "CH_KNX_GENERIC_TIMEPERIODMIN"]:
-            _LOGGER.debug("Unsupported: %s / %s", obj_type, device["object_name"])
+            _LOGGER.warning("SAI_DEBUG: %s / %s / states: %s", obj_type, device["object_name"], device.get("status", {}))
         else:
             _LOGGER.warning("Unknown: %s / %s", obj_type, device["object_name"])
 

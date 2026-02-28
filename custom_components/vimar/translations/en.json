@@ -12,6 +12,7 @@
           "verify_ssl": "Verify SSL certificate",
           "username": "Username",
           "password": "Password",
+          "sai_pin": "SAI alarm PIN (optional)",
           "certificate": "Custom certificate path (optional)"
         }
       },
@@ -50,6 +51,7 @@
           "verify_ssl": "Verify SSL",
           "username": "Username",
           "password": "Password",
+          "sai_pin": "SAI alarm PIN",
           "certificate": "Certificate path"
         }
       },
