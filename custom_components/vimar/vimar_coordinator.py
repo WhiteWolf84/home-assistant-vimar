@@ -150,6 +150,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         return self.vimarproject.devices
 
                     self._apply_slim_results(self.vimarproject.devices, slim_results)
+                    # Update SAI2 zone/group children from slim poll results
+                    if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
+                        self.vimarconnection.update_sai2_from_slim(
+                            self.vimarproject.sai2_groups,
+                            self.vimarproject.sai2_zones,
+                            slim_results,
+                        )
                     # Refresh SAI2 live area values — DPADD_OBJECT.CURRENT_VALUE
                     # for SAI2 group IDs updates immediately after commands,
                     # unlike the DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN view.
