@@ -36,6 +36,7 @@ from .device_queries import (
     get_room_ids_query,
     get_sai2_area_values_query,
     get_sai2_groups_query,
+    get_sai2_zone_to_group_query,
     get_sai2_zones_query,
     get_status_only_query,
 )
@@ -488,6 +489,28 @@ class VimarLink:
         _LOGGER.info("SAI2: found %d alarm zones", len(zones))
         return zones if zones else None
 
+    def get_sai2_zone_to_group(self) -> dict[str, str] | None:
+        """Fetch mapping of SAI2 zone IDs to their parent group IDs.
+
+        Returns dict {zone_id: group_id} or None on error.
+        Uses DPAD_SAI2GATEWAY_SAI2ZONEINTOGROUPS view.
+        """
+        select = get_sai2_zone_to_group_query()
+        payload = self._request_vimar_sql(select)
+        if not payload:
+            _LOGGER.debug("SAI2: no zone-to-group mapping returned")
+            return None
+
+        mapping: dict[str, str] = {}
+        for row in payload:
+            zid = str(row.get("ZID", ""))
+            gid = str(row.get("GID", ""))
+            if zid and gid:
+                mapping[zid] = gid
+
+        _LOGGER.info("SAI2: mapped %d zones to groups", len(mapping))
+        return mapping if mapping else None
+
     def get_sai2_status_ids(self, sai2_groups: dict | None, sai2_zones: dict | None) -> list[int]:
         """Collect all SAI2 child CIDs for slim polling."""
         ids = []
@@ -628,6 +651,8 @@ class VimarProject:
         # SAI2 alarm data
         self.sai2_groups: dict | None = None
         self.sai2_zones: dict | None = None
+        # Mapping: {zone_id: group_id} - which area each zone belongs to
+        self.sai2_zone_to_group: dict[str, str] | None = None
         # Live SAI2 area/zone bitmask values from DPADD_OBJECT
         self.sai2_area_values: dict[str, str] | None = None
         self.sai2_zone_values: dict[str, str] | None = None
@@ -657,6 +682,7 @@ class VimarProject:
             # Fetch SAI2 alarm structure (names, children)
             self.sai2_groups = self._link.get_sai2_devices()
             self.sai2_zones = self._link.get_sai2_zones()
+            self.sai2_zone_to_group = self._link.get_sai2_zone_to_group()
             # Fetch initial live area values
             if self.sai2_groups:
                 self.sai2_area_values = self._link.get_sai2_area_values(

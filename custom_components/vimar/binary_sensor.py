@@ -83,10 +83,14 @@ async def async_setup_entry(
         _LOGGER.debug("SAI2: no alarm zones found, skipping zone binary sensors")
         return
 
+    zone_to_group = vimarproject.sai2_zone_to_group or {}
     zone_entities: list[VimarSAI2ZoneSensor] = []
     for zone_id, zone_data in vimarproject.sai2_zones.items():
+        parent_group_id = zone_to_group.get(zone_id)
         zone_entities.append(
-            VimarSAI2ZoneSensor(coordinator, zone_id, zone_data)
+            VimarSAI2ZoneSensor(
+                coordinator, zone_id, zone_data, parent_group_id
+            )
         )
 
     if zone_entities:
@@ -140,13 +144,15 @@ class VimarSAI2ZoneSensor(
         coordinator: VimarDataUpdateCoordinator,
         zone_id: str,
         zone_data: dict[str, Any],
+        parent_group_id: str | None = None,
     ) -> None:
         """Initialize the SAI2 zone sensor."""
         super().__init__(coordinator)
         self._zone_id = zone_id
         self._zone_data = zone_data
+        self._parent_group_id = parent_group_id
         zone_name = zone_data.get("name", f"Zone {zone_id}")
-        self._attr_name = f"SAI {zone_name}"
+        self._attr_name = zone_name
         self._attr_unique_id = f"vimar_sai2_zone_{zone_id}"
         self._attr_device_class = _guess_device_class(zone_name)
 
@@ -220,13 +226,31 @@ class VimarSAI2ZoneSensor(
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info for device registry."""
-        info = DeviceInfo(
-            identifiers={(DOMAIN, f"sai2_zone_{self._zone_id}")},
-            name=f"SAI {self._zone_data.get('name', self._zone_id)}",
-            manufacturer="Vimar",
-            model="SAI2 Zone Sensor",
-        )
+        """Return device info — nests this zone under its parent area device."""
+        if self._parent_group_id:
+            # Nest under the same device as the alarm_control_panel entity
+            # for this area. The alarm_control_panel uses identifiers
+            # {(DOMAIN, f"sai2_{group_id}")}.
+            project = self.coordinator.vimarproject
+            area_name = "SAI2"
+            if project and project.sai2_groups:
+                group = project.sai2_groups.get(self._parent_group_id)
+                if group:
+                    area_name = f"SAI {group.get('name', self._parent_group_id)}"
+            info = DeviceInfo(
+                identifiers={(DOMAIN, f"sai2_{self._parent_group_id}")},
+                name=area_name,
+                manufacturer="Vimar",
+                model="SAI2 Alarm Area",
+            )
+        else:
+            # No parent group known — standalone device
+            info = DeviceInfo(
+                identifiers={(DOMAIN, f"sai2_zone_{self._zone_id}")},
+                name=f"SAI {self._zone_data.get('name', self._zone_id)}",
+                manufacturer="Vimar",
+                model="SAI2 Zone Sensor",
+            )
         if self.coordinator.webserver_id:
             info["via_device"] = (DOMAIN, self.coordinator.webserver_id)
         return info

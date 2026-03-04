@@ -123,3 +123,16 @@ def get_sai2_area_values_query(group_ids: list[str]) -> str:
         f"SELECT ID as gid, CURRENT_VALUE as current_value "
         f"FROM DPADD_OBJECT WHERE ID IN ({ids_csv});"
     )
+
+
+def get_sai2_zone_to_group_query() -> str:
+    """Fetch the mapping of SAI2 zones to their parent groups (areas).
+
+    Uses DPAD_SAI2GATEWAY_SAI2ZONEINTOGROUPS view which JOINs
+    group children to zones via SAI2_GROUP_CHILD_ZONE_RELATION.
+    Returns GID (group/area ID), GNAME (area name), ZID (zone ID),
+    ZNAME (zone name).
+    """
+    return """SELECT DISTINCT GID, GNAME, ZID, ZNAME
+FROM DPAD_SAI2GATEWAY_SAI2ZONEINTOGROUPS
+ORDER BY GID, ZID;"""
