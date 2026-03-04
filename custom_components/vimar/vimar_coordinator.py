@@ -169,6 +169,14 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                                 if guard.get(gid, 0) > now:
                                     continue  # optimistic value still protected
                                 self.vimarproject.sai2_area_values[gid] = val
+                    # Refresh SAI2 zone values (physical sensor states)
+                    if self.vimarproject.sai2_zones:
+                        zone_ids = list(self.vimarproject.sai2_zones.keys())
+                        fresh_zone_values = await self.hass.async_add_executor_job(
+                            self.vimarconnection.get_sai2_area_values, zone_ids
+                        )
+                        if fresh_zone_values is not None:
+                            self.vimarproject.sai2_zone_values = fresh_zone_values
                     devices = self.vimarproject.devices
 
                     current_count = len(devices)

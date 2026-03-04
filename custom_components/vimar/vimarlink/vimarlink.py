@@ -628,9 +628,10 @@ class VimarProject:
         # SAI2 alarm data
         self.sai2_groups: dict | None = None
         self.sai2_zones: dict | None = None
-        # Live SAI2 area bitmask values from DPADD_OBJECT
+        # Live SAI2 area/zone bitmask values from DPADD_OBJECT
         self.sai2_area_values: dict[str, str] | None = None
-        # Guard: {group_id: monotonic_deadline} — prevents slim poll from
+        self.sai2_zone_values: dict[str, str] | None = None
+        # Guard: {group_id: monotonic_deadline} - prevents slim poll from
         # overwriting optimistic values while a command is being processed.
         self.sai2_optimistic_until: dict[str, float] = {}
 
@@ -660,6 +661,11 @@ class VimarProject:
             if self.sai2_groups:
                 self.sai2_area_values = self._link.get_sai2_area_values(
                     list(self.sai2_groups.keys())
+                )
+            # Fetch initial live zone values
+            if self.sai2_zones:
+                self.sai2_zone_values = self._link.get_sai2_area_values(
+                    list(self.sai2_zones.keys())
                 )
             self.check_devices()
 
