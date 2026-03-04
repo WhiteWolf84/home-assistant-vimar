@@ -45,24 +45,27 @@ def _parse_sai2_zone_value(value: str) -> dict[str, bool]:
     """Decode SAI2 zone CURRENT_VALUE bitmask to state flags.
 
     Returns dict with boolean flags for each known state bit.
-    Bit mapping (confirmed from browser inspection):
-        Bit 0: In allarme (alarm triggered on this zone)
-        Bit 1: Manomissione (tamper)
-        Bit 2: Esclusa (zone excluded/bypassed)
-        Bit 3: Aperta (zone physically open)
+    Bit mapping (confirmed from diagnostic logs 2026-03-04):
+        Bit 0: Aperta (zone physically open)  — value 1
+        Bit 1: (reserved)
+        Bit 2: Memoria (memory flag)           — value 4
+        Bit 3: Allarme (alarm triggered)
+        Bit 4: Manomessa (tampered)
+        Bit 5: Mascherata (masked)
     """
     if not value:
-        return {"open": False, "alarm": False, "tamper": False, "excluded": False}
+        return {"open": False, "memory": False, "alarm": False, "tamper": False, "masked": False}
     try:
         bits = int(value, 2) if len(value) > 2 else int(value)
     except ValueError:
-        return {"open": False, "alarm": False, "tamper": False, "excluded": False}
+        return {"open": False, "memory": False, "alarm": False, "tamper": False, "masked": False}
 
     return {
-        "alarm": bool(bits & (1 << 0)),
-        "tamper": bool(bits & (1 << 1)),
-        "excluded": bool(bits & (1 << 2)),
-        "open": bool(bits & (1 << 3)),
+        "open": bool(bits & (1 << 0)),
+        "memory": bool(bits & (1 << 2)),
+        "alarm": bool(bits & (1 << 3)),
+        "tamper": bool(bits & (1 << 4)),
+        "masked": bool(bits & (1 << 5)),
     }
 
 
@@ -155,6 +158,7 @@ class VimarSAI2ZoneSensor(
         self._attr_name = zone_name
         self._attr_unique_id = f"vimar_sai2_zone_{zone_id}"
         self._attr_device_class = _guess_device_class(zone_name)
+        self._last_logged_bits: int = -1
 
     @property
     def available(self) -> bool:
@@ -174,13 +178,7 @@ class VimarSAI2ZoneSensor(
         bitmask in real-time, but does NOT update individual children.
         We read from sai2_zone_values (parent bitmask) as primary source.
 
-        Bit mapping (to be confirmed via diagnostic log):
-            Bit 0: Esclusa (zone excluded/bypassed)  — value 1
-            Bit 1: Aperta (zone physically open)      — value 2
-            Bit 2: Memoria (memory)                   — value 4
-            Bit 3: Allarme (alarm triggered)           — value 8
-            Bit 4: Manomessa (tampered)                — value 16
-            Bit 5: Mascherata (masked)                 — value 32
+        Bit 0 = Aperta (confirmed: garage open = 00000001, bit0=1).
         """
         project = self.coordinator.vimarproject
         if project is None:
@@ -194,20 +192,16 @@ class VimarSAI2ZoneSensor(
                 bits = int(raw, 2) if len(raw) > 2 else int(raw)
             except (ValueError, TypeError):
                 bits = 0
-            # Log for diagnostics — remove after confirming bit mapping
-            if bits != getattr(self, "_last_logged_bits", -1):
-                _LOGGER.warning(
-                    "SAI2 ZONE %s (%s): raw='%s' bits=%d "
-                    "bit0=%d bit1=%d bit2=%d bit3=%d bit4=%d bit5=%d",
+            if bits != self._last_logged_bits:
+                _LOGGER.debug(
+                    "SAI2 ZONE %s (%s): raw='%s' bits=%d",
                     self._zone_id,
                     self._zone_data.get("name", "?"),
                     raw, bits,
-                    (bits >> 0) & 1, (bits >> 1) & 1, (bits >> 2) & 1,
-                    (bits >> 3) & 1, (bits >> 4) & 1, (bits >> 5) & 1,
                 )
                 self._last_logged_bits = bits
-            # Try bit1 = Aperta (most likely based on children order)
-            return bool(bits & (1 << 1))
+            # Bit 0 = Aperta (zone physically open)
+            return bool(bits & 1)
 
         # Fallback: children dict (may be stale)
         if project.sai2_zones is None:
@@ -228,17 +222,13 @@ class VimarSAI2ZoneSensor(
         project = self.coordinator.vimarproject
         attrs: dict[str, Any] = {"zone_id": self._zone_id}
 
-        # Parent zone bitmask (live)
+        # Decoded bitmask flags (live)
         zone_values = getattr(project, "sai2_zone_values", None)
         if zone_values is not None and self._zone_id in zone_values:
-            attrs["raw_parent_value"] = zone_values[self._zone_id]
-
-        # Children values (may be stale after discovery)
-        if project and project.sai2_zones:
-            zone = project.sai2_zones.get(self._zone_id, {})
-            children = zone.get("children", {})
-            for label, child in children.items():
-                attrs[label.lower()] = child.get("value", "?")
+            raw = zone_values[self._zone_id]
+            attrs["raw_bitmask"] = raw
+            flags = _parse_sai2_zone_value(raw)
+            attrs.update(flags)
 
         return attrs
 
