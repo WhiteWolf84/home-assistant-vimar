@@ -170,33 +170,25 @@ class VimarSAI2ZoneSensor(
     def is_on(self) -> bool | None:
         """Return True if zone is open/triggered.
 
-        Reads from sai2_zone_values (live DPADD_OBJECT bitmask) if
-        available, falling back to children dict.
+        Each SAI2 zone has individual children (Esclusa, Aperta,
+        Memoria, Allarme, Manomessa, Mascherata) each with their own
+        CURRENT_VALUE (0 or 1), updated via slim poll CIDs.
         """
         project = self.coordinator.vimarproject
-        if project is None:
+        if project is None or project.sai2_zones is None:
             return None
 
-        # --- Primary: live bitmask from DPADD_OBJECT ---
-        zone_values = project.sai2_zone_values
-        if zone_values is not None and self._zone_id in zone_values:
-            raw = zone_values[self._zone_id]
-            flags = _parse_sai2_zone_value(raw)
-            return flags["open"]
-
-        # --- Fallback: children dict ---
-        if project.sai2_zones is None:
-            return None
         zone = project.sai2_zones.get(self._zone_id)
         if zone is None:
             return None
         children = zone.get("children", {})
-        # Try known child labels for "open" state
+
+        # Child label for "open" state is "Aperta" (Italian)
         for label in ("Aperta", "Aperto", "Open"):
             child = children.get(label)
-            if child and child.get("value") == "1":
-                return True
-        return False
+            if child is not None:
+                return child.get("value") == "1"
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -204,23 +196,11 @@ class VimarSAI2ZoneSensor(
         project = self.coordinator.vimarproject
         attrs: dict[str, Any] = {"zone_id": self._zone_id}
 
-        # Live bitmask flags
-        zone_values = getattr(project, "sai2_zone_values", None)
-        if zone_values is not None and self._zone_id in zone_values:
-            raw = zone_values[self._zone_id]
-            flags = _parse_sai2_zone_value(raw)
-            attrs["raw_value"] = raw
-            attrs["excluded"] = flags["excluded"]
-            attrs["alarm"] = flags["alarm"]
-            attrs["tamper"] = flags["tamper"]
-            attrs["open"] = flags["open"]
-
-        # Children from discovery
         if project and project.sai2_zones:
             zone = project.sai2_zones.get(self._zone_id, {})
             children = zone.get("children", {})
             for label, child in children.items():
-                attrs[f"sai2_{label}"] = child.get("value", "?")
+                attrs[label.lower()] = child.get("value", "?")
 
         return attrs
 
