@@ -1,6 +1,5 @@
 """Vimar Platform integration."""
 
-import asyncio
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -206,14 +205,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     coordinator: VimarDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     platforms = list(coordinator.devices_for_platform.keys())
-    unloaded = all(
-        await asyncio.gather(
-            *[
-                hass.config_entries.async_forward_entry_unload(entry, platform)
-                for platform in platforms
-            ]
-        )
-    )
+    unloaded = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unloaded and entry.entry_id in hass.data[DOMAIN]:
         hass.data[DOMAIN].pop(entry.entry_id)
 
@@ -222,5 +214,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    await hass.config_entries.async_reload(entry.entry_id)

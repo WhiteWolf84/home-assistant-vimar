@@ -42,7 +42,7 @@ class VimarConnection:
         self._certificate = certificate
         self._timeout = timeout
         self._session_id: str | None = None
-        self.request_last_exception: BaseException | None = None
+        self.request_last_exception: Exception | None = None
         # FIX #19: per-instance flag (era SSL_IGNORED globale di modulo)
         self._ssl_ignore_logged: bool = False
 
@@ -113,7 +113,7 @@ class VimarConnection:
                 try:
                     if self.install_certificate():
                         result = self._request(login_url)
-                except BaseException:
+                except Exception:
                     pass
 
         if result is None:
@@ -129,7 +129,7 @@ class VimarConnection:
                 raise Exception("Login failed - check username, password and certificate path")
             logincode = xml.find("result")
             loginmessage = xml.find("message")
-        except BaseException as err:
+        except Exception as err:
             raise VimarConnectionError(f"Error parsing login response: {err} - {result}")
 
         if logincode is not None and logincode.text != "0":
@@ -198,7 +198,7 @@ class VimarConnection:
             self.request_last_exception = ex
             _LOGGER.error("HTTP timeout occurred")
             return False
-        except BaseException as err:
+        except Exception as err:
             self.request_last_exception = err
             _LOGGER.error("Error occurred: %s", str(err))
             return False
@@ -207,7 +207,7 @@ class VimarConnection:
         """Parse XML response."""
         try:
             return xmlTree.fromstring(xml)
-        except BaseException as err:
+        except Exception as err:
             _LOGGER.error("Error parsing XML: %s", err)
             _LOGGER.debug("Problematic XML: %s", str(xml))
             return None

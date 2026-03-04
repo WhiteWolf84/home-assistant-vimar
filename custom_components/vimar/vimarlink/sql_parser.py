@@ -59,7 +59,7 @@ def parse_sql_payload(string: str | None) -> list[dict] | None:
             if row_dict and len(row_dict) > 0:
                 return_list.append(row_dict)
 
-    except BaseException as err:
+    except Exception as err:
         _, _, exc_tb = sys.exc_info()
         _LOGGER.warning(
             "Transient SQL parse error: %s at line %d - payload: %.200s",

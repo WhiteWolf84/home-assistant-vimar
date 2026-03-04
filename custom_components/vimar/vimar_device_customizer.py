@@ -62,7 +62,7 @@ class VimarDeviceCustomizer:
         for device_override in self._device_overrides:
             try:
                 self.device_override_check(device_override)
-            except BaseException as err:
+            except Exception as err:
                 _LOGGER.error(
                     "Error occurred parsing device_override. %s - device_override: %s",
                     str(err),
@@ -141,7 +141,7 @@ class VimarDeviceCustomizer:
                 else:
                     for key, value in actions.items():
                         self.device_override_action_execute(device, key, value, deviceold)
-            except BaseException as err:
+            except Exception as err:
                 _LOGGER.error(
                     "Error occurred for device_override. %s - device_override: %s",
                     str(err),
@@ -184,7 +184,7 @@ class VimarDeviceCustomizer:
                 name_match = re.search(search_regex, name, re.IGNORECASE) is not None
                 if name_match:
                     match = True
-        except BaseException as err:
+        except Exception as err:
             _LOGGER.error(
                 "Error occurred in match_name. name: '"
                 + name
@@ -200,7 +200,7 @@ class VimarDeviceCustomizer:
         try:
             if pattern is not None and repl is not None:
                 name = re.sub(pattern, repl, name, flags=re.I)
-        except BaseException as err:
+        except Exception as err:
             _LOGGER.error(
                 "Error occurred in replace_name. name: '"
                 + name

@@ -14,8 +14,8 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_VERIFY_SSL,
 )
+from homeassistant.config_entries import ConfigFlowResult as FlowResult
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 from homeassistant.util import slugify
 
@@ -49,12 +49,10 @@ from .const import (
 from .vimar_coordinator import VimarDataUpdateCoordinator
 
 
-@config_entries.HANDLERS.register(DOMAIN)
 class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Vimar."""
 
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self):
         """Initialize."""
@@ -83,7 +81,7 @@ class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     self.hass, entry=None, vimarconfig=user_input
                 )
                 await coordinator.validate_vimar_credentials()
-            except BaseException as ex:
+            except Exception as ex:
                 set_errors_from_ex(ex, errors)
 
             if not errors:
@@ -120,7 +118,7 @@ class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     self.hass, entry=None, vimarconfig=new_config
                 )
                 await coordinator.validate_vimar_credentials()
-            except BaseException as ex:
+            except Exception as ex:
                 set_errors_from_ex(ex, errors)
             
             if not errors:
@@ -209,7 +207,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if search_regex:
             try:
                 re.search(search_regex, "x", re.IGNORECASE)
-            except BaseException as err:
+            except Exception as err:
                 _LOGGER.error(
                     "Error occurred in validate_regex. Key: '%s', Regex: '%s' - %s",
                     key,
@@ -246,7 +244,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     self.hass, entry=self.config_entry, vimarconfig=self.options_with_user_input
                 )
                 await coordinator.validate_vimar_credentials()
-            except BaseException as ex:
+            except Exception as ex:
                 set_errors_from_ex(ex, self.errors)
 
         if user_input is not None and not self.errors:
@@ -269,7 +267,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 )
                 await coordinator.validate_vimar_credentials()
                 await self.hass.async_add_executor_job(coordinator.vimarproject.update, True)
-            except BaseException as ex:
+            except Exception as ex:
                 set_errors_from_ex(ex, self.errors)
 
         if user_input is not None and not self.errors:
@@ -297,7 +295,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         return self._async_show_form_step("three")
 
 
-def set_errors_from_ex(ex: BaseException, errors: dict[str, str]):
+def set_errors_from_ex(ex: Exception, errors: dict[str, str]):
     """Map exceptions to user-friendly error messages."""
     exstr = str(ex)
     if "Log In Fallito" in exstr:  # message returned from vimar
