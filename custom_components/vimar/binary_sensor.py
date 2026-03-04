@@ -170,20 +170,52 @@ class VimarSAI2ZoneSensor(
     def is_on(self) -> bool | None:
         """Return True if zone is open/triggered.
 
-        Each SAI2 zone has individual children (Esclusa, Aperta,
-        Memoria, Allarme, Manomessa, Mascherata) each with their own
-        CURRENT_VALUE (0 or 1), updated via slim poll CIDs.
+        The SAI2 gateway updates the zone parent object's CURRENT_VALUE
+        bitmask in real-time, but does NOT update individual children.
+        We read from sai2_zone_values (parent bitmask) as primary source.
+
+        Bit mapping (to be confirmed via diagnostic log):
+            Bit 0: Esclusa (zone excluded/bypassed)  — value 1
+            Bit 1: Aperta (zone physically open)      — value 2
+            Bit 2: Memoria (memory)                   — value 4
+            Bit 3: Allarme (alarm triggered)           — value 8
+            Bit 4: Manomessa (tampered)                — value 16
+            Bit 5: Mascherata (masked)                 — value 32
         """
         project = self.coordinator.vimarproject
-        if project is None or project.sai2_zones is None:
+        if project is None:
             return None
 
+        # Primary: live bitmask from zone parent DPADD_OBJECT
+        zone_values = getattr(project, "sai2_zone_values", None)
+        if zone_values is not None and self._zone_id in zone_values:
+            raw = zone_values[self._zone_id]
+            try:
+                bits = int(raw, 2) if len(raw) > 2 else int(raw)
+            except (ValueError, TypeError):
+                bits = 0
+            # Log for diagnostics — remove after confirming bit mapping
+            if bits != getattr(self, "_last_logged_bits", -1):
+                _LOGGER.warning(
+                    "SAI2 ZONE %s (%s): raw='%s' bits=%d "
+                    "bit0=%d bit1=%d bit2=%d bit3=%d bit4=%d bit5=%d",
+                    self._zone_id,
+                    self._zone_data.get("name", "?"),
+                    raw, bits,
+                    (bits >> 0) & 1, (bits >> 1) & 1, (bits >> 2) & 1,
+                    (bits >> 3) & 1, (bits >> 4) & 1, (bits >> 5) & 1,
+                )
+                self._last_logged_bits = bits
+            # Try bit1 = Aperta (most likely based on children order)
+            return bool(bits & (1 << 1))
+
+        # Fallback: children dict (may be stale)
+        if project.sai2_zones is None:
+            return None
         zone = project.sai2_zones.get(self._zone_id)
         if zone is None:
             return None
         children = zone.get("children", {})
-
-        # Child label for "open" state is "Aperta" (Italian)
         for label in ("Aperta", "Aperto", "Open"):
             child = children.get(label)
             if child is not None:
@@ -196,6 +228,12 @@ class VimarSAI2ZoneSensor(
         project = self.coordinator.vimarproject
         attrs: dict[str, Any] = {"zone_id": self._zone_id}
 
+        # Parent zone bitmask (live)
+        zone_values = getattr(project, "sai2_zone_values", None)
+        if zone_values is not None and self._zone_id in zone_values:
+            attrs["raw_parent_value"] = zone_values[self._zone_id]
+
+        # Children values (may be stale after discovery)
         if project and project.sai2_zones:
             zone = project.sai2_zones.get(self._zone_id, {})
             children = zone.get("children", {})
