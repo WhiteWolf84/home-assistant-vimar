@@ -14,6 +14,7 @@ from homeassistant.components.alarm_control_panel import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -87,6 +88,19 @@ async def async_setup_entry(
     if vimarproject is None or vimarproject.sai2_groups is None:
         _LOGGER.debug("SAI2: no alarm areas found, skipping alarm platform")
         return
+
+    # Register the single SAI Alarm device.
+    # All alarm and zone entities will be nested under this device.
+    sai_device_info: dict[str, Any] = {
+        "identifiers": {(DOMAIN, "sai2_alarm")},
+        "name": "SAI Alarm",
+        "manufacturer": "Vimar",
+        "model": "SAI2",
+    }
+    if coordinator.webserver_id:
+        sai_device_info["via_device"] = (DOMAIN, coordinator.webserver_id)
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_get_or_create(config_entry_id=entry.entry_id, **sai_device_info)
 
     sai_pin = entry.data.get(CONF_SAI_PIN, "") or entry.options.get(CONF_SAI_PIN, "")
     if not sai_pin:
@@ -206,7 +220,10 @@ class VimarAlarmControlPanel(
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra state attributes for diagnostics."""
         project = self.coordinator.vimarproject
-        attrs: dict[str, Any] = {"area_index": self._area_index}
+        attrs: dict[str, Any] = {
+            "area_index": self._area_index,
+            "area_name": self._group_data.get("name", "?"),
+        }
         if project and project.sai2_groups:
             group = project.sai2_groups.get(self._group_id, {})
             children = group.get("children", {})
@@ -216,16 +233,10 @@ class VimarAlarmControlPanel(
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info for device registry."""
-        info = DeviceInfo(
-            identifiers={(DOMAIN, f"sai2_{self._group_id}")},
-            name=f"SAI {self._group_data['name']}",
-            manufacturer="Vimar",
-            model="SAI2 Alarm Area",
+        """Return device info — all areas share the single SAI Alarm device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, "sai2_alarm")},
         )
-        if self.coordinator.webserver_id:
-            info["via_device"] = (DOMAIN, self.coordinator.webserver_id)
-        return info
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm command."""
