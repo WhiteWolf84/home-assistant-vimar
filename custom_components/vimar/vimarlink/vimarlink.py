@@ -141,7 +141,7 @@ class VimarLink:
         if response is not None and response is not False:
             payload = response.find(".//payload")
             if payload is not None:
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "set_device_status returned payload: %s from request: %s",
                     payload.text or "unknown error",
                     post,
@@ -195,7 +195,7 @@ class VimarLink:
         try:
             from xml.etree import ElementTree
             resp_str = ElementTree.tostring(response, encoding="unicode")
-            _LOGGER.warning("SAI2 SOAP response: %s", resp_str)
+            _LOGGER.debug("SAI2 SOAP response: %s", resp_str)
         except Exception:
             pass
 
@@ -840,9 +840,9 @@ class VimarProject:
             _LOGGER.debug("Audio: %s / %s", obj_type, device["object_name"])
 
         elif obj_type in ["CH_SAI", "CH_Event", "CH_KNX_GENERIC_TIMEPERIODMIN"]:
-            _LOGGER.warning("SAI_DEBUG: %s / %s / states: %s", obj_type, device["object_name"], device.get("status", {}))
+            _LOGGER.debug("SAI_DEBUG: %s / %s / states: %s", obj_type, device["object_name"], device.get("status", {}))
         else:
-            _LOGGER.warning("Unknown: %s / %s", obj_type, device["object_name"])
+            _LOGGER.debug("Unknown: %s / %s", obj_type, device["object_name"])
 
         friendly_name = self.format_name(device["object_name"])
         device["device_type"] = device_type

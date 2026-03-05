@@ -544,7 +544,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     # FIX #3: _tb_position is None until async_added_to_hass runs.
                     # Guard against TypeError from comparing int with None.
                     if self._tb_position is None:
-                        _LOGGER.warning(
+                        _LOGGER.debug(
                             "%s: set_cover_position called before position was initialized, "
                             "defaulting to 0 (closed)",
                             self.name,
