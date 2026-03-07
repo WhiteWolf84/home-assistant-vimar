@@ -7,48 +7,13 @@
 
 # VIMAR By-Me / By-Web Integration for Home Assistant
 
-> **Current Version:** 2026.2.0  
-> **Quality Level:** 🥉 Bronze (Working towards 🥈 Silver)
+> **Current Version:** 2026.2.0 · **Requires:** Home Assistant 2026.1.0+ · **Python:** 3.13+
 
-A comprehensive Home Assistant custom integration for the VIMAR By-me / By-web bus system.
+A comprehensive Home Assistant custom integration for the VIMAR By-me / By-web bus system. Controls lights, covers, climate, switches, sensors, media players, scenes, and the **SAI2 alarm system** through the VIMAR web server.
 
 <img title="Lights, climates, covers" src="https://user-images.githubusercontent.com/6115324/84840393-b091e100-b03f-11ea-84b1-c77cbeb83fb8.png" width="900">
 <img title="Energy guards" src="https://user-images.githubusercontent.com/51525150/89122026-3a005400-d4c4-11ea-98cd-c4b340cfb4c2.jpg" width="600">
 <img title="Audio player" src="https://user-images.githubusercontent.com/51525150/89122129-36b99800-d4c5-11ea-8089-18c2dcab0938.jpg" width="300">
-
-## 🌟 What's New in 2026.2.0
-
-### 🛠️ Complete Architecture Refactoring
-
-The integration has undergone a major internal restructuring for better maintainability and performance:
-
-**Modular Design:**
-- `vimarlink` library split into focused components
-- Separation of concerns: connection, queries, parsing, errors
-- Enhanced testability and code reusability
-
-**Performance Optimizations:**
-- ⚡ **4x faster polling**: Optimized SQL queries reduce web server load
-- 📦 Lightweight status updates: Only fetch changed values
-- 🚫 Graceful error recovery: Prevents authentication storms
-
-**Code Quality:**
-- Full type hints for better IDE support
-- Professional error handling
-- Comprehensive inline documentation
-- Ready for unit testing
-
-See [CHANGELOG.md](CHANGELOG.md) for complete details.
-
-### Time-Based Covers (Shutters) Tracking
-
-Advanced position tracking engine for covers lacking native positional feedback:
-
-- **Position Estimation:** Accurate 0-100% tracking based on travel times
-- **Relay Delay Compensation:** Automatic adjustment for Vimar web server delays
-- **Database Optimization:** Reduced HA database spam
-- **Auto-calibration:** Re-sync with physical end-stops
-- **Four Operating Modes:** `legacy`, `native`, `time_based`, `auto`
 
 ## 💻 Hardware Requirements
 
@@ -81,7 +46,7 @@ Configuration is fully managed via the Home Assistant UI.
 
 1. Go to **Settings** → **Devices & Services**
 2. Click **Add Integration**
-3. Search for **Vimar By-Me Hub**
+3. Search for **VIMAR By-Me Hub**
 4. Enter your web server credentials:
    - **Host:** IP address or hostname
    - **Port:** Usually `443` (HTTPS) or `80` (HTTP)
@@ -89,47 +54,138 @@ Configuration is fully managed via the Home Assistant UI.
    - **Password:** Web server password
    - **SSL Certificate:** (Optional) Path to custom CA certificate
 
-### Cover Travel Times Setup
+### Options Flow
 
-For accurate position tracking, configure travel times per cover:
+After initial setup, click **Configure** on the integration to adjust:
 
-1. Go to **Developer Tools** → **Services**
-2. Select `vimar.set_travel_times`
-3. Choose your cover entity
-4. Enter precise times:
-   - `travel_time_up`: Seconds from 0% to 100%
-   - `travel_time_down`: Seconds from 100% to 0%
+- **Cover Position Mode:** `auto` (default), `native`, `time_based`, or `legacy`
+- **SAI PIN:** 4-digit PIN for the SAI2 alarm system (required for alarm control)
+- **Ignored Platforms:** Exclude specific platforms from discovery
 
 ## 🎯 Supported Devices
 
 | Platform | Device Types | Status |
 |----------|-------------|--------|
 | **Light** | On/Off lights, Dimmers, RGB, White, Hue | ✅ Full Support |
-| **Cover** | Shutters, Blinds, with/without position | ✅ Full Support |
+| **Cover** | Shutters, Blinds — with native or time-based position tracking | ✅ Full Support |
 | **Switch** | Generic switches, Outlets, Fans | ✅ Full Support |
 | **Climate** | HVAC, Fancoils, Thermostats | ✅ Full Support |
 | **Sensor** | Power meters, Energy guards, Temperature | ✅ Full Support |
 | **Media Player** | Audio zones | ✅ Full Support |
 | **Scene** | Vimar scenes | ✅ Full Support |
-| **Binary Sensor** | Connection status | ✅ Full Support |
+| **Alarm Control Panel** | SAI2 alarm areas — arm/disarm, multi-area, PIN protected | ✅ Full Support |
+| **Binary Sensor** | SAI2 alarm zone sensors (door contacts, motion, tamper) + connection status | ✅ Full Support |
 
-## 🛤️ Architecture
+## 🚨 SAI2 Alarm System
 
-### Modular Structure (v2026.2.0)
+Full integration with the VIMAR SAI2 domestic alarm system.
+
+### Alarm Control Panel
+
+Each SAI2 area is exposed as an `alarm_control_panel` entity supporting:
+
+| Action | Description |
+|--------|-------------|
+| **Disarm** | Disarm the area |
+| **Arm Away** | Full arming (all sensors active) |
+| **Arm Home** | Internal arming (perimeter sensors only) |
+| **Arm Night** | Partial arming |
+
+**Features:**
+- Multi-area support — each SAI2 group is a separate entity
+- PIN protection via integration configuration
+- Automatic disarm-before-rearm when switching between armed modes
+- Live state from DPADD_OBJECT bitmask polling
+- All entities grouped under a single **SAI Alarm** device
+
+### Zone Binary Sensors
+
+Each SAI2 zone is exposed as a `binary_sensor` with automatic device class detection:
+
+| Zone Name Keywords | Device Class |
+|-----------|--------------|
+| porta, ingresso, basculante | `door` |
+| finestra | `window` |
+| volumetrico, PIR, motion | `motion` |
+| sirena, manomissione, tamper | `tamper` |
+
+**Extra attributes:** `raw_value`, `excluded`, `alarm`, `tampered`, `masked`, `memory`, `area`
+
+### Setup
+
+1. Configure the **SAI PIN** in integration options (the numeric code used on the Vimar web interface)
+2. Alarm entities appear automatically after integration reload
+3. Zone sensors update via slim poll (real-time parent bitmask)
+
+## 🏠 Cover Position Tracking
+
+Advanced position tracking for covers lacking native positional feedback.
+
+### Operating Modes
+
+| Mode | Description |
+|------|-------------|
+| **`auto`** (default) | Uses hardware sensor when available, falls back to time-based tracking |
+| **`native`** | Hardware position sensors only |
+| **`time_based`** | Always uses time-based calculation |
+| **`legacy`** | Original master branch behavior (no tracking) |
+
+### Travel Time Calibration
+
+For accurate position tracking without hardware sensors:
+
+1. Go to **Developer Tools** → **Services**
+2. Select `vimar.set_travel_times`
+3. Choose your cover entity
+4. Enter measured times:
+   - `travel_time_up`: Seconds from fully closed to fully open
+   - `travel_time_down`: Seconds from fully open to fully closed
+
+**Features:**
+- 200ms internal calculation interval, UI state updated every 1% position change
+- Position persistence across HA restarts
+- Physical button detection (wall switches auto-sync to 0%/100%)
+- Relay delay compensation for Vimar web server latency
+- Per-entity travel time configuration via entity options
+
+## 🛠️ Architecture
+
+### Modular Structure
 
 ```
 custom_components/vimar/
-├── vimarlink/              # Core library
-│   ├── connection.py      # HTTP & authentication
-│   ├── device_queries.py  # SQL query builders
-│   ├── exceptions.py      # Error classes
-│   ├── http_adapter.py    # SSL/TLS legacy support
-│   ├── sql_parser.py      # Response parser
-│   └── vimarlink.py       # Main API
-├── light.py               # Light platform
-├── cover.py               # Cover platform
-└── ...                    # Other platforms
+├── vimarlink/                    # Core library (HA-independent)
+│   ├── connection.py            # HTTP & authentication
+│   ├── device_queries.py        # SQL query builders
+│   ├── exceptions.py            # Error classes
+│   ├── http_adapter.py          # SSL/TLS legacy support
+│   ├── sql_parser.py            # Response parser
+│   ├── vimarlink.py             # Main API facade
+│   ├── vimarlink_auth.py        # Auth with legacy TLS
+│   └── vimarlink_protocol_async.py  # Async protocol
+├── alarm_control_panel.py       # SAI2 alarm platform
+├── binary_sensor.py             # Binary sensors + SAI2 zones
+├── climate.py                   # HVAC / thermostats
+├── config_flow.py               # UI configuration
+├── const.py                     # Constants
+├── cover.py                     # Covers with time-based tracking
+├── light.py                     # Lights / dimmers / RGB
+├── media_player.py              # Audio zones
+├── scene.py                     # Scenes
+├── sensor.py                    # Power / energy / temperature
+├── switch.py                    # Switches / outlets
+├── vimar_coordinator.py         # DataUpdateCoordinator
+├── vimar_device_customizer.py   # Device type overrides
+└── vimar_entity.py              # Base entity class
 ```
+
+### Key Design Decisions
+
+- **Slim polling:** After initial discovery, updates query only status IDs — ~90% less DB workload
+- **Hash-based change detection:** Only devices with changed status hashes trigger HA state writes
+- **Modular `vimarlink`:** Core library has zero HA dependencies, usable standalone
+- **Re-authentication flow:** `ConfigEntryAuthFailed` triggers automatic reauth dialog
+- **Entity availability:** Reports `unavailable` when web server is offline, auth fails, or device is removed
 
 ## 🐛 Troubleshooting
 
@@ -161,10 +217,9 @@ logger:
 **Problem:** Web server doesn't respond
 
 **Solutions:**
-1. Check network connectivity
-2. Verify firewall rules
-3. Increase timeout in integration options
-4. Check web server load
+1. Check network connectivity and firewall rules
+2. Increase timeout in integration options
+3. Check web server load — create a dedicated HA user
 
 #### Session Conflicts
 
@@ -174,36 +229,27 @@ logger:
 
 #### Cover Position Drift
 
-**Problem:** Cover position becomes inaccurate
+**Problem:** Cover position becomes inaccurate over time
 
 **Solutions:**
-1. Recalibrate travel times
-2. Perform full open/close cycle to re-sync
-3. Use `auto` mode for hardware sensors
+1. Recalibrate travel times with precise measurements
+2. Perform full open/close cycle to auto-calibrate end-stops
+3. Switch to `native` mode if hardware sensors are available
 
-## 🏆 Quality Roadmap to Silver
+#### SAI2 Alarm Not Responding
 
-### Current: 🥉 Bronze
+**Problem:** Alarm entities appear but commands fail
 
-**Completed:**
-- ✅ Stable core functionality
-- ✅ Config flow (UI configuration)
-- ✅ Device registry integration
-- ✅ Graceful error recovery
-- ✅ Modular architecture
+**Solutions:**
+1. Verify the **SAI PIN** is correct in integration options
+2. Check that the Vimar web server user has SAI access permissions
+3. Enable debug logging for `custom_components.vimar.alarm_control_panel`
 
-### Target: 🥈 Silver
+## 🌍 Internationalization
 
-**In Progress:**
-- 🔄 Re-authentication flow
-- 🔄 Enhanced documentation
-- 🔄 Proper unavailable state handling
+Config flow, options flow, and reauth flow are fully translated in **7 languages**:
 
-**Planned:**
-- 📝 Comprehensive troubleshooting guide
-- 🧪 Unit test suite
-- ⚡ Exponential backoff retry
-- 📦 Reduced log verbosity
+🇬🇧 English · 🇮🇹 Italian · 🇩🇪 German · 🇫🇷 French · 🇪🇸 Spanish · 🇳🇱 Dutch · 🇵🇹 Portuguese
 
 ## ⚠️ Disclaimer
 
@@ -221,17 +267,17 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## 📜 License
 
-MIT License - see [LICENSE](LICENSE) file
+MIT License — see [LICENSE](LICENSE) file
 
 ## 🙏 Credits
 
 **Maintainers:**
 - [@h4de5](https://github.com/h4de5)
-- [@robigan](https://github.com/robigan)  
+- [@robigan](https://github.com/robigan)
 - [@davideciarmiello](https://github.com/davideciarmiello)
 
 **Contributors:**
-- [@WhiteWolf84](https://github.com/WhiteWolf84) - Architecture refactoring, performance optimizations
+- [@WhiteWolf84](https://github.com/WhiteWolf84) — Architecture refactoring, performance optimizations, SAI2 alarm integration
 - And all community members who reported issues and tested features!
 
 ---

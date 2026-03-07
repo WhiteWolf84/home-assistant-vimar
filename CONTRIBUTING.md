@@ -23,7 +23,7 @@ This project follows the [Contributor Covenant Code of Conduct](https://www.cont
 
 - Home Assistant development environment
 - Vimar By-me web server (hardware or test instance)
-- Python 3.11 or higher
+- Python 3.13 or higher
 - Git
 - Basic understanding of Home Assistant architecture
 
