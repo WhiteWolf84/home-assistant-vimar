@@ -277,7 +277,7 @@ MIT License — see [LICENSE](LICENSE) file
 - [@davideciarmiello](https://github.com/davideciarmiello)
 
 **Contributors:**
-- [@WhiteWolf84](https://github.com/WhiteWolf84) — Architecture refactoring, performance optimizations, SAI2 alarm integration
+- [@WhiteWolf84](https://github.com/WhiteWolf84) — Architecture refactoring, performance optimizations, SAI2 alarm integration (powered by [Claude Opus](https://claude.ai))
 - And all community members who reported issues and tested features!
 
 ---
