@@ -243,6 +243,10 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 # Reset del flag comando HA perché è stato interrotto fisicamente
                 self._tb_ha_command_active = False
                 self.hass.async_create_task(self._tb_stop_tracking())
+
+            # FIX: aggiorna sempre _tb_last_updown durante il tracking, altrimenti
+            # il valore stantio dopo lo stop causa una falsa detection di pulsante fisico
+            self._tb_last_updown = current_updown
             return
 
         # Rileva movimenti da pulsanti fisici solo quando:
@@ -351,14 +355,15 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     "%s: Reached target %s%%, sending STOP",
                     self.name, self._tb_position
                 )
+                # FIX: async_stop_cover chiama già _tb_stop_tracking internamente,
+                # non schedulare un task separato per evitare doppia esecuzione
                 self.hass.async_create_task(self.async_stop_cover())
             else:
                 _LOGGER.info(
                     "%s: Reached end-stop %s%%, mechanical stop (no STOP command)",
                     self.name, self._tb_position
                 )
-
-            self.hass.async_create_task(self._tb_stop_tracking())
+                self.hass.async_create_task(self._tb_stop_tracking())
         else:
             # Aggiorna UI ogni 1% di variazione (o più frequente se UI_UPDATE_THRESHOLD < 1)
             if self._tb_last_reported_position is None or \
