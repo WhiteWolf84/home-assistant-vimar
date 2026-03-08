@@ -36,6 +36,11 @@ DEFAULT_TRAVEL_TIME_DOWN = 26
 POSITION_UPDATE_INTERVAL = 0.2
 UI_UPDATE_THRESHOLD = 1  # Aggiorna UI ogni 1% di variazione
 RELAY_DELAY = 0.5        # Compensazione ritardo relè Vimar in secondi
+GRACE_SECONDS = 6        # Finestra di immunità post-STOP da HA:
+                         # il webserver Vimar non espone metadati sulla sorgente
+                         # del comando (DPADD_OBJECT ha solo CURRENT_VALUE),
+                         # quindi sopprimiamo le detection di pulsante fisico
+                         # per GRACE_SECONDS dopo ogni stop inviato da HA.
 
 # Chiavi per storage entity options
 CONF_TRAVEL_TIME_UP = "travel_time_up"
@@ -103,6 +108,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_last_updown = None
         self._tb_last_reported_position = None  # Per threshold UI
         self._tb_ha_command_active = False  # Flag per distinguere comandi HA da pulsanti fisici
+        self._tb_ha_stop_time = None        # Timestamp ultimo STOP inviato da HA (grace period)
 
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
@@ -252,9 +258,25 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Rileva movimenti da pulsanti fisici solo quando:
         # 1. NON c'è tracking attivo (_tb_operation è None)
         # 2. Lo stato up/down è cambiato rispetto all'ultimo valore
-        # 3. NON è un comando HA recente
+        # 3. NON è un comando HA recente (_tb_ha_command_active)
+        # 4. NON siamo nel grace period post-STOP di HA
+        #    (il webserver Vimar non distingue la sorgente del comando:
+        #    DPADD_OBJECT espone solo CURRENT_VALUE senza metadati di origine)
+        in_grace_period = (
+            self._tb_ha_stop_time is not None
+            and (datetime.now() - self._tb_ha_stop_time).total_seconds() < GRACE_SECONDS
+        )
+
         if current_updown != self._tb_last_updown and not self._tb_ha_command_active:
-            if current_updown == "0":
+            if in_grace_period:
+                _LOGGER.debug(
+                    "%s: Ignoring up/down change (%s->%s) - in grace period (%.1fs remaining)",
+                    self.name,
+                    self._tb_last_updown,
+                    current_updown,
+                    GRACE_SECONDS - (datetime.now() - self._tb_ha_stop_time).total_seconds(),
+                )
+            elif current_updown == "0":
                 self._tb_position = 100
                 _LOGGER.info("%s: Physical button OPEN -> Position set to 100%%", self.name)
                 self._tb_last_reported_position = 100
@@ -283,6 +305,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
         # Imposta flag comando HA per evitare false detection di pulsanti fisici
         self._tb_ha_command_active = True
+        # Reset grace period: un nuovo movimento annulla la finestra precedente
+        self._tb_ha_stop_time = None
 
         if self._tb_unsub:
             self._tb_unsub()
@@ -315,8 +339,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_target = None
         self._tb_last_reported_position = self._tb_position
 
-        # Reset flag comando HA - ora i pulsanti fisici possono essere rilevati
+        # Reset flag comando HA e avvia grace period:
+        # per GRACE_SECONDS le detection di pulsante fisico sono soppresse
+        # perché il protocollo Vimar non distingue la sorgente del comando.
         self._tb_ha_command_active = False
+        self._tb_ha_stop_time = datetime.now()
 
         self.async_write_ha_state()
 
