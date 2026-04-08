@@ -61,6 +61,7 @@ markers = [
 [tool.pyright]
 include = ["custom_components/vimar"]
 exclude = ["**/node_modules", "**/__pycache__"]
+extraPaths = ["custom_components/vimar"]
 pythonVersion = "3.13"
 pythonPlatform = "Linux"
 typeCheckingMode = "basic"
