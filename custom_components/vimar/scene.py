@@ -85,15 +85,22 @@ class VimarScene(VimarEntity, Scene):
     # async getter and setter
 
     async def async_activate(self, **kwargs) -> None:
-        """Activate scene. Try to get entities into requested state."""
+        """Activate scene. Try to get entities into requested state.
+
+        _last_activated is set BEFORE change_state() because change_state()
+        internally calls request_statemachine_update() → async_write_ha_state().
+        If we set it after, that first write would still see _last_activated=None
+        and persist STATE_UNKNOWN instead of the timestamp.
+        """
+        self._last_activated = dt_util.utcnow()
+
         if self.has_state("on/off"):
             self.change_state("on/off", "1")
-
         elif self.has_state("comando"):
             self.change_state("comando", "0")
-
-        self._last_activated = dt_util.utcnow()
-        self.async_write_ha_state()
+        else:
+            # No Vimar state to write, but still update HA state machine
+            self.async_write_ha_state()
 
 
 # end class VimarScene
