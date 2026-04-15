@@ -27,6 +27,30 @@ class VimarScene(VimarEntity, Scene):
         """Initialize the scene."""
         VimarEntity.__init__(self, coordinator, device_id)
 
+    async def async_added_to_hass(self) -> None:
+        """Restore last activation timestamp from HA storage on startup.
+
+        Scene inherits RestoreEntity, so async_get_last_state() reads the
+        last persisted state from .storage/core.restore_state. The state
+        string is the ISO 8601 timestamp we set in async_activate().
+        """
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state not in (STATE_UNKNOWN, "unknown", None):
+            try:
+                self._last_activated = dt_util.parse_datetime(last_state.state)
+                _LOGGER.debug(
+                    "Scene %s: restored last activation: %s",
+                    self.name,
+                    self._last_activated,
+                )
+            except (ValueError, TypeError):
+                _LOGGER.debug(
+                    "Scene %s: could not parse restored state '%s'",
+                    self.name,
+                    last_state.state,
+                )
+
     @property
     def entity_platform(self):
         return CURR_PLATFORM
@@ -43,9 +67,8 @@ class VimarScene(VimarEntity, Scene):
         """Return the state of the scene.
 
         Returns the ISO 8601 timestamp of the last activation, or STATE_UNKNOWN
-        if the scene has never been activated since HA started.
-        This mirrors the behaviour of button entities and avoids a permanent
-        'unknown' state that confuses tools like hass-watchman.
+        if the scene has never been activated. The value is persisted across
+        HA restarts via RestoreEntity (inherited from Scene base class).
         """
         if self._last_activated is None:
             return STATE_UNKNOWN
