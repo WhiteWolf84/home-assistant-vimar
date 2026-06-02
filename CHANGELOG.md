@@ -10,6 +10,19 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.0] - 2026-06-02
+
+### Fixed
+
+- **Thermostat setpoint race when an automation/scene set mode and temperature together**: when `climate.set_hvac_mode` and `climate.set_temperature` were issued on the same VIMAR thermostat in quick succession (e.g. by a scene restore or a climate-curve automation), the resulting setpoint could be wrong. The previous fix serialized only the writes *within a single* `change_state()` call, but two separate commands each dispatched their own fire-and-forget executor job onto different pool threads, so their `SETVALUE` requests still raced on the shared SOAP session and reached the gateway out of order — a stale cached setpoint could commit after the explicit one. All device writes now go through a single global FIFO queue in the coordinator, drained one batch at a time on one thread, so every `SETVALUE` is applied in the exact order `change_state()` was called and never overlaps on the session.
+- **`set_hvac_mode` no longer overwrites the setpoint when activating from off**: turning a thermostat on used to re-send the cached target temperature alongside the mode, which is what made the race above possible (and could clobber an explicit `set_temperature`). It now sends only the operating mode and heat/cool direction; the device keeps its stored manual setpoint and `set_temperature()` is the sole owner of the setpoint.
+
+### Internal
+
+- Coordinator gains a serialized write queue (`enqueue_device_writes` / `_write_worker` / `_execute_device_writes`), cancelled on unload; `VimarEntity.change_state()` enqueues batches instead of dispatching its own executor job. Regression tests updated to the queue mechanism, plus a new test asserting `set_hvac_mode` from off never writes the setpoint.
+
+---
+
 ## [2026.5.5] - 2026-05-31
 
 ### Fixed
