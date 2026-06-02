@@ -87,6 +87,18 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._energy_refresh_ids: list[int] = []
         self._last_energy_refresh: float = 0.0
 
+        # FIX: single global FIFO for all device writes (SETVALUE). Every
+        # change_state() from every entity enqueues its batch here and one
+        # worker drains them sequentially, so concurrent commands (e.g.
+        # set_hvac_mode + set_temperature fired together by an automation or
+        # scene) can never overlap on the shared SOAP session and are applied
+        # strictly in the order change_state() was called. Previously each
+        # change_state spawned its own executor job; with several pool threads
+        # the SETVALUE requests reached the gateway out of order, corrupting
+        # thermostat setpoints (cached value committing after the explicit one).
+        self._write_queue: asyncio.Queue[list[tuple[str, str, str]]] = asyncio.Queue()
+        self._write_worker_task: asyncio.Task | None = None
+
         refresh = vimarconfig.get(CONF_ENERGY_REFRESH_INTERVAL)
         self._energy_refresh_interval: float = (
             float(refresh) if refresh is not None else float(DEFAULT_ENERGY_REFRESH_INTERVAL)
@@ -107,6 +119,57 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=uptade_interval),
             config_entry=entry,
         )
+
+    # --- serialized device writes ---------------------------------------
+
+    def enqueue_device_writes(self, writes: list[tuple[str, str, str]]) -> None:
+        """Queue a batch of SETVALUE writes for serialized, ordered execution.
+
+        Called (in the event loop thread) by VimarEntity.change_state(). The
+        batch is a list of (status_id, value, optionals) tuples already in the
+        caller's intended order. A single worker task drains the queue one
+        batch at a time, guaranteeing global ordering and no overlap on the
+        shared Vimar SOAP session. See __init__ for the rationale.
+        """
+        self._ensure_write_worker()
+        self._write_queue.put_nowait(writes)
+
+    def _ensure_write_worker(self) -> None:
+        """Start the write worker lazily on first use / after cancellation."""
+        if self._write_worker_task is None or self._write_worker_task.done():
+            self._write_worker_task = self.hass.loop.create_task(self._write_worker())
+
+    async def _write_worker(self) -> None:
+        """Drain the write queue, executing one batch at a time, in order."""
+        while True:
+            writes = await self._write_queue.get()
+            try:
+                if self.vimarconnection is not None:
+                    await self.hass.async_add_executor_job(
+                        self._execute_device_writes, writes
+                    )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Vimar: error while writing device states")
+            finally:
+                self._write_queue.task_done()
+
+    def _execute_device_writes(self, writes: list[tuple[str, str, str]]) -> None:
+        """Send a batch of SETVALUE requests sequentially on one thread.
+
+        Runs in an executor thread. Order matters for thermostats: the
+        activating mode (funzionamento) must be sent before the setpoint so the
+        setpoint wins within a batch.
+        """
+        for status_id, value, optionals in writes:
+            self.vimarconnection.set_device_status(status_id, value, optionals)
+
+    async def async_shutdown_write_worker(self) -> None:
+        """Cancel the write worker (on unload/reload)."""
+        if self._write_worker_task is not None:
+            self._write_worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._write_worker_task
+            self._write_worker_task = None
 
     async def _async_update_data(self):
         """Fetch data from API endpoint."""

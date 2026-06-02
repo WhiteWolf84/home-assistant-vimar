@@ -314,6 +314,13 @@ class VimarClimate(VimarEntity, ClimateEntity):
         HEAT/COOL change only the season direction (stagione/regolazione).
         If currently OFF, also switch funzionamento to MANUAL to activate.
         The current preset (auto/eco/away/protection) is preserved when ON.
+
+        The setpoint is intentionally NOT written here. On activation the
+        thermostat regulates to its own stored manual setpoint; the setpoint is
+        owned solely by set_temperature(). Re-sending a cached setpoint
+        alongside the mode caused the well-known race where a stale value
+        overwrote an explicit set_temperature() issued in the same command
+        batch (see set_temperature docstring).
         """
         if hvac_mode == HVACMode.OFF:
             _LOGGER.info("Vimar Climate setting hvac_mode to off")
@@ -328,29 +335,19 @@ class VimarClimate(VimarEntity, ClimateEntity):
         )
         _LOGGER.info("Vimar Climate setting direction to %s", hvac_mode)
 
+        season_key = "stagione" if self.climate_type == "heat_cool" else "regolazione"
+
         if not self.is_on:
-            # Device is OFF: activate in manual mode with the chosen direction
-            if self.climate_type == "heat_cool":
-                self.change_state(
-                    "funzionamento",
-                    self.get_const_value(VIMAR_CLIMATE_MANUAL),
-                    "stagione",
-                    direction,
-                    "setpoint",
-                    self.target_temperature,
-                )
-            else:
-                self.change_state(
-                    "funzionamento",
-                    self.get_const_value(VIMAR_CLIMATE_MANUAL),
-                    "regolazione",
-                    direction,
-                    "setpoint",
-                    self.target_temperature,
-                )
+            # Device is OFF: activate in manual mode with the chosen direction.
+            # No setpoint write: the device keeps its stored manual setpoint.
+            self.change_state(
+                "funzionamento",
+                self.get_const_value(VIMAR_CLIMATE_MANUAL),
+                season_key,
+                direction,
+            )
         else:
             # Device is ON: change direction only, preserve operating mode (preset)
-            season_key = "stagione" if self.climate_type == "heat_cool" else "regolazione"
             self.change_state(season_key, direction)
 
     async def async_set_temperature(self, **kwargs) -> None:

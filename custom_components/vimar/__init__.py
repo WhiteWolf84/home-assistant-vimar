@@ -199,6 +199,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.entry_id not in hass.data[DOMAIN]:
         return True
     coordinator: VimarDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    await coordinator.async_shutdown_write_worker()
     platforms = list(coordinator.devices_for_platform.keys())
     unloaded = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unloaded and entry.entry_id in hass.data[DOMAIN]:

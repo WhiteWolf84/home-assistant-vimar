@@ -180,28 +180,18 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         self._device["status"][state]["status_value"] = str(value)
         return (status_id, str(value), optionals)
 
-    def _write_states_sequentially(self, writes: list[tuple[str, str, str]]) -> None:
-        """Send SETVALUE requests one at a time, in order, on one thread.
-
-        FIX: previously each value was dispatched via a separate
-        async_add_executor_job() call (fire-and-forget). With multiple
-        executor worker threads the SETVALUE requests reached the webserver
-        in non-deterministic order. For thermostats this corrupted writes:
-        e.g. applying funzionamento=MANUAL after the setpoint made the
-        firmware reload its stored manual setpoint, discarding the value just
-        written. Running the writes sequentially on a single executor thread
-        guarantees the caller's order (setpoint last wins).
-        """
-        for status_id, value, optionals in writes:
-            self._vimarconnection.set_device_status(status_id, value, optionals)
-
     def change_state(self, *args, **kwargs):
         """Change state on bus system and the local device state.
 
-        All values are written to the bus by a single executor job that sends
-        the SETVALUE requests sequentially, preserving the order in which they
-        are passed here. Order matters for thermostats: the activating mode
-        (funzionamento) must be sent before the setpoint so the setpoint wins.
+        Writes are not sent here directly: they are enqueued (in order) onto
+        the coordinator's single global write queue, which drains one batch at
+        a time on one executor thread. This guarantees two things:
+        - all SETVALUE requests are applied in the exact order change_state()
+          was called, even across separate commands fired together (e.g.
+          set_hvac_mode + set_temperature from one automation/scene);
+        - writes never overlap on the shared SOAP session.
+        Order matters for thermostats: the activating mode (funzionamento) must
+        be sent before the setpoint so the setpoint wins.
         """
         if self._device is None or "status" not in self._device:
             self._logger.warning(
@@ -225,7 +215,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
                     writes.append(write)
 
         if writes:
-            self.hass.async_add_executor_job(self._write_states_sequentially, writes)
+            self.coordinator.enqueue_device_writes(writes)
             self.request_statemachine_update()
 
     def get_state(self, state):
