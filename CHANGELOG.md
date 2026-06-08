@@ -10,6 +10,26 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.1] - 2026-06-08
+
+### Changed
+
+- **SAI2 alarm — PIN handling reworked, no global PIN stored.** Removed the single `SAI PIN` option. The code is forwarded to the SAI2 control unit as the user PIN, so each person can use their own PIN and the panel logs the operation against the right user. Existing `sai_pin` values are ignored.
+- **No keypad by default** (`code_format = None`): a logged-in Home Assistant user with a mapped PIN arms/disarms with a single tap.
+
+### Added
+
+- **Options step "Alarm PIN per user"** that maps each Home Assistant user to their SAI2 PIN, plus a **fallback PIN for automations** used when a command has no explicit `code` and no user in context (trigger-based automations, which run without a user). PINs are stored in plain text in the config entry (same protection as the VIMAR admin password — filesystem permissions on `.storage`).
+- **Up-front PIN validation** via `service-vimarsai2authenticate`: a wrong PIN is reported immediately and unambiguously, before any command is sent. Confirmed on hardware that the set service returns `DPCM-0000` even with a wrong PIN, so its response alone cannot detect a bad code.
+- **Localized persistent notification** on alarm command failures (wrong PIN, no response, area unavailable), in addition to the raised error, so failures aren't easy to miss; cleared automatically on the next successful command.
+- Translated alarm exception messages across all 7 languages.
+
+### Internal
+
+- `VimarLink.authenticate_sai2_pin()`; `set_sai2_status()` now returns the parsed result code. The alarm panel uses authenticate-first and resolves the PIN as `explicit code → logged-in user's PIN → automation fallback`, serializes commands per area, and surfaces failures via translated `HomeAssistantError`/`ServiceValidationError`. Removed `CONF_SAI_PIN`; added `CONF_USER_PINS` and `CONF_AUTOMATION_PIN`.
+
+---
+
 ## [2026.6.0] - 2026-06-02
 
 ### Fixed
