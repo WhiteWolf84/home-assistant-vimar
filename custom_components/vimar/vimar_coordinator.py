@@ -51,6 +51,11 @@ from .vimarlink.vimarlink import VimarLink, VimarProject
 
 log = _LOGGER
 
+# How long (seconds) a slim-poll is blocked from overwriting a status_id after
+# change_state() enqueues a write. The VIMAR hardware typically applies a
+# SETVALUE within 8-10 s; 15 s gives comfortable headroom.
+_WRITE_GUARD_SECONDS = 15.0
+
 
 class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the API."""
@@ -99,6 +104,12 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._write_queue: asyncio.Queue[list[tuple[str, str, str]]] = asyncio.Queue()
         self._write_worker_task: asyncio.Task | None = None
 
+        # Write-guard: maps status_id → expiry timestamp (monotonic).
+        # While now < expiry, slim-poll skips overwriting this status_id so
+        # the optimistic value set by change_state() is not bounced back by a
+        # poll that reads stale hardware state. Cleared lazily in _apply_slim_results.
+        self._pending_write_guards: dict[str, float] = {}
+
         refresh = vimarconfig.get(CONF_ENERGY_REFRESH_INTERVAL)
         self._energy_refresh_interval: float = (
             float(refresh) if refresh is not None else float(DEFAULT_ENERGY_REFRESH_INTERVAL)
@@ -130,8 +141,18 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         caller's intended order. A single worker task drains the queue one
         batch at a time, guaranteeing global ordering and no overlap on the
         shared Vimar SOAP session. See __init__ for the rationale.
+
+        Each status_id in the batch is registered in _pending_write_guards so
+        that _apply_slim_results() skips overwriting the optimistic value until
+        the hardware has had time to process the write (see _WRITE_GUARD_SECONDS).
         """
         self._ensure_write_worker()
+        expiry = time.monotonic() + _WRITE_GUARD_SECONDS
+        for status_id, _value, _optionals in writes:
+            # Normalize to str: _apply_slim_results looks up guards with a
+            # str-ified status_id, so storing a non-str key (if status_id ever
+            # became an int) would silently never match.
+            self._pending_write_guards[str(status_id)] = expiry
         self._write_queue.put_nowait(writes)
 
     def _ensure_write_worker(self) -> None:
@@ -457,7 +478,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 self.vimarproject.sai2_zone_values = fresh_zone_values
 
     def _apply_slim_results(self, devices: dict, slim_results: list) -> None:
-        """Patch CURRENT_VALUE from slim poll into existing device tree."""
+        """Patch CURRENT_VALUE from slim poll into existing device tree.
+
+        Guarded status_ids (written optimistically by change_state() and not yet
+        processed by the hardware) are skipped so the optimistic value is not
+        bounced back by a poll that still reads the pre-write hardware state.
+        Guards expire after _WRITE_GUARD_SECONDS and are cleaned up lazily here.
+        """
         index: dict[str, tuple[str, str]] = {}
         for device_id, device in devices.items():
             for status_name, status in device.get("status", {}).items():
@@ -465,10 +492,22 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 if sid is not None:
                     index[str(sid)] = (device_id, status_name)
 
+        now = time.monotonic()
+        # Sweep expired guards: a status_id written once and never polled again
+        # (e.g. device removed by a topology change) would otherwise linger in
+        # the dict forever, since cleanup below only fires when the sid recurs.
+        if self._pending_write_guards:
+            self._pending_write_guards = {
+                k: v for k, v in self._pending_write_guards.items() if v > now
+            }
         for row in slim_results:
             sid = str(row.get("status_id", ""))
             val = row.get("status_value")
             if sid in index:
+                # After the sweep above, every remaining guard is still in
+                # flight (expiry > now), so its presence alone means skip.
+                if sid in self._pending_write_guards:
+                    continue  # write in flight — keep optimistic value
                 dev_id, sname = index[sid]
                 devices[dev_id]["status"][sname]["status_value"] = val
 
@@ -489,6 +528,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._consecutive_auth_failures = 0
         self._reauth_triggered = False
         self._device_state_hashes = {}
+        self._pending_write_guards = {}
         self.devices_for_platform = {}
         vimarconfig = self.vimarconfig
         schema = "https" if vimarconfig.get(CONF_SECURE) else "http"
