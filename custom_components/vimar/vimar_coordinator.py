@@ -145,9 +145,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             writes = await self._write_queue.get()
             try:
                 if self.vimarconnection is not None:
-                    await self.hass.async_add_executor_job(
-                        self._execute_device_writes, writes
-                    )
+                    await self.hass.async_add_executor_job(self._execute_device_writes, writes)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Vimar: error while writing device states")
             finally:
