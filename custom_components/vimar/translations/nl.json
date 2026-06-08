@@ -101,5 +101,22 @@
       "regex_not_valid": "Ongeldige reguliere expressie",
       "unknown": "Onbekende fout opgetreden"
     }
+  },
+  "exceptions": {
+    "sai2_no_pin_for_user": {
+      "message": "Geen pincode beschikbaar. Voer de code in op het toetsenblok of koppel een pincode aan uw gebruiker in de integratie-opties."
+    },
+    "sai2_wrong_pin": {
+      "message": "Verkeerde pincode. De SAI2-centrale heeft deze pincode niet geaccepteerd."
+    },
+    "sai2_command_rejected": {
+      "message": "De SAI2-centrale heeft de opdracht geweigerd (resultaat {code})."
+    },
+    "sai2_no_response": {
+      "message": "De SAI2-centrale reageerde niet. Controleer de verbinding met de Vimar-webserver."
+    },
+    "sai2_not_available": {
+      "message": "Het SAI2-alarm is momenteel niet beschikbaar."
+    }
   }
 }

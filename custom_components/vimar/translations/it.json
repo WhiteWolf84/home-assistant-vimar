@@ -93,6 +93,16 @@
         "data": {
           "delete_and_reload_all_entities": "Forza ricaricamento di tutte le entità (prossimo riavvio)"
         }
+      },
+      "pins": {
+        "title": "PIN allarme per utente",
+        "description": "Associa un utente di Home Assistant al suo PIN allarme SAI2, così potrà inserire/disinserire senza digitarlo. Scegli un utente, inserisci il PIN e conferma; spunta Rimuovi per cancellarlo. Conferma vuoto per saltare. PIN già impostati: {count} ({users}).",
+        "data": {
+          "user": "Utente Home Assistant",
+          "pin": "PIN SAI2",
+          "remove": "Rimuovi il PIN di questo utente",
+          "automation_pin": "PIN di riserva per le automazioni (senza utente/codice)"
+        }
       }
     },
     "error": {
@@ -101,6 +111,23 @@
       "invalid_cert": "Errore SSL",
       "regex_not_valid": "Espressione regolare non valida",
       "unknown": "Si è verificato un errore sconosciuto"
+    }
+  },
+  "exceptions": {
+    "sai2_no_pin_for_user": {
+      "message": "Nessun PIN disponibile. Inserisci il codice sul tastierino oppure associa un PIN al tuo utente nelle opzioni dell'integrazione."
+    },
+    "sai2_wrong_pin": {
+      "message": "PIN errato. La centrale SAI2 non ha accettato questo PIN."
+    },
+    "sai2_command_rejected": {
+      "message": "La centrale SAI2 ha rifiutato il comando (esito {code})."
+    },
+    "sai2_no_response": {
+      "message": "La centrale SAI2 non ha risposto. Controlla la connessione al web server Vimar."
+    },
+    "sai2_not_available": {
+      "message": "L'allarme SAI2 non è disponibile al momento."
     }
   }
 }

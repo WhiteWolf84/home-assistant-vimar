@@ -16,11 +16,19 @@ from homeassistant.const import (
     CONF_VERIFY_SSL,
 )
 from homeassistant.core import callback
-from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 from homeassistant.util import slugify
 
 from .const import (
     _LOGGER,
+    CONF_AUTOMATION_PIN,
     CONF_CERTIFICATE,
     CONF_COVER_POSITION_MODE,
     CONF_DELETE_AND_RELOAD_ALL_ENTITIES,
@@ -31,11 +39,11 @@ from .const import (
     CONF_GLOBAL_CHANNEL_ID,
     CONF_IGNORE_PLATFORM,
     CONF_OVERRIDE,
-    CONF_SAI_PIN,
     CONF_SCHEMA,
     CONF_SECURE,
     CONF_TITLE,
     CONF_USE_VIMAR_NAMING,
+    CONF_USER_PINS,
     COVER_POSITION_MODES,
     DEFAULT_CERTIFICATE,
     DEFAULT_COVER_POSITION_MODE,
@@ -294,9 +302,74 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._init_schema(user_input, get_schema_options_three(user_input or self.options))
 
         if user_input is not None and not self.errors:
-            return self._async_save_options()
+            self._options_update()
+            return await self.async_step_pins()
 
         return self._async_show_form_step("three")
+
+    async def async_step_pins(self, user_input=None):
+        """Associate an HA user with their SAI2 alarm PIN.
+
+        The mapping {user_id: pin} lets a logged-in HA user arm/disarm with
+        their own PIN without typing it. PINs are stored in plain text (same
+        protection as the VIMAR admin password). Submit empty to skip.
+        """
+        self._ensure_options_initialized()
+        user_pins: dict = dict(self.options.get(CONF_USER_PINS, {}))
+        automation_pin: str = self.options.get(CONF_AUTOMATION_PIN, "")
+
+        # Build the selectable HA users (active, human accounts).
+        ha_users = await self.hass.auth.async_get_users()
+        selectable = [u for u in ha_users if u.is_active and not u.system_generated and u.name]
+        user_options = [
+            SelectOptionDict(
+                value=u.id,
+                label=u.name + (" — PIN impostato" if u.id in user_pins else ""),
+            )
+            for u in selectable
+        ]
+
+        if user_input is not None:
+            selected = user_input.get("user")
+            pin = (user_input.get("pin") or "").strip()
+            if selected:
+                if user_input.get("remove"):
+                    user_pins.pop(selected, None)
+                elif pin:
+                    user_pins[selected] = pin
+            if user_pins:
+                self.options[CONF_USER_PINS] = user_pins
+            else:
+                self.options.pop(CONF_USER_PINS, None)
+
+            auto_pin = (user_input.get(CONF_AUTOMATION_PIN) or "").strip()
+            if auto_pin:
+                self.options[CONF_AUTOMATION_PIN] = auto_pin
+            else:
+                self.options.pop(CONF_AUTOMATION_PIN, None)
+            return self._async_save_options()
+
+        schema = vol.Schema(
+            {
+                vol.Optional("user"): SelectSelector(SelectSelectorConfig(options=user_options)),
+                vol.Optional("pin"): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+                vol.Optional("remove", default=False): bool,
+                vol.Optional(
+                    CONF_AUTOMATION_PIN,
+                    description={"suggested_value": automation_pin},
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+            }
+        )
+        return self.async_show_form(
+            step_id="pins",
+            data_schema=schema,
+            description_placeholders={
+                "count": str(len(user_pins)),
+                "users": ", ".join(u.name for u in selectable if u.id in user_pins) or "—",
+            },
+        )
 
 
 def set_errors_from_ex(ex: Exception, errors: dict[str, str]):
@@ -347,10 +420,6 @@ def get_schema_config_user(config: dict | None = None) -> dict:
         ): bool,
         vol.Required(CONF_USERNAME, description=get_vol_descr(config, CONF_USERNAME)): str,
         vol.Required(CONF_PASSWORD, description=get_vol_descr(config, CONF_PASSWORD)): str,
-        vol.Optional(
-            CONF_SAI_PIN,
-            description=get_vol_descr(config, CONF_SAI_PIN),
-        ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
         vol.Optional(
             CONF_CERTIFICATE,
             description=get_vol_descr(config, CONF_CERTIFICATE, DEFAULT_CERTIFICATE),

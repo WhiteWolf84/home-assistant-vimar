@@ -12,7 +12,6 @@
           "verify_ssl": "Verify SSL certificate",
           "username": "Username",
           "password": "Password",
-          "sai_pin": "SAI alarm PIN (optional)",
           "certificate": "Custom certificate path (optional)"
         }
       },
@@ -69,7 +68,6 @@
           "verify_ssl": "Verify SSL",
           "username": "Username",
           "password": "Password",
-          "sai_pin": "SAI alarm PIN",
           "certificate": "Certificate path"
         }
       },
@@ -95,6 +93,16 @@
         "data": {
           "delete_and_reload_all_entities": "Force reload all entities (next restart)"
         }
+      },
+      "pins": {
+        "title": "Alarm PIN per user",
+        "description": "Map a Home Assistant user to their SAI2 alarm PIN so they can arm/disarm without typing it. Pick a user, enter their PIN and submit; tick Remove to delete it. Submit empty to skip. PINs already set: {count} ({users}).",
+        "data": {
+          "user": "Home Assistant user",
+          "pin": "SAI2 PIN",
+          "remove": "Remove this user's PIN",
+          "automation_pin": "Fallback PIN for automations (no user/code)"
+        }
       }
     },
     "error": {
@@ -103,6 +111,23 @@
       "invalid_cert": "SSL error",
       "regex_not_valid": "Invalid regular expression",
       "unknown": "Unknown error occurred"
+    }
+  },
+  "exceptions": {
+    "sai2_no_pin_for_user": {
+      "message": "No PIN available. Enter the code on the keypad, or map a PIN to your user in the integration options."
+    },
+    "sai2_wrong_pin": {
+      "message": "Wrong PIN. The SAI2 control unit did not accept this PIN."
+    },
+    "sai2_command_rejected": {
+      "message": "The SAI2 control unit rejected the command (result {code})."
+    },
+    "sai2_no_response": {
+      "message": "The SAI2 control unit did not respond. Check the connection to the Vimar web server."
+    },
+    "sai2_not_available": {
+      "message": "The SAI2 alarm is not available right now."
     }
   }
 }

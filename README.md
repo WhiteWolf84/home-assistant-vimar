@@ -59,7 +59,7 @@ Configuration is fully managed via the Home Assistant UI.
 After initial setup, click **Configure** on the integration to adjust:
 
 - **Cover Position Mode:** `auto` (default), `native`, `time_based`, or `legacy`
-- **SAI PIN:** 4-digit PIN for the SAI2 alarm system (required for alarm control)
+- **Alarm PIN per user:** map each Home Assistant user to their SAI2 PIN, plus an optional fallback PIN for automations (see the [SAI2 Alarm System](#-sai2-alarm-system) section)
 - **Ignored Platforms:** Exclude specific platforms from discovery
 
 ## 🎯 Supported Devices
@@ -73,7 +73,7 @@ After initial setup, click **Configure** on the integration to adjust:
 | **Sensor** | Power meters, Energy guards, Temperature | ✅ Full Support |
 | **Media Player** | Audio zones | ✅ Full Support |
 | **Scene** | Vimar scenes | ✅ Full Support |
-| **Alarm Control Panel** | SAI2 alarm areas — arm/disarm, multi-area, PIN protected | ✅ Full Support |
+| **Alarm Control Panel** | SAI2 alarm areas — arm/disarm, multi-area, per-user PIN | ✅ Full Support |
 | **Binary Sensor** | SAI2 alarm zone sensors (door contacts, motion, tamper) + connection status | ✅ Full Support |
 
 ## 🚨 SAI2 Alarm System
@@ -93,7 +93,10 @@ Each SAI2 area is exposed as an `alarm_control_panel` entity supporting:
 
 **Features:**
 - Multi-area support — each SAI2 group is a separate entity
-- PIN protection via integration configuration
+- **No global PIN stored** — the code is forwarded to the SAI2 control unit as the user PIN, so each person can use their own PIN and the panel logs the operation against the right user
+- **PIN validated up-front** via `service-vimarsai2authenticate`: a wrong PIN is reported immediately and clearly (the set command always acknowledges with `DPCM-0000`, even for a wrong PIN, so the response alone can't be trusted)
+- **Per-user PIN mapping** — a logged-in HA user with a mapped PIN arms/disarms with a single tap (no keypad); others and automations pass the code explicitly or use the fallback PIN
+- **Persistent notification** (localized) on command failures, so errors aren't easy to miss
 - Automatic disarm-before-rearm when switching between armed modes
 - Live state from DPADD_OBJECT bitmask polling
 - All entities grouped under a single **SAI Alarm** device
@@ -113,8 +116,12 @@ Each SAI2 zone is exposed as a `binary_sensor` with automatic device class detec
 
 ### Setup
 
-1. Configure the **SAI PIN** in integration options (the numeric code used on the Vimar web interface)
-2. Alarm entities appear automatically after integration reload
+1. Alarm entities appear automatically after integration reload — reading state needs no PIN.
+2. Arming/disarming requires the SAI2 PIN (the same code used on the Vimar web interface). The integration does **not** store a single global PIN; instead, in **Configure → Alarm PIN per user**:
+   - map each Home Assistant user to their own SAI2 PIN → that user arms/disarms with one tap, and
+   - optionally set a **fallback PIN for automations**, used when a command has no explicit `code` and no user in context (trigger-based automations).
+
+   You can always pass the PIN explicitly as the service `code`, e.g. `alarm_control_panel.alarm_arm_away` with `data: { code: "1234" }`.
 3. Zone sensors update via slim poll (real-time parent bitmask)
 
 ## 🏠 Cover Position Tracking
@@ -241,9 +248,10 @@ logger:
 **Problem:** Alarm entities appear but commands fail
 
 **Solutions:**
-1. Verify the **SAI PIN** is correct in integration options
+1. Verify the SAI2 PIN is correct — a wrong PIN now surfaces a clear "wrong PIN" error and notification. Set it per-user (or the automation fallback) in **Configure → Alarm PIN per user**, or pass it as the service `code`
 2. Check that the Vimar web server user has SAI access permissions
-3. Enable debug logging for `custom_components.vimar.alarm_control_panel`
+3. For trigger-based automations, make sure a `code` is passed or the **fallback PIN for automations** is configured (automations run without a user, so per-user PINs don't apply)
+4. Enable debug logging for `custom_components.vimar.alarm_control_panel`
 
 ## 🌍 Internationalization
 

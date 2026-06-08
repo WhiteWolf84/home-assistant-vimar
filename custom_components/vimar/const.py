@@ -15,7 +15,14 @@ CONF_SECURE = "secure"
 CONF_CERTIFICATE = "certificate"
 CONF_GLOBAL_CHANNEL_ID = "global_channel_id"
 CONF_IGNORE_PLATFORM = "ignore"
-CONF_SAI_PIN = "sai_pin"
+# Mapping {ha_user_id: sai2_pin} so a logged-in HA user's own SAI2 PIN is used
+# automatically. Stored as plain text in the config entry (same protection as
+# the VIMAR admin password — filesystem permissions on .storage).
+CONF_USER_PINS = "user_pins"
+# Fallback SAI2 PIN used when a command has no explicit code and no user in
+# context (i.e. trigger-based automations). Lets alarm automations work without
+# hard-coding the PIN in each one. Plain text, same protection as above.
+CONF_AUTOMATION_PIN = "automation_pin"
 
 DEFAULT_USERNAME = "admin"
 DEFAULT_SCHEMA = "https"

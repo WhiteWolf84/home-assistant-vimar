@@ -118,7 +118,7 @@ class VimarLink:
             "Content-Type": "application/x-www-form-urlencoded",
             "Expect": "",
         }
-        post = f"sessionid={self._session_id}" "&op=getjScriptEnvironment&context=runtime"
+        post = f"sessionid={self._session_id}&op=getjScriptEnvironment&context=runtime"
         return self._request_vimar(post, "vimarbyweb/modules/system/dpadaction.php", headers)
 
     def _build_runonelement(self, object_id, payload, optionals, operation):
@@ -188,19 +188,23 @@ class VimarLink:
             return parse_sql_payload(payload.text)
         return None
 
-    def set_sai2_status(self, command: int, area_index: int, pin: str) -> bool:
+    def set_sai2_status(self, command: int, area_index: int, pin: str) -> str | None:
         """Send SAI2 alarm command via dedicated SOAP service.
 
-        Uses service-vimarsai2allgroupsset which includes the PIN
-        explicitly in each request.
+        Uses service-vimarsai2allgroupsset, forwarding the PIN in each request.
+        IMPORTANT (confirmed on hardware): this service returns DPCM-0000 even
+        when the PIN is wrong, so the result does NOT prove the PIN was valid or
+        that the command took effect. Validate the PIN first with
+        authenticate_sai2_pin(); each user may have a different PIN.
 
         Args:
             command: 0=OFF (disarm), 1=ON, 2=INT, 3=PAR
             area_index: 1-based area number (1, 2, 3, ...)
-            pin: SAI alarm PIN code
+            pin: SAI alarm PIN code (forwarded to the control unit)
 
         Returns:
-            True if server accepted the command, False otherwise.
+            The result code string ("DPCM-0000" when accepted), or None if the
+            server gave no usable response.
         """
         # Build bitmask: area 1 = "00000001", area 2 = "00000010", etc.
         bitmask = 1 << (area_index - 1)
@@ -228,7 +232,7 @@ class VimarLink:
         response = self._request_vimar_soap(post)
         if response is None or response is False:
             _LOGGER.error("SAI2: no response from server")
-            return False
+            return None
 
         # Log full response for debugging
         try:
@@ -239,7 +243,60 @@ class VimarLink:
         except Exception:
             pass
 
-        return True
+        # Parse the result code. "DPCM-0000" means the web server accepted the
+        # request. NOTE (confirmed on real hardware): this service returns
+        # DPCM-0000 even when the PIN is wrong, so it does NOT validate the PIN.
+        # Validate the PIN up-front with authenticate_sai2_pin() instead.
+        result = response.find(".//result")
+        result_code = (result.text or "").strip() if result is not None else None
+        if result_code != "DPCM-0000":
+            _LOGGER.error(
+                "SAI2: command %d on area %d rejected, result=%s",
+                command,
+                area_index,
+                result_code,
+            )
+        return result_code
+
+    def authenticate_sai2_pin(self, pin: str) -> str | None:
+        """Validate a SAI2 user PIN via service-vimarsai2authenticate.
+
+        Unlike the set service, this endpoint validates the PIN explicitly and
+        immediately. Confirmed on real hardware:
+            correct PIN -> result "DPCM-0000", usercode is the user index
+            wrong PIN   -> result "SAI2-3127", usercode "UnknownUserCode"
+
+        Args:
+            pin: SAI alarm user PIN to validate.
+
+        Returns:
+            The result code string ("DPCM-0000" when the PIN is valid), or
+            None if the server gave no usable response.
+        """
+        post = (
+            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<soapenv:Body><service-vimarsai2authenticate xmlns="urn:xmethods-dpadws">'
+            "<payload>NO-PAYLOAD</payload><hashcode>NO-HASCHODE</hashcode>"
+            "<optionals>NO-OPTIONAL</optionals><callsource>WEB-DOMUSPAD_SOAP</callsource>"
+            f"<sessionid>{self._session_id}</sessionid><waittime>5</waittime>"
+            f"<pin>{pin}</pin>"
+            "</service-vimarsai2authenticate></soapenv:Body></soapenv:Envelope>"
+        )
+
+        response = self._request_vimar_soap(post)
+        if response is None or response is False:
+            _LOGGER.error("SAI2: no response from authenticate")
+            return None
+
+        result = response.find(".//result")
+        result_code = (result.text or "").strip() if result is not None else None
+        usercode = response.find(".//usercode")
+        _LOGGER.debug(
+            "SAI2 authenticate: result=%s usercode=%s",
+            result_code,
+            usercode.text if usercode is not None else "n/a",
+        )
+        return result_code
 
     def request_value_refresh(self, object_ids):
         """Trigger a GETVALUE on each status object id.
@@ -701,8 +758,7 @@ class VimarLink:
     def _request_vimar(self, post: str, path: str, headers: dict):
         """Prepare call to Vimar webserver."""
         url = (
-            f"{self._connection._schema}://{self._connection._host}"
-            f":{self._connection._port}/{path}"
+            f"{self._connection._schema}://{self._connection._host}:{self._connection._port}/{path}"
         )
         response = self._connection._request(url, post, headers)
 

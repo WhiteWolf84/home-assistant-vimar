@@ -101,5 +101,22 @@
       "regex_not_valid": "Ungültiger regulärer Ausdruck",
       "unknown": "Unbekannter Fehler aufgetreten"
     }
+  },
+  "exceptions": {
+    "sai2_no_pin_for_user": {
+      "message": "Kein PIN verfügbar. Geben Sie den Code über das Tastenfeld ein oder ordnen Sie Ihrem Benutzer in den Integrationsoptionen einen PIN zu."
+    },
+    "sai2_wrong_pin": {
+      "message": "Falsche PIN. Die SAI2-Zentrale hat diese PIN nicht akzeptiert."
+    },
+    "sai2_command_rejected": {
+      "message": "Die SAI2-Zentrale hat den Befehl abgelehnt (Ergebnis {code})."
+    },
+    "sai2_no_response": {
+      "message": "Die SAI2-Zentrale hat nicht geantwortet. Überprüfen Sie die Verbindung zum Vimar-Webserver."
+    },
+    "sai2_not_available": {
+      "message": "Die SAI2-Alarmanlage ist derzeit nicht verfügbar."
+    }
   }
 }
