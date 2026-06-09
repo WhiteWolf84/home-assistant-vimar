@@ -453,11 +453,11 @@ def get_schema_options_init(config: dict | None = None) -> dict:
 
 def get_schema_options_two(config: dict | None = None) -> dict:
     """Return the options schema for timing, platform and naming settings."""
-    if config is None:
-        config = {}
-    config = config if CONF_TIMEOUT in config else None
-    if config and not config.get(CONF_SCAN_INTERVAL):
-        config[CONF_SCAN_INTERVAL] = DEFAULT_SCAN_INTERVAL
+    # Treat an incomplete config (no connection settings yet) as absent so the
+    # fields fall back to their defaults. A missing CONF_SCAN_INTERVAL is then
+    # handled by the default passed to get_vol_descr below — no need to mutate
+    # the caller's dict (which could be the live self.options) to inject it.
+    config = config if config and CONF_TIMEOUT in config else None
     domains = sorted(PLATFORMS)
     schema = {
         vol.Required(
