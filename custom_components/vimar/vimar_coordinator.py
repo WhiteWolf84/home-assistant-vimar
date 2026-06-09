@@ -232,10 +232,21 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         self._last_device_count = len(devices)
                         self._slim_poll_active = True
                         _LOGGER.debug(
-                            "Vimar: discovery complete - %d devices, %d status IDs indexed for slim poll",
+                            "Vimar: discovery complete - %d devices, %d status IDs indexed "
+                            "for slim poll, %d energy meter refresh IDs",
                             len(devices),
                             len(self._known_status_ids),
+                            len(self._energy_refresh_ids),
                         )
+                        if not self._energy_refresh_ids:
+                            # No energy refresh IDs after a full discovery means
+                            # either there are no energy meters, or their status
+                            # rows were missing from the discovery payload. The
+                            # slim-poll self-heal can no longer help here (it
+                            # rebuilds from the same tree), so surface it.
+                            _LOGGER.debug(
+                                "Vimar: no energy meter refresh IDs collected at discovery"
+                            )
                 else:
                     _LOGGER.debug("Vimar: slim poll (%d status IDs)", len(self._known_status_ids))
                     await self._maybe_refresh_energy_meters()
@@ -423,7 +434,29 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _maybe_refresh_energy_meters(self) -> None:
         """Send GETVALUE to energy meter statuses if the throttle elapsed."""
-        if self._energy_refresh_interval <= 0 or not self._energy_refresh_ids:
+        if self._energy_refresh_interval <= 0:
+            return
+
+        # Self-heal: _energy_refresh_ids is normally populated only in the
+        # full-discovery branch. If a reload/re-auth leaves the slim poll
+        # active without ever re-running discovery, the list can stay empty
+        # and the GETVALUE refresh dies SILENTLY: energy meters freeze on a
+        # stale value until the user opens the native VIMAR UI by hand (which
+        # issues the GETVALUE for us). Rebuild the list from the current device
+        # tree so a long-lived slim poll recovers on its own. If there are
+        # genuinely no energy meters, _collect_energy_refresh_ids returns []
+        # and we fall through to the silent return below (no spurious warning).
+        if not self._energy_refresh_ids and self.vimarproject is not None:
+            rebuilt = self._collect_energy_refresh_ids(self.vimarproject.devices)
+            if rebuilt:
+                _LOGGER.warning(
+                    "Vimar: energy refresh id list was empty during slim poll; "
+                    "rebuilt %d ids from the device tree (meters were not refreshing)",
+                    len(rebuilt),
+                )
+                self._energy_refresh_ids = rebuilt
+
+        if not self._energy_refresh_ids:
             return
         now = time.monotonic()
         if now - self._last_energy_refresh < self._energy_refresh_interval:
