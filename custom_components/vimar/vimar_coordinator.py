@@ -116,6 +116,20 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         )
         if self._energy_refresh_interval < 0:
             self._energy_refresh_interval = 0.0
+        if self._energy_refresh_interval <= 0:
+            # Energy meters will FREEZE on a stale value with no auto-recovery:
+            # the GETVALUE refresh is disabled. This is a valid config (0 = off)
+            # but a common foot-gun set via the options flow, so make it loud.
+            _LOGGER.warning(
+                "Vimar: energy meter GETVALUE refresh is DISABLED "
+                "(%s=0); energy/power sensors will not update until re-enabled",
+                CONF_ENERGY_REFRESH_INTERVAL,
+            )
+        else:
+            _LOGGER.debug(
+                "Vimar: energy meter refresh interval = %.0fs",
+                self._energy_refresh_interval,
+            )
 
         timeout = vimarconfig.get(CONF_TIMEOUT) or DEFAULT_TIMEOUT
         if timeout > 0:
