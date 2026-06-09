@@ -147,6 +147,15 @@ class VimarConnection:
 
         return result if isinstance(result, str) else None
 
+    def invalidate_session(self) -> None:
+        """Drop the cached session ID so the next check_login() re-authenticates.
+
+        The webserver can expire a session server-side (SQL requests then
+        return LGMG-3019 with an Unknown-Payload body); without dropping the
+        stale ID, check_login() keeps reusing it forever.
+        """
+        self._session_id = None
+
     def is_logged(self) -> bool:
         """Check if session is available."""
         return self._session_id is not None
