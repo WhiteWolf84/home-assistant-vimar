@@ -60,6 +60,7 @@ from .const import (
     PLATFORMS,
 )
 from .vimar_coordinator import VimarDataUpdateCoordinator
+from .vimarlink.exceptions import VimarConfigError, VimarConnectionError
 
 
 class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -376,8 +377,40 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
 
 def set_errors_from_ex(ex: Exception, errors: dict[str, str]):
-    """Map exceptions to user-friendly error messages."""
+    """Map an exception raised during validation to a form error key.
+
+    Classify by exception TYPE first: the VIMAR server rejecting the login
+    (wrong user/password) raises VimarConfigError, a network/parse failure
+    raises VimarConnectionError. This is robust against wording changes in the
+    server-returned messages, unlike the previous pure string matching.
+
+    Two cases the types can't yet distinguish are handled by message first:
+    - SSL/cert errors surface as a VimarConnectionError whose message mentions
+      "SSLError", so they must be caught before the generic connection mapping.
+    - A failed certificate save is a plain VimarApiError.
+
+    String matching is kept only as a fallback for untyped/legacy exceptions.
+    """
     exstr = str(ex)
+
+    # Message-first cases (the type hierarchy can't disambiguate these yet).
+    if "SSLError" in exstr:
+        errors["base"] = "invalid_cert"
+        return
+    if "Saving certificate failed" in exstr:
+        errors["base"] = "save_cert_failed"
+        return
+
+    # Type-based classification. VimarConfigError and VimarConnectionError are
+    # both subclasses of VimarApiError, so check the specific types first.
+    if isinstance(ex, VimarConfigError):
+        errors["base"] = "invalid_auth"
+        return
+    if isinstance(ex, VimarConnectionError):
+        errors["base"] = "cannot_connect"
+        return
+
+    # Fallback string matching for untyped/legacy exceptions.
     if "Log In Fallito" in exstr:  # message returned from vimar
         errors["base"] = "invalid_auth"
     elif (
@@ -385,12 +418,9 @@ def set_errors_from_ex(ex: Exception, errors: dict[str, str]):
         or "Client Error:" in exstr
         or "ConnectTimeoutError" in exstr
         or "NewConnectionError" in exstr
-    ) or "HTTP timeout occurred" in exstr:
+        or "HTTP timeout occurred" in exstr
+    ):
         errors["base"] = "cannot_connect"
-    elif "SSLError" in exstr:
-        errors["base"] = "invalid_cert"
-    elif "Saving certificate failed" in exstr:
-        errors["base"] = "save_cert_failed"
     else:
         _LOGGER.error("Unexpected error during validation: %s", exstr)
         errors["base"] = "unknown"
