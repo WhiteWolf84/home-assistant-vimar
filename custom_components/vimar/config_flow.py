@@ -17,6 +17,9 @@ from homeassistant.const import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -456,7 +459,19 @@ def get_schema_options_two(config: dict | None = None) -> dict:
             description=get_vol_descr(
                 config, CONF_ENERGY_REFRESH_INTERVAL, DEFAULT_ENERGY_REFRESH_INTERVAL
             ),
-        ): int,
+        ): NumberSelector(
+            # Seconds between energy-meter GETVALUE refreshes. 0 disables the
+            # refresh (meters then freeze on a stale value), so the floor is 0
+            # but never negative. BOX mode keeps a plain numeric input; the
+            # range guard prevents the silent foot-gun of a junk/negative value.
+            NumberSelectorConfig(
+                min=0,
+                max=3600,
+                step=1,
+                unit_of_measurement="s",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
         vol.Optional(
             CONF_GLOBAL_CHANNEL_ID, description=get_vol_descr(config, CONF_GLOBAL_CHANNEL_ID)
         ): int,
