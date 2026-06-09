@@ -397,24 +397,37 @@ def set_errors_from_ex(ex: Exception, errors: dict[str, str]):
 
 
 def get_vol_default(config: dict | None, key, default=None):
-    if config:
-        return config.get(key) or vol.UNDEFINED
-    return default or vol.UNDEFINED
+    """Return the stored value for key, else the default, else vol.UNDEFINED.
+
+    A stored falsy value (0, False, "") is an intentional choice and must
+    round-trip back into the form. The previous `config.get(key) or UNDEFINED`
+    dropped every falsy value, so e.g. an energy refresh interval of 0 or a
+    Secure=False toggle silently lost its pre-fill when the form was reopened.
+    Only a genuinely missing key (None) falls through to the default.
+    """
+    if config is not None:
+        value = config.get(key)
+        if value is not None:
+            return value
+    return default if default is not None else vol.UNDEFINED
 
 
 def get_vol_descr(config: dict | None, key, default=None):
     def_value = get_vol_default(config, key, default)
-    res = ({"suggested_value": def_value}) if def_value and def_value is not vol.UNDEFINED else {}
-    return res
+    if def_value is vol.UNDEFINED:
+        return {}
+    return {"suggested_value": def_value}
 
 
 def get_schema_config_user(config: dict | None = None) -> dict:
-    """Return a shcema configuration dict for HACS."""
+    """Return the schema for the initial connection/credentials step."""
     config = config if config and CONF_HOST in config else None
     schema = {
         vol.Required(CONF_TITLE, description=get_vol_descr(config, CONF_TITLE)): str,
         vol.Required(CONF_HOST, description=get_vol_descr(config, CONF_HOST)): str,
-        vol.Required(CONF_PORT, description=get_vol_descr(config, CONF_PORT, DEFAULT_PORT)): int,
+        vol.Required(
+            CONF_PORT, description=get_vol_descr(config, CONF_PORT, DEFAULT_PORT)
+        ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
         vol.Required(
             CONF_SECURE, description=get_vol_descr(config, CONF_SECURE, DEFAULT_SECURE)
         ): bool,
@@ -432,14 +445,14 @@ def get_schema_config_user(config: dict | None = None) -> dict:
 
 
 def get_schema_options_init(config: dict | None = None) -> dict:
-    """Return a shcema configuration dict for HACS."""
+    """Return the options schema for the connection/credentials step."""
     schema = get_schema_config_user(config=config)
     schema.pop(CONF_TITLE, "")
     return schema
 
 
 def get_schema_options_two(config: dict | None = None) -> dict:
-    """Return a shcema configuration dict for HACS."""
+    """Return the options schema for timing, platform and naming settings."""
     if config is None:
         config = {}
     config = config if CONF_TIMEOUT in config else None
@@ -449,11 +462,11 @@ def get_schema_options_two(config: dict | None = None) -> dict:
     schema = {
         vol.Required(
             CONF_TIMEOUT, description=get_vol_descr(config, CONF_TIMEOUT, DEFAULT_TIMEOUT)
-        ): int,
+        ): vol.All(vol.Coerce(int), vol.Range(min=2, max=60)),
         vol.Required(
             CONF_SCAN_INTERVAL,
             description=get_vol_descr(config, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-        ): int,
+        ): vol.All(vol.Coerce(int), vol.Range(min=1, max=300)),
         vol.Required(
             CONF_ENERGY_REFRESH_INTERVAL,
             description=get_vol_descr(
@@ -474,7 +487,7 @@ def get_schema_options_two(config: dict | None = None) -> dict:
         ),
         vol.Optional(
             CONF_GLOBAL_CHANNEL_ID, description=get_vol_descr(config, CONF_GLOBAL_CHANNEL_ID)
-        ): int,
+        ): vol.All(vol.Coerce(int), vol.Range(min=1, max=99999)),
         vol.Optional(
             CONF_IGNORE_PLATFORM, description=get_vol_descr(config, CONF_IGNORE_PLATFORM)
         ): cv.multi_select(domains),
@@ -503,7 +516,7 @@ def get_schema_options_two(config: dict | None = None) -> dict:
 
 
 def get_schema_options_three(config: dict | None = None) -> dict:
-    """Return a shcema configuration dict for HACS."""
+    """Return the options schema for the delete-and-reload-entities toggle."""
     schema = {
         vol.Optional(
             CONF_DELETE_AND_RELOAD_ALL_ENTITIES,
