@@ -733,11 +733,13 @@ class VimarLink:
 
         result = response.find(".//result")
         result_code = (result.text or "").strip() if result is not None else None
-        if result_code is not None and not result_code.startswith("DBMG"):
-            # e.g. LGMG-3019: session expired server-side. The payload is
-            # "Unknown-Payload" and unparseable; drop the stale session so the
-            # next coordinator cycle re-authenticates instead of failing and
-            # spamming the log every poll.
+        # Successful SQL responses carry result=DPCM-0000 in the <result> tag
+        # (the DBMG-000 code lives inside the payload's "Response:" line).
+        # LGMG-* codes (e.g. LGMG-3019) mean the session expired server-side:
+        # the payload is "Unknown-Payload" and unparseable, so drop the stale
+        # session so the next coordinator cycle re-authenticates instead of
+        # failing and spamming the log every poll.
+        if result_code is not None and result_code.startswith("LGMG"):
             _LOGGER.warning(
                 "SQL request rejected by webserver (result=%s); "
                 "invalidating session to force re-login",
@@ -754,7 +756,7 @@ class VimarLink:
         parsed_data = parse_sql_payload(payload.text)
         if parsed_data is None:
             _LOGGER.warning(
-                "Received invalid data from SQL: %s from post: %.300s",
+                "Received invalid data from SQL: %s from post: %s",
                 ElementTree.tostring(response, encoding="unicode"),
                 post,
             )
