@@ -10,6 +10,15 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.3] - 2026-06-11
+
+### Fixed
+
+- **Polling no longer gets stuck after a server-side session expiry**: the VIMAR webserver can expire a session on its own; when that happens, SQL polls return result code `LGMG-3019` with an `Unknown-Payload` body. Previously `check_login()` only checked that a session ID was cached, so the stale session was reused forever and every poll cycle logged two warnings without ever recovering. `_request_vimar_sql` now inspects the `<result>` code: an `LGMG-*` code invalidates the cached session so the next coordinator cycle re-authenticates automatically.
+- **Fixed false-positive "SQL request rejected" warnings introduced by the above fix**: successful SQL responses also carry a non-`DBMG` code (`DPCM-0000`) in the `<result>` tag, which the first iteration of the fix mistook for a session error on every poll. Session invalidation is now triggered only by `LGMG-*` result codes; all other codes proceed to normal payload parsing.
+
+---
+
 ## [2026.6.1] - 2026-06-08
 
 ### Changed
