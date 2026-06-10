@@ -19,6 +19,23 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.2] - 2026-06-09
+
+### Fixed
+
+- **Energy meters could freeze permanently after a reload/re-auth**: the periodic GETVALUE refresh relies on a list of meter IDs that is only populated during full discovery. If a reload kept the coordinator on slim polling without ever re-running discovery, the list stayed empty and energy/power sensors silently froze on a stale value until the VIMAR native UI was opened by hand. The slim poll now rebuilds the list from the live device tree when it's empty (with a warning), and the discovery step logs how many meter IDs it collected.
+- **Energy refresh interval `0` (which disables the periodic refresh) had no warning and no input guard**: the options field is now a `NumberSelector` (0–3600s) instead of a raw unbounded `int`, and a warning is logged at startup if the refresh is disabled, so the freeze above is diagnosable and harder to trigger by accident.
+- Hardened the write-guard bookkeeping used to suppress stale polled values right after a write: guard keys are normalized to `str` at enqueue time, and expired guards are swept proactively instead of lingering for status IDs that are never polled again (e.g. after a topology change).
+- Config flow option fields (port, timeout, scan interval, global channel ID) now validate their numeric ranges instead of accepting any integer.
+- Reopening the options form no longer drops intentionally-set falsy values (energy refresh interval `0`, `Secure=False`) back to their defaults.
+
+### Internal
+
+- `config_flow.set_errors_from_ex` now classifies login/connection errors primarily by exception type (`VimarConfigError` → `invalid_auth`, `VimarConnectionError` → `cannot_connect`) instead of relying on message text, with string matching kept only as a fallback (SSL/cert-save cases). Added `tests/integration/test_config_flow_errors.py` covering the classification.
+- Removed an in-place mutation of the live options dict in the options-flow schema builder.
+
+---
+
 ## [2026.6.1] - 2026-06-08
 
 ### Changed
