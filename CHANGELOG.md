@@ -10,6 +10,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.4] - 2026-06-12
+
+### Internal
+
+- `cover.py` refactor: `_tb_position=None` is now guarded centrally in `_tb_start_tracking`, so `open_cover`/`close_cover` issued before `async_added_to_hass` can no longer raise `TypeError` (previously only `set_cover_position` was protected). Merged the duplicated LEGACY/native branches in `is_closed` and `current_cover_position`, rewrote `is_default_state` in readable form, added a missing `super()` call in `async_will_remove_from_hass`, accepted string values in the `set_travel_times` service schema via `vol.Coerce(int)`, and added HA 2026.5-style type hints. No behavior change in time-based tracking.
+
+---
+
 ## [2026.6.3] - 2026-06-11
 
 ### Fixed
