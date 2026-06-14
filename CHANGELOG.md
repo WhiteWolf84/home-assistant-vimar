@@ -10,6 +10,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.5] - 2026-06-14
+
+### Fixed
+
+- Thermostat setpoint (and Type I `stagione` season) are now written with `NO-OPTIONALS` instead of `SYNCDB`. With `SYNCDB` the setpoint was written only to the webserver database and the By-me thermostat did **not** recompute its outputs, so Home Assistant showed the new setpoint while the device stayed latched on its previous state (e.g. "stuck cooling" with the measured temperature already on the idle side of the setpoint). `NO-OPTIONALS` matches the native VIMAR web UI and makes the firmware re-evaluate the thermostat and publish the recomputed output state within a few seconds (the DB value is still updated). Verified on hardware (01945) via an A/B test on a stuck thermostat. `regolazione` (Type II season) was already `NO-OPTIONALS`; `unita`/`temporizzazione` and the media_player states keep `SYNCDB`.
+
+---
+
 ## [2026.6.4] - 2026-06-12
 
 ### Internal
