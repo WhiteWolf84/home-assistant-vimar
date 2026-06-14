@@ -339,10 +339,32 @@ class VimarLink:
         return ok
 
     def get_optionals_param(self, state):
-        """Return SYNCDB for climate states."""
+        """Return the SETVALUE optionals flag for a given state.
+
+        NOTE on 'setpoint': the native VIMAR web UI writes the thermostat
+        setpoint with NO-OPTIONALS (confirmed by sniffing the By-web UI:
+        service-runonelement SETVALUE idobject=<setpoint> optionals=NO-OPTIONALS).
+        With NO-OPTIONALS the firmware re-evaluates the thermostat and pushes the
+        recomputed output state (stato_principale_condizionamento/riscaldamento)
+        back into the DB within a few seconds. With SYNCDB the value is written
+        to the webserver DB only and the outputs are NOT recomputed, so HA shows
+        the new setpoint while the thermostat stays latched on its previous
+        output state ("stuck cooling/heating"). Verified on hardware (01945)
+        2026-06-14 by A/B testing both flags on a stuck thermostat: SYNCDB left
+        the output flag unchanged, NO-OPTIONALS flipped it within ~7s. This
+        supersedes the 2026-05-31 SYNCDB+GETVALUE-prime approach (see
+        set_device_status), which did not actually recompute the outputs.
+
+        NOTE on 'stagione': this is the heat/cool season key for Type I
+        (heat_cool) thermostats, the exact analogue of 'regolazione' on Type II
+        (heat_cool_fancoil) thermostats. 'regolazione' already uses NO-OPTIONALS
+        and is confirmed to drive the physical outputs correctly, so 'stagione'
+        uses NO-OPTIONALS too for consistency (a season change is a control write
+        that must reach the device and recompute outputs, like the setpoint).
+        Not A/B tested on hardware here: this installation has only Type II
+        thermostats, so no 'stagione' device was available.
+        """
         if state in [
-            "setpoint",
-            "stagione",
             "unita",
             "temporizzazione",
             "channel",
