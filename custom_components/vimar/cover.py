@@ -390,11 +390,25 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             send_stop_command = False
 
         elif self._tb_target is not None:
+            # Compensate the relay/stop latency: after STOP is sent the shutter
+            # keeps travelling for ~RELAY_DELAY seconds. Issue the STOP that much
+            # of the travel *before* the target so the shutter coasts onto it
+            # instead of overshooting. The start side is already compensated in
+            # _tb_calculate_position; without this matching stop-side margin the
+            # asymmetry made partial moves drift open over time (HA showed e.g.
+            # 40% while the shutter sat higher). End stops (0/100) are excluded:
+            # there the shutter is meant to reach its mechanical limit.
+            travel_time = (
+                self._travel_time_up
+                if self._tb_operation == "opening"
+                else self._travel_time_down
+            )
+            stop_margin = (RELAY_DELAY / travel_time) * 100 if travel_time else 0
             if (
                 self._tb_operation == "opening"
-                and self._tb_position >= self._tb_target
+                and self._tb_position >= self._tb_target - stop_margin
                 or self._tb_operation == "closing"
-                and self._tb_position <= self._tb_target
+                and self._tb_position <= self._tb_target + stop_margin
             ):
                 self._tb_position = self._tb_target
                 should_stop = True
