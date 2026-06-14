@@ -17,6 +17,10 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 - Thermostat setpoint (and Type I `stagione` season) are now written with `NO-OPTIONALS` instead of `SYNCDB`. With `SYNCDB` the setpoint was written only to the webserver database and the By-me thermostat did **not** recompute its outputs, so Home Assistant showed the new setpoint while the device stayed latched on its previous state (e.g. "stuck cooling" with the measured temperature already on the idle side of the setpoint). `NO-OPTIONALS` matches the native VIMAR web UI and makes the firmware re-evaluate the thermostat and publish the recomputed output state within a few seconds (the DB value is still updated). Verified on hardware (01945) via an A/B test on a stuck thermostat. `regolazione` (Type II season) was already `NO-OPTIONALS`; `unita`/`temporizzazione` and the media_player states keep `SYNCDB`.
 - Time-based covers no longer drift open over repeated partial moves. The relay/stop latency was compensated only at the start of a move, not at the stop, so each partial open ran the motor ~0.5s too long and the shutter physically overshot the target (Home Assistant showed e.g. 40% while the shutter sat higher). The STOP is now issued a matching margin before the target so the shutter coasts onto it. End stops (0%/100%) are unaffected.
 
+### Added
+
+- Time-based covers now recover when Home Assistant is restarted mid-movement. Previously a partial-position move whose STOP was lost to the restart left the shutter running to a mechanical end while HA restored a stale intermediate position. The in-flight movement is now persisted; on restart the affected cover does a full close to a known 0 reference and then reopens to the position it was heading to. Only the cover that was actually moving is touched; a hard crash (no clean shutdown) falls back to the previous behaviour and is fixed by the next full close.
+
 ---
 
 ## [2026.6.4] - 2026-06-12

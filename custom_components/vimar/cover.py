@@ -3,6 +3,7 @@
 Configurazione travel times tramite UI di ogni singola cover!
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -118,6 +119,10 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Timestamp ultimo STOP inviato da HA (grace period)
         self._tb_ha_stop_time: datetime | None = None
 
+        # Recovery dopo riavvio interrotto a metà movimento (vedi _async_recalibrate)
+        self._recalibration_pending = False
+        self._recalibration_target: int | None = None
+
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
         self._travel_time_down = DEFAULT_TRAVEL_TIME_DOWN
@@ -221,6 +226,20 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             else:
                 self._tb_position = 0
                 _LOGGER.info("%s: New cover, default position: 0%% (closed)", self.name)
+
+            # Se il riavvio ha interrotto un movimento, lo STOP pendente non e'
+            # mai partito e la tapparella e' andata a fondo-corsa: marca la
+            # ricalibrazione, eseguita appena la connessione e' pronta.
+            if old_state and old_state.attributes.get("needs_recalibration"):
+                self._recalibration_pending = True
+                self._recalibration_target = old_state.attributes.get("recalibration_target")
+                _LOGGER.warning(
+                    "%s: restart interrupted a movement -> will recalibrate "
+                    "(full close, then reopen to target=%s)",
+                    self.name,
+                    self._recalibration_target,
+                )
+                self._maybe_start_recalibration()
         else:
             mode = self._get_position_mode()
             if mode == COVER_POSITION_MODE_LEGACY:
@@ -244,7 +263,44 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         """Handle updated data from coordinator."""
         super()._handle_coordinator_update()
         if self._use_time_based_tracking():
+            # Esegui una ricalibrazione pendente appena la connessione e' pronta
+            # (in async_added_to_hass potrebbe non esserlo ancora).
+            self._maybe_start_recalibration()
             self._tb_check_vimar_state()
+
+    def _maybe_start_recalibration(self):
+        """Avvia la ricalibrazione post-riavvio se pendente e la cover e' pronta."""
+        if self._recalibration_pending and self.available:
+            self._recalibration_pending = False
+            target = self._recalibration_target
+            self._recalibration_target = None
+            self.hass.async_create_task(self._async_recalibrate(target))
+
+    async def _async_recalibrate(self, target: int | None):
+        """Recupera dopo un riavvio che ha interrotto un movimento.
+
+        Lo STOP pendente e' andato perso al riavvio, quindi la tapparella ha
+        fatto overrun fino a un fondo-corsa meccanico (posizione reale ignota).
+        Forziamo una chiusura a CORSA PIENA per raggiungere lo 0 certo da
+        qualsiasi punto (partendo da 100 cosi' il motore gira per tutto
+        travel_time_down), poi riapriamo alla posizione verso cui era diretta.
+        """
+        _LOGGER.warning(
+            "%s: recalibrating after interrupted movement (resume target=%s)",
+            self.name,
+            target,
+        )
+        # Forza una chiusura a corsa piena: la posizione reale e' ignota, quindi
+        # parti da 100 per garantire il raggiungimento del fondo-corsa.
+        self._tb_position = 100
+        await self.async_close_cover()
+        # Attendi che la chiusura completa raggiunga il fondo-corsa.
+        await asyncio.sleep(self._travel_time_down + RELAY_DELAY + 2)
+        # Riapri verso la posizione obiettivo interrotta (se intermedia).
+        if target is not None and 0 < target < 100:
+            await self.async_set_cover_position(**{ATTR_POSITION: target})
+        elif target == 100:
+            await self.async_open_cover()
 
     def _tb_check_vimar_state(self):
         """Controlla stato Vimar e gestisci movimenti fisici."""
@@ -563,6 +619,15 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if self._use_time_based_tracking():
             attrs["travel_time_up"] = self._travel_time_up
             attrs["travel_time_down"] = self._travel_time_down
+            # Persist in-flight movement so a restart mid-move can recover.
+            # If HA is restarted while moving, the pending STOP is never sent and
+            # the shutter overruns to a mechanical end. RestoreEntity saves these
+            # attributes (incl. on clean shutdown), so on restart we can detect it
+            # and recalibrate (full close to 0, then reopen to the target).
+            if self._tb_operation is not None:
+                attrs["needs_recalibration"] = True
+                if self._tb_target is not None:
+                    attrs["recalibration_target"] = self._tb_target
         return attrs
 
     async def async_close_cover(self, **kwargs):
