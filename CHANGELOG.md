@@ -10,6 +10,18 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.7] - 2026-06-15
+
+### Fixed
+
+- Time-based covers: definitive fix for the drift and the micro-movements (replaces the 2026.6.5 attempt reverted in 2026.6.6). The root causes were identified from Home Assistant history: (1) the position jumped to 0%/100% because the post-STOP grace period (`6s`) was shorter than the polling interval (`8s`), so the first poll after a stop fell *outside* the grace and mistook the latched `up/down` value for a physical button press; (2) the stop-overshoot compensation, although analytically correct, turned small position nudges into start-then-immediate-stop relay pulses. The grace period is now computed as `max(GRACE_SECONDS, poll_interval + margin)` so the first post-STOP poll always lands inside the grace and resyncs the latch, and the stop-overshoot compensation is paired with a deadband — both derived from the same relay-coast quantity (`RELAY_DELAY / travel`) — so any move that passes the deadband can never stop at its first tick. Partial moves now land on target without creeping open and without micro-movements. Validated on hardware (01945). The "recover position when restarted mid-movement" feature from 2026.6.5 is intentionally **not** reintroduced (end-stop open/close already recalibrate); a corrected version may follow.
+
+### Note
+
+- Includes the cover revert from 2026.6.6 and the 2026.6.5 thermostat `NO-OPTIONALS` fix.
+
+---
+
 ## [2026.6.6] - 2026-06-15
 
 ### Reverted
