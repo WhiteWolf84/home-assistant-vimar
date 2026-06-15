@@ -3,6 +3,7 @@
 Configurazione travel times tramite UI di ogni singola cover!
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -53,6 +54,19 @@ GRACE_MARGIN = 4  # Margine oltre l'intervallo di polling per il grace period:
 # Chiavi per storage entity options
 CONF_TRAVEL_TIME_UP = "travel_time_up"
 CONF_TRAVEL_TIME_DOWN = "travel_time_down"
+
+# Recovery post-riavvio (vedi _async_recover): se HA riavvia mentre una cover
+# time-based sta muovendo, lo STOP pendente non parte e la tapparella prosegue
+# fino al fondo-corsa meccanico. Al riavvio guidiamo la cover al fondo-corsa
+# nella direzione in cui stava andando (riferimento certo) e riprendiamo verso
+# il target interrotto. RECOVERY_MAX_AGE_SECONDS scarta flag troppo vecchi
+# (es. HA spento per ore): oltre questa eta' il "target interrotto" non e' piu'
+# rilevante e si rischia un movimento a sorpresa non voluto.
+RECOVERY_MAX_AGE_SECONDS = 1800
+# Attributi persistiti via RestoreEntity SOLO durante un movimento.
+ATTR_RECOVERY_DIRECTION = "tb_recovery_direction"
+ATTR_RECOVERY_TARGET = "tb_recovery_target"
+ATTR_RECOVERY_TS = "tb_recovery_ts"
 
 
 async def async_setup_entry(
@@ -126,6 +140,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # (target o fondo-corsa raggiunto): _tb_stop_tracking non deve
         # ricalcolarla dal tempo trascorso.
         self._tb_planned_stop = False
+
+        # Recovery post-riavvio interrotto a meta' movimento (vedi _async_recover)
+        self._recovery_pending = False
+        self._recovery_direction: str | None = None
+        self._recovery_target: int | None = None
 
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
@@ -230,6 +249,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             else:
                 self._tb_position = 0
                 _LOGGER.info("%s: New cover, default position: 0%% (closed)", self.name)
+
+            # Se il riavvio ha interrotto un movimento, programma il recupero.
+            if old_state is not None:
+                self._detect_pending_recovery(old_state)
+                self._maybe_start_recovery()
         else:
             mode = self._get_position_mode()
             if mode == COVER_POSITION_MODE_LEGACY:
@@ -253,6 +277,9 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         """Handle updated data from coordinator."""
         super()._handle_coordinator_update()
         if self._use_time_based_tracking():
+            # Avvia un recovery pendente appena la connessione e' pronta
+            # (in async_added_to_hass self.available potrebbe non esserlo ancora).
+            self._maybe_start_recovery()
             self._tb_check_vimar_state()
 
     def _grace_seconds(self) -> float:
@@ -268,6 +295,149 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if interval is None:
             return GRACE_SECONDS
         return max(GRACE_SECONDS, interval.total_seconds() + GRACE_MARGIN)
+
+    def _detect_pending_recovery(self, old_state) -> None:
+        """Rileva dallo stato ripristinato un movimento interrotto dal riavvio.
+
+        Arma il recovery solo se gli attributi in volo sono presenti e il
+        timestamp e' fresco (< RECOVERY_MAX_AGE_SECONDS): un flag vecchio (es.
+        HA spento per ore, o lasciato da un dump periodico prima di un crash)
+        non e' affidabile e verrebbe ignorato per non muovere a sorpresa.
+        """
+        direction = old_state.attributes.get(ATTR_RECOVERY_DIRECTION)
+        if direction not in ("opening", "closing"):
+            return
+
+        ts_raw = old_state.attributes.get(ATTR_RECOVERY_TS)
+        if not ts_raw:
+            # Senza timestamp non possiamo valutare la freschezza: troppo
+            # rischioso, non recuperiamo.
+            _LOGGER.debug("%s: recovery flag senza timestamp, ignorato", self.name)
+            return
+        try:
+            age = (datetime.now() - datetime.fromisoformat(ts_raw)).total_seconds()
+        except (ValueError, TypeError):
+            _LOGGER.debug("%s: recovery timestamp non valido (%s), ignorato", self.name, ts_raw)
+            return
+        if age < 0 or age > RECOVERY_MAX_AGE_SECONDS:
+            _LOGGER.info(
+                "%s: recovery flag scartato (eta' %.0fs fuori range 0..%ds)",
+                self.name,
+                age,
+                RECOVERY_MAX_AGE_SECONDS,
+            )
+            return
+
+        target_raw = old_state.attributes.get(ATTR_RECOVERY_TARGET)
+        try:
+            target = int(target_raw) if target_raw is not None else None
+        except (ValueError, TypeError):
+            target = None
+
+        self._recovery_direction = direction
+        self._recovery_target = target
+        self._recovery_pending = True
+        _LOGGER.warning(
+            "%s: movimento interrotto dal riavvio rilevato (%s, target=%s, eta' %.0fs) "
+            "-> recupero programmato",
+            self.name,
+            direction,
+            target,
+            age,
+        )
+
+    def _maybe_start_recovery(self) -> None:
+        """Avvia il recovery se pendente e la cover e' pronta (one-shot).
+
+        Eseguito sia in async_added_to_hass sia ad ogni coordinator update:
+        la transizione pending->False e' sincrona (nessun await in mezzo),
+        quindi il task di recupero non puo' partire due volte.
+        """
+        if self._recovery_pending and self.available:
+            self._recovery_pending = False
+            direction = self._recovery_direction
+            target = self._recovery_target
+            self._recovery_direction = None
+            self._recovery_target = None
+            self.hass.async_create_task(self._async_recover(direction, target))
+
+    async def _tb_wait_idle(self, timeout: float) -> bool:
+        """Attende la fine del tracking (operation None) o lo scadere del timeout.
+
+        Ritorna True se e' diventato idle, False se e' scaduto il timeout.
+        """
+        loop = self.hass.loop
+        deadline = loop.time() + timeout
+        while self._tb_operation is not None:
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(POSITION_UPDATE_INTERVAL)
+        return True
+
+    async def _async_recover(self, direction: str | None, target: int | None) -> None:
+        """Recupera la posizione dopo un riavvio che ha interrotto un movimento.
+
+        Lo STOP pendente e' andato perso: la tapparella ha proseguito verso il
+        fondo-corsa nella direzione in cui stava andando (overshoot). Non
+        sappiamo dove si sia fermata, quindi la guidiamo a quel fondo-corsa
+        (riferimento meccanico certo) assumendo lo scenario peggiore (cover
+        all'estremo opposto), cosi' la corsa a tempo copre l'intera tratta ed e'
+        garantito il raggiungimento del fine-corsa. Poi riprendiamo verso il
+        target interrotto, ma SOLO se la corsa di recupero e' arrivata
+        indisturbata (idle ed esattamente sul fondo-corsa): se nel frattempo un
+        comando esterno/pulsante e' intervenuto, lasciamo perdere il resume.
+        """
+        if direction not in ("opening", "closing"):
+            return
+        # Se nel frattempo un movimento e' gia' in corso (comando utente/automazione
+        # subito dopo l'avvio), non interferire: chi ha preso il controllo vince.
+        if self._tb_operation is not None:
+            _LOGGER.info("%s: recovery saltato, movimento gia' in corso (%s)", self.name, self._tb_operation)
+            return
+        opening = direction == "opening"
+        end_stop = 100 if opening else 0
+        travel = self._travel_time_up if opening else self._travel_time_down
+
+        _LOGGER.warning(
+            "%s: recovery -> guido al fondo-corsa %s%% (direzione %s), poi riprendo verso target=%s",
+            self.name,
+            end_stop,
+            direction,
+            target,
+        )
+
+        # Scenario peggiore: cover all'estremo opposto, cosi' la corsa a tempo
+        # copre tutta la tratta e raggiunge sicuramente il fine-corsa meccanico.
+        self._tb_position = 0 if opening else 100
+        if opening:
+            await self.async_open_cover()
+        else:
+            await self.async_close_cover()
+
+        # Attendi il completamento reale (fine-corsa), non uno sleep fisso.
+        if not await self._tb_wait_idle(timeout=travel + RELAY_DELAY + 5):
+            _LOGGER.warning(
+                "%s: recovery scaduto in attesa del fondo-corsa, resume annullato", self.name
+            )
+            return
+
+        # Resume solo se la corsa di recupero e' arrivata indisturbata.
+        if self._tb_operation is not None or self._tb_position != end_stop:
+            _LOGGER.info(
+                "%s: recovery interrotto da un comando esterno (op=%s, pos=%s) - niente resume",
+                self.name,
+                self._tb_operation,
+                self._tb_position,
+            )
+            return
+
+        # Riprendi verso il target interrotto solo se intermedio e diverso dal
+        # fondo-corsa gia' raggiunto (se il target era 0/100 abbiamo finito).
+        if target is not None and 0 < target < 100 and target != end_stop:
+            _LOGGER.info("%s: recovery completato, riprendo verso target %s%%", self.name, target)
+            await self.async_set_cover_position(**{ATTR_POSITION: target})
+        else:
+            _LOGGER.info("%s: recovery completato al fondo-corsa %s%%", self.name, end_stop)
 
     def _tb_check_vimar_state(self):
         """Controlla stato Vimar e gestisci movimenti fisici."""
@@ -610,6 +780,16 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if self._use_time_based_tracking():
             attrs["travel_time_up"] = self._travel_time_up
             attrs["travel_time_down"] = self._travel_time_down
+            # Persisti il movimento in volo SOLO mentre e' attivo: se HA riavvia
+            # ora, lo STOP pendente non parte e la tapparella va a fondo-corsa.
+            # RestoreEntity salva questi attributi (anche allo shutdown pulito);
+            # al riavvio _detect_pending_recovery li rilegge. A movimento finito
+            # _tb_operation torna None e gli attributi spariscono dallo stato
+            # salvato -> nessun recovery su uno spegnimento da fermo.
+            if self._tb_operation is not None and self._tb_start_time is not None:
+                attrs[ATTR_RECOVERY_DIRECTION] = self._tb_operation
+                attrs[ATTR_RECOVERY_TARGET] = self._tb_target
+                attrs[ATTR_RECOVERY_TS] = self._tb_start_time.isoformat()
         return attrs
 
     async def async_close_cover(self, **kwargs):
