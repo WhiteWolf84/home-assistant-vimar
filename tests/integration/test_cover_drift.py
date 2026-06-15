@@ -45,6 +45,8 @@ def _make_cover(travel_up=36, travel_down=35, position=50, poll_seconds=8):
     cover._tb_start_time = None
     cover._tb_start_position = None
     cover._tb_last_reported_position = position
+    cover._tb_unsub = None
+    cover._tb_planned_stop = False
     cover.name = "Test Cover"
 
     coordinator = MagicMock()
@@ -140,3 +142,66 @@ def test_stop_fires_with_overshoot_margin():
 
     assert cover._tb_position == 40  # snapped to target
     cover.hass.async_create_task.assert_called_once()  # STOP scheduled
+
+
+# --- end-stop regression (the "stuck at 1%" bug) --------------------------
+
+async def test_full_close_reaches_zero_not_one():
+    """A full close must reach exactly 0%, not stop a margin short at 1%."""
+    cover = _make_cover(travel_down=35, position=50)
+    cover._tb_operation = "closing"
+    cover._tb_target = 0  # end-stop: stop_margin must NOT apply
+    cover._tb_start_position = 50
+    cover._tb_start_time = datetime.now() - timedelta(seconds=100)  # well past 0
+
+    cover._tb_update_position(now=datetime.now())
+    assert cover._tb_position == 0
+    assert cover._tb_planned_stop is True
+
+    await cover._tb_stop_tracking()  # must NOT recalc back to ~1
+    assert cover._tb_position == 0
+
+
+async def test_full_open_reaches_hundred():
+    cover = _make_cover(travel_up=36, position=50)
+    cover._tb_operation = "opening"
+    cover._tb_target = 100
+    cover._tb_start_position = 50
+    cover._tb_start_time = datetime.now() - timedelta(seconds=100)
+
+    cover._tb_update_position(now=datetime.now())
+    assert cover._tb_position == 100
+    assert cover._tb_planned_stop is True
+
+    await cover._tb_stop_tracking()
+    assert cover._tb_position == 100
+
+
+async def test_planned_intermediate_stop_preserves_target():
+    """A planned stop on an intermediate target keeps the displayed = target."""
+    cover = _make_cover(travel_up=36, position=38)
+    cover._tb_operation = "opening"
+    cover._tb_target = 50
+    cover._tb_start_position = 38
+    # ~4.5s -> calc ~49, past the early-stop threshold (50 - margin ~1.39)
+    cover._tb_start_time = datetime.now() - timedelta(seconds=4.5)
+
+    cover._tb_update_position(now=datetime.now())
+    assert cover._tb_position == 50
+    assert cover._tb_planned_stop is True
+
+    await cover._tb_stop_tracking()  # must NOT recalc back to ~49
+    assert cover._tb_position == 50
+
+
+async def test_manual_stop_recalculates_position():
+    """An unplanned (manual/physical) stop must recalc the mid-travel position."""
+    cover = _make_cover(travel_down=35, position=80)
+    cover._tb_operation = "closing"
+    cover._tb_target = 0
+    cover._tb_start_position = 80
+    cover._tb_start_time = datetime.now() - timedelta(seconds=7)  # ~61%
+    cover._tb_planned_stop = False  # manual stop, not a planned target stop
+
+    await cover._tb_stop_tracking()
+    assert 55 <= cover._tb_position <= 67  # recalculated, not 0 and not 80

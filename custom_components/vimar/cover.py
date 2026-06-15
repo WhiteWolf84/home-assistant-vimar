@@ -122,6 +122,10 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_ha_command_active = False  # Flag per distinguere comandi HA da pulsanti fisici
         # Timestamp ultimo STOP inviato da HA (grace period)
         self._tb_ha_stop_time: datetime | None = None
+        # True quando _tb_update_position ha gia' finalizzato la posizione
+        # (target o fondo-corsa raggiunto): _tb_stop_tracking non deve
+        # ricalcolarla dal tempo trascorso.
+        self._tb_planned_stop = False
 
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
@@ -348,6 +352,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_ha_command_active = True
         # Reset grace period: un nuovo movimento annulla la finestra precedente
         self._tb_ha_stop_time = None
+        # Nuovo movimento: nessuno stop pianificato in sospeso.
+        self._tb_planned_stop = False
 
         if self._tb_unsub:
             self._tb_unsub()
@@ -373,7 +379,13 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             self._tb_unsub()
             self._tb_unsub = None
 
-        if self._tb_start_time:
+        if self._tb_planned_stop:
+            # Stop pianificato (target o fondo-corsa raggiunto): la posizione e'
+            # gia' finalizzata in _tb_update_position, NON ricalcolarla dal tempo
+            # (il ricalcolo la riporterebbe a target-margine: era la causa della
+            # chiusura piena ferma a 1% invece di 0%).
+            self._tb_planned_stop = False
+        elif self._tb_start_time:
             self._tb_calculate_position()
 
         _LOGGER.info("%s: Stopped at %s%%", self.name, self._tb_position)
@@ -426,11 +438,15 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             should_stop = True
             send_stop_command = False
 
-        elif self._tb_target is not None:
+        elif self._tb_target is not None and 0 < self._tb_target < 100:
             # Compensazione overshoot (FIX #2): anticipa lo STOP di stop_margin
-            # cosi' la tapparella plana sul target invece di superarlo. Il
-            # deadband in async_set_cover_position garantisce delta > stop_margin,
-            # quindi al primo tick (pos == start) non si ferma mai (no chatter).
+            # cosi' la tapparella plana sul target invece di superarlo. SOLO per
+            # target intermedi: i fondo-corsa 0/100 sono gestiti dai due rami
+            # sopra (devono raggiungere il fine-corsa meccanico esatto).
+            # Applicare il margine anche a 0/100 fermava la corsa ~1 punto prima
+            # del fondo (chiusura piena ferma a 1% invece di 0%). Il deadband in
+            # async_set_cover_position garantisce delta > stop_margin, quindi al
+            # primo tick (pos == start) non si ferma mai (no chatter).
             stop_margin = self._overshoot_pct(self._tb_operation == "opening")
             if (
                 self._tb_operation == "opening"
@@ -440,9 +456,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             ):
                 self._tb_position = self._tb_target
                 should_stop = True
-                send_stop_command = self._tb_target not in [0, 100]
+                send_stop_command = True
 
         if should_stop:
+            # Posizione finale gia' impostata sopra: _tb_stop_tracking non deve
+            # ricalcolarla (vedi _tb_planned_stop).
+            self._tb_planned_stop = True
             if send_stop_command:
                 _LOGGER.info("%s: Reached target %s%%, sending STOP", self.name, self._tb_position)
                 # FIX: async_stop_cover chiama già _tb_stop_tracking internamente,
