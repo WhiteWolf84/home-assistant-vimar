@@ -10,6 +10,18 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.6] - 2026-06-15
+
+### Reverted
+
+- Reverted the two time-based cover changes shipped in 2026.6.5 (`fix(cover): compensate stop overshoot` and `feat(cover): recover position when restarted mid-movement`). On real hardware they caused covers to make repeated micro-movements: the stop-overshoot margin turned small position nudges (e.g. from automations) into start-then-immediate-stop relay pulses, and the mid-movement recovery triggered full close+reopen cycles on restart. `cover.py` is restored byte-for-byte to the known-good 2026.6.4 behaviour. The original drift issue (partial opens creeping up over repeated moves) remains open and will be re-addressed on a separate branch with on-hardware validation.
+
+### Note
+
+- This release keeps the 2026.6.5 thermostat fix (setpoint / `stagione` season written with `NO-OPTIONALS` instead of `SYNCDB`).
+
+---
+
 ## [2026.6.5] - 2026-06-14
 
 ### Fixed
