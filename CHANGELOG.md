@@ -10,6 +10,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.8] - 2026-06-15
+
+### Fixed
+
+- Time-based covers got stuck ~1% short of their end-stops (regression introduced in 2026.6.7): a full close settled at 1% and reported "open", and pressing close again just bounced back to 1% — the closed-end recalibration never happened. Two causes: the stop-overshoot margin was applied to the 0%/100% end-stops too (stopping the run a margin before the mechanical limit), and `_tb_stop_tracking` recalculated the position from elapsed time, overriding the snap to the target. The margin is now applied only to intermediate targets (the 0%/100% end-stops are reached by their dedicated branches), and a planned stop preserves the finalized position while manual/physical interruptions still recalculate. Full open/close now reach exactly 100%/0%, and intermediate moves land on the exact target instead of a margin short. Verified on hardware (01945).
+
+---
+
 ## [2026.6.7] - 2026-06-15
 
 ### Fixed
