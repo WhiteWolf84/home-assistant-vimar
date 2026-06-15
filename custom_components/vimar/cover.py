@@ -39,11 +39,16 @@ DEFAULT_TRAVEL_TIME_DOWN = 26
 POSITION_UPDATE_INTERVAL = 0.2
 UI_UPDATE_THRESHOLD = 1  # Aggiorna UI ogni 1% di variazione
 RELAY_DELAY = 0.5  # Compensazione ritardo relè Vimar in secondi
-GRACE_SECONDS = 6  # Finestra di immunità post-STOP da HA:
+GRACE_SECONDS = 6  # Floor della finestra di immunità post-STOP da HA:
 # il webserver Vimar non espone metadati sulla sorgente
 # del comando (DPADD_OBJECT ha solo CURRENT_VALUE),
 # quindi sopprimiamo le detection di pulsante fisico
-# per GRACE_SECONDS dopo ogni stop inviato da HA.
+# dopo ogni stop inviato da HA. La durata effettiva e'
+# calcolata in _grace_seconds() in funzione del polling.
+GRACE_MARGIN = 4  # Margine oltre l'intervallo di polling per il grace period:
+# il primo poll dopo lo STOP DEVE cadere dentro il grace per
+# risincronizzare _tb_last_updown (altrimenti il latch up/down
+# viene scambiato per un pulsante fisico -> salti a 0/100).
 
 # Chiavi per storage entity options
 CONF_TRAVEL_TIME_UP = "travel_time_up"
@@ -246,6 +251,20 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if self._use_time_based_tracking():
             self._tb_check_vimar_state()
 
+    def _grace_seconds(self) -> float:
+        """Durata del grace period post-STOP, >= un ciclo di polling + margine.
+
+        Dopo uno STOP da HA il webserver lascia 'up/down' latchato sull'ultima
+        direzione: il primo poll successivo deve cadere DENTRO il grace per
+        risincronizzare _tb_last_updown senza scambiare il latch per un
+        pulsante fisico. Con un grace fisso < intervallo di polling questo non
+        era garantito (causa dei salti di posizione a 0/100, FIX #1).
+        """
+        interval = getattr(self.coordinator, "update_interval", None)
+        if interval is None:
+            return GRACE_SECONDS
+        return max(GRACE_SECONDS, interval.total_seconds() + GRACE_MARGIN)
+
     def _tb_check_vimar_state(self):
         """Controlla stato Vimar e gestisci movimenti fisici."""
         current_updown = self.get_state("up/down")
@@ -278,9 +297,10 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # 4. NON siamo nel grace period post-STOP di HA
         #    (il webserver Vimar non distingue la sorgente del comando:
         #    DPADD_OBJECT espone solo CURRENT_VALUE senza metadati di origine)
+        grace = self._grace_seconds()
         in_grace_period = (
             self._tb_ha_stop_time is not None
-            and (datetime.now() - self._tb_ha_stop_time).total_seconds() < GRACE_SECONDS
+            and (datetime.now() - self._tb_ha_stop_time).total_seconds() < grace
         )
 
         if current_updown != self._tb_last_updown and not self._tb_ha_command_active:
@@ -290,7 +310,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     self.name,
                     self._tb_last_updown,
                     current_updown,
-                    GRACE_SECONDS - (datetime.now() - self._tb_ha_stop_time).total_seconds(),
+                    grace - (datetime.now() - self._tb_ha_stop_time).total_seconds(),
                 )
             elif current_updown == "0":
                 self._tb_position = 100
@@ -371,6 +391,23 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
         self.async_write_ha_state()
 
+    def _overshoot_pct(self, opening: bool) -> float:
+        """Percentuale di corsa percorsa durante il ritardo relè allo STOP.
+
+        Dopo l'invio dello STOP il motore continua ~RELAY_DELAY secondi: questa
+        e' la corsa di "coasting" oltre il target. Lo start e' gia' compensato
+        in _tb_calculate_position; questa quantita' serve a:
+          - anticipare lo STOP di altrettanto (compensazione overshoot, FIX #2)
+            cosi' la tapparella plana sul target invece di superarlo;
+          - fare da deadband minimo in async_set_cover_position: un movimento
+            piu' piccolo di questo non e' posizionabile (la coda relè lo
+            supererebbe) e va ignorato per non far ticchettare i relè.
+        Legare le due cose alla STESSA grandezza garantisce che un movimento
+        che passa il deadband non possa mai fermarsi al primo tick (no chatter).
+        """
+        travel = self._travel_time_up if opening else self._travel_time_down
+        return (RELAY_DELAY / travel) * 100 if travel else 0.0
+
     @callback
     def _tb_update_position(self, now):
         """Aggiorna posizione durante tracking ogni 1%."""
@@ -390,11 +427,16 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             send_stop_command = False
 
         elif self._tb_target is not None:
+            # Compensazione overshoot (FIX #2): anticipa lo STOP di stop_margin
+            # cosi' la tapparella plana sul target invece di superarlo. Il
+            # deadband in async_set_cover_position garantisce delta > stop_margin,
+            # quindi al primo tick (pos == start) non si ferma mai (no chatter).
+            stop_margin = self._overshoot_pct(self._tb_operation == "opening")
             if (
                 self._tb_operation == "opening"
-                and self._tb_position >= self._tb_target
+                and self._tb_position >= self._tb_target - stop_margin
                 or self._tb_operation == "closing"
-                and self._tb_position <= self._tb_target
+                and self._tb_position <= self._tb_target + stop_margin
             ):
                 self._tb_position = self._tb_target
                 should_stop = True
@@ -591,10 +633,31 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             )
             self._tb_position = 0
 
-        if target > self._tb_position:
+        if target == self._tb_position:
+            return
+
+        opening = target > self._tb_position
+        delta = abs(target - self._tb_position)
+
+        # Deadband (FIX #2): un movimento <= alla coda relè non e' posizionabile
+        # (il coasting dopo lo STOP lo supererebbe) e produrrebbe solo un
+        # ticchettio del relè. Lo ignoriamo. La soglia e' la stessa quantita'
+        # usata per la compensazione overshoot, cosi' i due meccanismi sono
+        # coerenti e non si genera mai uno start+stop immediato.
+        if delta <= self._overshoot_pct(opening):
+            _LOGGER.debug(
+                "%s: set_position %s%% ignorato (delta %s%% <= coda relè %.1f%%, non posizionabile)",
+                self.name,
+                target,
+                delta,
+                self._overshoot_pct(opening),
+            )
+            return
+
+        if opening:
             await self._tb_start_tracking(True, target=target)
             self.change_state("up/down", "0")
-        elif target < self._tb_position:
+        else:
             await self._tb_start_tracking(False, target=target)
             self.change_state("up/down", "1")
 
