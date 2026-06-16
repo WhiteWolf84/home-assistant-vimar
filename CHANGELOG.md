@@ -10,6 +10,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.9] - 2026-06-16
+
+### Added
+
+- Time-based covers now recover their position when Home Assistant is restarted (or the integration reloaded) while a cover is moving. The pending STOP is otherwise lost, so the shutter overruns to a mechanical end-stop while HA restores a stale intermediate position. On restart the affected cover is driven to the end-stop **in the direction it was already travelling** — a guaranteed known reference, reached regardless of where it actually stopped — and then resumes to the position it was heading to. Only covers interrupted within the last 30 minutes are recovered (fresh-flag guard); a move already in progress, or an external command / physical button during recovery, takes precedence and skips the resume. This is a corrected rework of the recovery attempt reverted in 2026.6.6 (which forced a full close regardless of direction). Verified on hardware (01945).
+
+---
+
 ## [2026.6.8] - 2026-06-15
 
 ### Fixed
