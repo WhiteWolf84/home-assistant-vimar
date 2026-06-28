@@ -20,6 +20,7 @@ from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_COVER_POSITION_MODE,
@@ -146,6 +147,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._recovery_direction: str | None = None
         self._recovery_target: int | None = None
 
+        # Background task in volo (stop tracking / recovery). Tracciati sul
+        # registro core via async_create_background_task e cancellati in
+        # async_will_remove_from_hass, cosi' un reload/shutdown a meta' movimento
+        # non lascia task orfani che lanciano eccezioni a runtime.
+        self._background_tasks: set = set()
+
         # Travel times (saranno caricati in async_added_to_hass)
         self._travel_time_up = DEFAULT_TRAVEL_TIME_UP
         self._travel_time_down = DEFAULT_TRAVEL_TIME_DOWN
@@ -265,12 +272,27 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._tb_last_reported_position = self._tb_position
         _LOGGER.debug("%s: === async_added_to_hass END ===", self.name)
 
+    def _create_tracked_task(self, coro, name: str) -> None:
+        """Crea un background task tracciato dal core e auto-rimosso a fine vita.
+
+        Usa async_create_background_task (registrato sul core) invece di
+        async_create_task nudo: a un reload/shutdown a meta' movimento il task
+        viene cancellato in async_will_remove_from_hass invece di restare orfano.
+        """
+        task = self.hass.async_create_background_task(coro, name=name)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     async def async_will_remove_from_hass(self):
         """Cleanup when removed."""
         await super().async_will_remove_from_hass()
         if self._tb_unsub:
             self._tb_unsub()
             self._tb_unsub = None
+        # Cancella i task in volo (recovery / stop tracking) per non lasciarli
+        # orfani dopo un reload o uno shutdown a meta' movimento.
+        for task in list(self._background_tasks):
+            task.cancel()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -315,7 +337,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             _LOGGER.debug("%s: recovery flag senza timestamp, ignorato", self.name)
             return
         try:
-            age = (datetime.now() - datetime.fromisoformat(ts_raw)).total_seconds()
+            age = (dt_util.utcnow() - datetime.fromisoformat(ts_raw)).total_seconds()
         except (ValueError, TypeError):
             _LOGGER.debug("%s: recovery timestamp non valido (%s), ignorato", self.name, ts_raw)
             return
@@ -359,7 +381,9 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             target = self._recovery_target
             self._recovery_direction = None
             self._recovery_target = None
-            self.hass.async_create_task(self._async_recover(direction, target))
+            self._create_tracked_task(
+                self._async_recover(direction, target), name="vimar_cover_recovery"
+            )
 
     async def _tb_wait_idle(self, timeout: float) -> bool:
         """Attende la fine del tracking (operation None) o lo scadere del timeout.
@@ -439,7 +463,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         else:
             _LOGGER.info("%s: recovery completato al fondo-corsa %s%%", self.name, end_stop)
 
-    def _tb_check_vimar_state(self):
+    def _tb_check_vimar_state(self) -> None:
         """Controlla stato Vimar e gestisci movimenti fisici."""
         current_updown = self.get_state("up/down")
 
@@ -457,7 +481,9 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 )
                 # Reset del flag comando HA perché è stato interrotto fisicamente
                 self._tb_ha_command_active = False
-                self.hass.async_create_task(self._tb_stop_tracking())
+                self._create_tracked_task(
+                    self._tb_stop_tracking(), name="vimar_cover_stop_tracking"
+                )
 
             # FIX: aggiorna sempre _tb_last_updown durante il tracking, altrimenti
             # il valore stantio dopo lo stop causa una falsa detection di pulsante fisico
@@ -474,7 +500,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         grace = self._grace_seconds()
         in_grace_period = (
             self._tb_ha_stop_time is not None
-            and (datetime.now() - self._tb_ha_stop_time).total_seconds() < grace
+            and (dt_util.utcnow() - self._tb_ha_stop_time).total_seconds() < grace
         )
 
         if current_updown != self._tb_last_updown and not self._tb_ha_command_active:
@@ -484,7 +510,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     self.name,
                     self._tb_last_updown,
                     current_updown,
-                    grace - (datetime.now() - self._tb_ha_stop_time).total_seconds(),
+                    grace - (dt_util.utcnow() - self._tb_ha_stop_time).total_seconds(),
                 )
             elif current_updown == "0":
                 self._tb_position = 100
@@ -513,7 +539,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             self._tb_position = 0
 
         self._tb_operation = operation
-        self._tb_start_time = datetime.now()
+        self._tb_start_time = dt_util.utcnow()
         self._tb_start_position = self._tb_position
         self._tb_target = target if target is not None else (100 if opening else 0)
         self._tb_last_reported_position = self._tb_position
@@ -569,7 +595,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # per GRACE_SECONDS le detection di pulsante fisico sono soppresse
         # perché il protocollo Vimar non distingue la sorgente del comando.
         self._tb_ha_command_active = False
-        self._tb_ha_stop_time = datetime.now()
+        self._tb_ha_stop_time = dt_util.utcnow()
 
         self.async_write_ha_state()
 
@@ -591,7 +617,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         return (RELAY_DELAY / travel) * 100 if travel else 0.0
 
     @callback
-    def _tb_update_position(self, now):
+    def _tb_update_position(self, now: datetime) -> None:
         """Aggiorna posizione durante tracking ogni 1%."""
         self._tb_calculate_position()
 
@@ -636,14 +662,18 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 _LOGGER.info("%s: Reached target %s%%, sending STOP", self.name, self._tb_position)
                 # FIX: async_stop_cover chiama già _tb_stop_tracking internamente,
                 # non schedulare un task separato per evitare doppia esecuzione
-                self.hass.async_create_task(self.async_stop_cover())
+                self._create_tracked_task(
+                    self.async_stop_cover(), name="vimar_cover_stop"
+                )
             else:
                 _LOGGER.info(
                     "%s: Reached end-stop %s%%, mechanical stop (no STOP command)",
                     self.name,
                     self._tb_position,
                 )
-                self.hass.async_create_task(self._tb_stop_tracking())
+                self._create_tracked_task(
+                    self._tb_stop_tracking(), name="vimar_cover_stop_tracking"
+                )
         else:
             # Aggiorna UI ogni 1% di variazione (o più frequente se UI_UPDATE_THRESHOLD < 1)
             if (
@@ -653,12 +683,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 self._tb_last_reported_position = self._tb_position
                 self.async_write_ha_state()
 
-    def _tb_calculate_position(self):
+    def _tb_calculate_position(self) -> None:
         """Calcola posizione attuale basata sul tempo trascorso con compensazione ritardo relè."""
         if not self._tb_start_time:
             return
 
-        elapsed_total = (datetime.now() - self._tb_start_time).total_seconds()
+        elapsed_total = (dt_util.utcnow() - self._tb_start_time).total_seconds()
         # Sottrae il ritardo stimato del relè (non scende sotto zero)
         elapsed_effective = max(0.0, elapsed_total - RELAY_DELAY)
 
