@@ -6,11 +6,11 @@
           "preset_mode": {
             "name": "Modus",
             "state": {
-              "none":       "Manuell",
-              "auto":       "Zeitplan",
-              "eco":        "Eco",
+              "none": "Manuell",
+              "auto": "Zeitplan",
+              "eco": "Eco",
               "protezione": "Schutz",
-              "away":       "Abwesenheit"
+              "away": "Abwesenheit"
             }
           }
         }
@@ -108,6 +108,9 @@
     },
     "sai2_wrong_pin": {
       "message": "Falsche PIN. Die SAI2-Zentrale hat diese PIN nicht akzeptiert."
+    },
+    "sai2_auth_unavailable": {
+      "message": "Die SAI2-Alarmzentrale ist vorübergehend nicht erreichbar (Ergebnis {code}). Bitte versuche es gleich noch einmal."
     },
     "sai2_command_rejected": {
       "message": "Die SAI2-Zentrale hat den Befehl abgelehnt (Ergebnis {code})."

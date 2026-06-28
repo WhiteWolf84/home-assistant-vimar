@@ -6,11 +6,11 @@
           "preset_mode": {
             "name": "Mode",
             "state": {
-              "none":       "Manuel",
-              "auto":       "Programmation",
-              "eco":        "Eco",
+              "none": "Manuel",
+              "auto": "Programmation",
+              "eco": "Eco",
               "protezione": "Protection",
-              "away":       "Absence"
+              "away": "Absence"
             }
           }
         }
@@ -108,6 +108,9 @@
     },
     "sai2_wrong_pin": {
       "message": "PIN incorrect. La centrale SAI2 n'a pas accepté ce PIN."
+    },
+    "sai2_auth_unavailable": {
+      "message": "La centrale d'alarme SAI2 est momentanément injoignable (résultat {code}). Réessayez dans un instant."
     },
     "sai2_command_rejected": {
       "message": "La centrale SAI2 a refusé la commande (résultat {code})."

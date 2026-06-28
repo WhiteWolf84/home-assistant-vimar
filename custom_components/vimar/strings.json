@@ -45,11 +45,11 @@
           "preset_mode": {
             "name": "Mode",
             "state": {
-              "none":       "Manual",
-              "auto":       "Schedule",
-              "eco":        "Eco",
+              "none": "Manual",
+              "auto": "Schedule",
+              "eco": "Eco",
               "protezione": "Protection",
-              "away":       "Away"
+              "away": "Away"
             }
           }
         }
@@ -118,6 +118,9 @@
     },
     "sai2_wrong_pin": {
       "message": "Wrong PIN. The SAI2 control unit did not accept this PIN."
+    },
+    "sai2_auth_unavailable": {
+      "message": "The SAI2 alarm is temporarily unreachable (result {code}). Please try again in a moment."
     },
     "sai2_command_rejected": {
       "message": "The SAI2 control unit rejected the command (result {code})."

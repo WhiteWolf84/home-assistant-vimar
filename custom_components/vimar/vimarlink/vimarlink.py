@@ -60,6 +60,10 @@ DEVICE_CLASS_PRESSURE = "pressure"
 class VimarLink:
     """Link to communicate with the Vimar webserver."""
 
+    # SAI2 authenticate result codes (confirmed on real hardware).
+    _SAI2_AUTH_OK = "DPCM-0000"  # PIN valid
+    _SAI2_AUTH_WRONG_PIN = "SAI2-3127"  # PIN rejected (usercode UnknownUserCode)
+
     def __init__(
         self,
         schema=None,
@@ -266,6 +270,14 @@ class VimarLink:
             correct PIN -> result "DPCM-0000", usercode is the user index
             wrong PIN   -> result "SAI2-3127", usercode "UnknownUserCode"
 
+        Only DPCM-0000 (valid) and SAI2-3127 (wrong PIN) are DEFINITIVE answers.
+        Any other non-None code means the SAI2 sub-service / session was
+        transiently unhappy (e.g. a stale session id): historically this surfaced
+        as bursts of bogus "Wrong PIN" errors that resolved themselves once the
+        session was renewed. To heal that transparently we drop the session,
+        re-login and retry the authenticate ONCE before giving up, so a flaky
+        session no longer masquerades as a wrong PIN.
+
         Args:
             pin: SAI alarm user PIN to validate.
 
@@ -273,6 +285,25 @@ class VimarLink:
             The result code string ("DPCM-0000" when the PIN is valid), or
             None if the server gave no usable response.
         """
+        result_code = self._authenticate_sai2_once(pin)
+
+        if result_code is not None and result_code not in (
+            self._SAI2_AUTH_OK,
+            self._SAI2_AUTH_WRONG_PIN,
+        ):
+            _LOGGER.warning(
+                "SAI2 authenticate returned %s (not a definitive PIN result); "
+                "invalidating session and retrying once after re-login",
+                result_code,
+            )
+            self._connection.invalidate_session()
+            if self.check_login():
+                result_code = self._authenticate_sai2_once(pin)
+
+        return result_code
+
+    def _authenticate_sai2_once(self, pin: str) -> str | None:
+        """Single service-vimarsai2authenticate call; returns the raw result code."""
         post = (
             '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
             '<soapenv:Body><service-vimarsai2authenticate xmlns="urn:xmethods-dpadws">'

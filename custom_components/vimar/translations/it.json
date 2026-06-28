@@ -45,11 +45,11 @@
           "preset_mode": {
             "name": "Modalità",
             "state": {
-              "none":       "Manuale",
-              "auto":       "Automatico",
-              "eco":        "Eco",
+              "none": "Manuale",
+              "auto": "Automatico",
+              "eco": "Eco",
               "protezione": "Protezione",
-              "away":       "Assenza"
+              "away": "Assenza"
             }
           }
         }
@@ -119,6 +119,9 @@
     },
     "sai2_wrong_pin": {
       "message": "PIN errato. La centrale SAI2 non ha accettato questo PIN."
+    },
+    "sai2_auth_unavailable": {
+      "message": "Allarme SAI2 momentaneamente non raggiungibile (esito {code}). Riprova tra qualche istante."
     },
     "sai2_command_rejected": {
       "message": "La centrale SAI2 ha rifiutato il comando (esito {code})."

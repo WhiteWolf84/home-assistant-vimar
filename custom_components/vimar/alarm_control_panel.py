@@ -51,6 +51,13 @@ _OPTIMISTIC_GUARD_SECONDS = 5.0
 # authenticate_sai2_pin() rather than inferred from the set response.
 _SAI2_OK = "DPCM-0000"
 
+# The ONLY result code that means the PIN was genuinely rejected (usercode
+# UnknownUserCode). Any other non-OK code from authenticate is a transient
+# session / sub-service hiccup, NOT a wrong PIN — see _send_sai2_command. This
+# fixes self-resolving "Wrong PIN" bursts caused by classifying every non-OK
+# result as a bad PIN.
+_SAI2_WRONG_PIN = "SAI2-3127"
+
 
 @dataclass(frozen=True)
 class _Sai2Mode:
@@ -394,8 +401,14 @@ class VimarAlarmControlPanel(
             )
             if auth is None:
                 await self._fail("sai2_no_response")
-            if auth != _SAI2_OK:
+            if auth == _SAI2_WRONG_PIN:
+                # Definitive rejection: the centrale really refused this PIN.
                 await self._fail("sai2_wrong_pin", validation=True)
+            if auth != _SAI2_OK:
+                # Not OK and not the wrong-PIN code: the SAI2 service/session was
+                # transiently unavailable (vimarlink already retried once after a
+                # re-login). Don't blame the PIN — ask the user to retry.
+                await self._fail("sai2_auth_unavailable", placeholders={"code": auth})
 
             # Capture current state BEFORE the optimistic update.
             was_armed = self.alarm_state not in (AlarmControlPanelState.DISARMED, None)
