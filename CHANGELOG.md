@@ -10,6 +10,18 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.6.10] - 2026-06-28
+
+### Fixed
+
+- SAI2 alarm no longer reports a transient hiccup as "Wrong PIN". The PIN check classified *any* authenticate result other than `DPCM-0000` as a rejected PIN, but only `SAI2-3127` actually means the centrale refused the PIN. A stale session or a momentarily busy SAI2 sub-service returns other codes that were misread as a wrong PIN, producing bursts of bogus "Wrong PIN" errors that resolved themselves once the session renewed. The authenticate now self-heals: on any non-definitive code it drops the session, re-logs in and retries once; only a genuine `SAI2-3127` raises a wrong-PIN error, while a persistent transient surfaces a dedicated "alarm temporarily unreachable, retry" message (translated in all 7 languages) instead of blaming the PIN.
+
+### Changed
+
+- Internal modernization of the time-based cover (no behavior change): switched the time math from `datetime.now()` to Home Assistant's timezone/DST-safe `dt_util.utcnow()`; recovery and stop-tracking work is now scheduled with `async_create_background_task` and cancelled when the entity is removed, so reloading the integration mid-movement no longer leaves orphaned tasks raising runtime errors; added missing type hints.
+
+---
+
 ## [2026.6.9] - 2026-06-16
 
 ### Added
