@@ -47,6 +47,7 @@ from .const import (
     PLATFORMS,
 )
 from .vimar_device_customizer import VimarDeviceCustomizer
+from .vimarlink.exceptions import VimarApiError
 from .vimarlink.vimarlink import VimarLink, VimarProject
 
 log = _LOGGER
@@ -330,6 +331,17 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if self._is_auth_error(err):
                 self._handle_auth_failure()
                 raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
+            if not isinstance(err, VimarApiError):
+                # Not a known Vimar API/communication error: this is almost
+                # certainly a bug in our own parsing/state logic (KeyError,
+                # TypeError, AttributeError, ...) surfacing here and getting
+                # disguised as a comms failure. Log the full traceback so the
+                # real cause (file+line) is diagnosable instead of being hidden
+                # behind a generic "Error communicating with API" one-liner.
+                # We still raise UpdateFailed below, so the integration fails
+                # softly (entities go unavailable and it retries) rather than
+                # crashing or disabling itself.
+                _LOGGER.exception("Vimar: unexpected non-network error during update")
             raise UpdateFailed(f"Error communicating with API: {err}")
 
     # ------------------------------------------------------------------

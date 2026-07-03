@@ -156,7 +156,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             self._coordinator._device_state_hashes.pop(self._device_id, None)
         self.async_write_ha_state()
 
-    def _apply_state_change(self, state: str, value) -> tuple[str, str, str] | None:
+    def _apply_state_change(self, state: str, value: object) -> tuple[str, str, str] | None:
         """Validate a single state change and update the local device state.
 
         FIX #9: extracted from change_state() to remove duplicate logic.
@@ -180,7 +180,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         self._device["status"][state]["status_value"] = str(value)
         return (status_id, str(value), optionals)
 
-    def change_state(self, *args, **kwargs):
+    def change_state(self, *args: object, **kwargs: object) -> None:
         """Change state on bus system and the local device state.
 
         Writes are not sent here directly: they are enqueued (in order) onto
@@ -218,7 +218,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             self.coordinator.enqueue_device_writes(writes)
             self.request_statemachine_update()
 
-    def get_state(self, state):
+    def get_state(self, state: str) -> str | None:
         """Get state of the local device state."""
         if self.has_state(state):
             return self._device["status"][state]["status_value"]
@@ -231,7 +231,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             )
         return None
 
-    def has_state(self, state):
+    def has_state(self, state: str) -> bool:
         """Return true if local device has a given state."""
         if self._device is None:
             return False
