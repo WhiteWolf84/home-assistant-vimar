@@ -77,25 +77,22 @@ The integration uses local polling to communicate with the VIMAR web server via 
 
 ### Setup Development Environment
 
-**Python Version:** This project requires Python 3.13+ (see pyrightconfig.json).
-
-The environment has:
-
-- Python 3.13.2 available via `python3.13`
-- Python 3.11.2 available via `python3`
-- `python3.13-venv` package installed
+**Python Version:** This project requires Python 3.13.2+ (the Home Assistant
+`Requires-Python` minimum). The development environment is currently on **Python
+3.14** (see `pyrightconfig.json`, which targets `3.14`); use 3.14 when creating
+the venv. 3.13.2+ still works if that is what your system provides.
 
 **Setup:**
 
 ```bash
-# Create virtual environment with Python 3.13
-python3.13 -m venv .venv
+# Create virtual environment with Python 3.14 (3.13.2+ also supported)
+python3.14 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Verify Python version
-python --version  # Should show Python 3.13.2
+python --version  # Should show Python 3.14.x
 
-# Install dependencies
+# Install dependencies (pins homeassistant==2026.7.0 + matching test stack)
 pip install -r requirements_dev.txt
 
 # Verify tools installed
@@ -104,21 +101,28 @@ pyright --version
 ruff --version
 ```
 
-**IMPORTANT - Always use Python 3.13:**
+**IMPORTANT - Always use Python 3.14:**
 
-- Always use `python3.13` when creating the virtual environment
-- After activation, always verify with `python --version` (should show 3.13.x)
+- Always use `python3.14` when creating the virtual environment
+- After activation, always verify with `python --version` (should show 3.14.x)
 - When running commands outside the venv, use `.venv/bin/python` explicitly
-- NEVER use `python3` as it may point to Python 3.11 on some systems
-- This ensures compatibility with Home Assistant 2026.1+ requirements
+- NEVER use a bare `python3` as it may point to an older Python on some systems
+- This ensures compatibility with Home Assistant 2026.7+ requirements
 
-**Installing Python 3.13 on Debian/Ubuntu:**
-If Python 3.13 is not available on your system, you can install it from backports:
+**Note:** If the venv's `python`/`python3` symlinks break after a system Python
+upgrade (they point at a now-missing interpreter), recreate them:
+
+```bash
+# Point the venv's python/python3 at the interpreter it was built with
+cd .venv/bin && rm -f python python3 && ln -s python3.14 python && ln -s python3.14 python3
+```
+
+**Installing Python 3.14 on Debian/Ubuntu:**
+If Python 3.14 is not available on your system, you can install it from backports
+(or use your distro's package; adjust the version in the commands below):
 
 ```bash
 # For Debian 12 (Bookworm) or similar systems
-# See: https://community.home-assistant.io/t/python-3-12-backport-for-debian-12-bookworm/709459s
-# for python 3.13
 # See: https://community.home-assistant.io/t/python-3-13-backport-for-debian-12-bookworm/842333
 
 # Add Debian backports repository (if not already added)
@@ -127,11 +131,11 @@ echo "deb http://deb.debian.org/debian bookworm-backports main" | sudo tee /etc/
 # Update package list
 sudo apt update
 
-# Install Python 3.13 and venv
-sudo apt install -y python3.13 python3.13-venv python3.13-dev && sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 2 && sudo update-alternatives --set python3 /usr/bin/python3.13
+# Install Python 3.14 and venv
+sudo apt install -y python3.14 python3.14-venv python3.14-dev
 
 # Verify installation
-python3.13 --version
+python3.14 --version
 ```
 
 ### Validation and Testing
@@ -155,8 +159,8 @@ pyright custom_components/vimar
 # From the repository root directory
 cd /workspaces/home-assistant-vimar
 
-# Create venv if it doesn't exist (MUST use Python 3.13)
-python3.13 -m venv .venv
+# Create venv if it doesn't exist (MUST use Python 3.14)
+python3.14 -m venv .venv
 
 # Activate the venv
 source .venv/bin/activate
@@ -320,8 +324,8 @@ examples/
 
 ## Compatibility
 
-- **Home Assistant**: Requires 2026.1.0+ (see manifest.json)
-- **Python**: 3.13+ (see pyrightconfig.json)
+- **Home Assistant**: Requires 2026.1.0+ (see manifest.json); dev environment on 2026.7.0
+- **Python**: 3.13.2+ required; dev environment on 3.14 (see pyrightconfig.json)
 - **VIMAR Firmware**: Tested with v2.5 to v2.11
 - **Hardware**: VIMAR 01945 or 01946 web server required
 
