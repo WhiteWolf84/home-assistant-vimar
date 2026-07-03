@@ -13,11 +13,12 @@ is lost and the shutter overruns to a mechanical end-stop. Recovery v2:
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -43,8 +44,11 @@ def _make_cover(travel_up=36, travel_down=35, position=50):
     cover._recovery_pending = False
     cover._recovery_direction = None
     cover._recovery_target = None
+    cover._background_tasks = set()  # tracked by _create_tracked_task
     cover._device = None  # -> VimarEntity.extra_state_attributes returns {}
-    cover.name = "Test Cover"
+    # VimarEntity.name is a read-only property (derives from _device); with
+    # _device=None it resolves to "Unknown Device 0", which is fine here since
+    # name is only used in log messages, not asserted on.
     cover.hass = MagicMock()
     cover._use_time_based_tracking = MagicMock(return_value=True)
     cover._get_position_mode = MagicMock(return_value="auto")
@@ -58,7 +62,7 @@ def _old_state(direction="opening", target=50, age_s=30, with_ts=True):
     if target is not None:
         attrs[ATTR_RECOVERY_TARGET] = target
     if with_ts:
-        attrs[ATTR_RECOVERY_TS] = (datetime.now() - timedelta(seconds=age_s)).isoformat()
+        attrs[ATTR_RECOVERY_TS] = (dt_util.utcnow() - timedelta(seconds=age_s)).isoformat()
     return SimpleNamespace(attributes=attrs)
 
 
@@ -106,7 +110,7 @@ def test_attributes_persist_only_while_moving():
     # moving -> recovery attrs present
     cover._tb_operation = "closing"
     cover._tb_target = 20
-    cover._tb_start_time = datetime.now()
+    cover._tb_start_time = dt_util.utcnow()
     attrs = cover.extra_state_attributes
     assert attrs[ATTR_RECOVERY_DIRECTION] == "closing"
     assert attrs[ATTR_RECOVERY_TARGET] == 20
@@ -124,7 +128,7 @@ def test_maybe_start_recovery_one_shot_when_available():
         cover._maybe_start_recovery()
         cover._maybe_start_recovery()  # second call must be a no-op
     assert cover._recovery_pending is False
-    assert cover.hass.async_create_task.call_count == 1
+    assert cover.hass.async_create_background_task.call_count == 1
 
 
 def test_maybe_start_recovery_waits_until_available():
@@ -133,7 +137,7 @@ def test_maybe_start_recovery_waits_until_available():
     with patch.object(VimarCover, "available", new_callable=PropertyMock, return_value=False):
         cover._maybe_start_recovery()
     assert cover._recovery_pending is True
-    cover.hass.async_create_task.assert_not_called()
+    cover.hass.async_create_background_task.assert_not_called()
 
 
 # --- recovery sequence -----------------------------------------------------

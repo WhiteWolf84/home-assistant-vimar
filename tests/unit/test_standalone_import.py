@@ -2,9 +2,10 @@
 
 This is critical - vimarlink should work standalone.
 """
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 pytestmark = pytest.mark.no_ha  # No HA required
 

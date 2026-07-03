@@ -16,10 +16,11 @@ FIX #2 - drift / no chatter: the stop is issued a relay-coast margin before the
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 # Import the integration as a package so relative imports resolve.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -47,7 +48,10 @@ def _make_cover(travel_up=36, travel_down=35, position=50, poll_seconds=8):
     cover._tb_last_reported_position = position
     cover._tb_unsub = None
     cover._tb_planned_stop = False
-    cover.name = "Test Cover"
+    cover._background_tasks = set()  # tracked by _create_tracked_task
+    # VimarEntity.name is a read-only property (derives from _device); leaving
+    # it unset resolves to "Unknown Device 0", which is fine here since name is
+    # only used in log messages, not asserted on.
 
     coordinator = MagicMock()
     coordinator.update_interval = timedelta(seconds=poll_seconds)
@@ -116,14 +120,14 @@ def test_no_chatter_first_tick():
     cover._tb_operation = "opening"
     cover._tb_target = 40
     cover._tb_start_position = 38
-    cover._tb_start_time = datetime.now()
+    cover._tb_start_time = dt_util.utcnow()
     cover._tb_position = 38
 
-    cover._tb_update_position(now=datetime.now())
+    cover._tb_update_position(now=dt_util.utcnow())
 
     # At the first tick the position is still the start; with the deadband
     # guaranteeing delta > stop_margin it must NOT schedule a stop.
-    cover.hass.async_create_task.assert_not_called()
+    cover.hass.async_create_background_task.assert_not_called()
 
 
 def test_stop_fires_with_overshoot_margin():
@@ -132,16 +136,16 @@ def test_stop_fires_with_overshoot_margin():
     cover._tb_operation = "opening"
     cover._tb_target = 40
     cover._tb_start_position = 38
-    cover._tb_start_time = datetime.now()
+    cover._tb_start_time = dt_util.utcnow()
     # Freeze the calculated position right at the early-stop threshold.
     cover._tb_calculate_position = MagicMock()
     cover._tb_position = 39  # >= 40 - overshoot(~1.39) -> should stop
     cover.async_stop_cover = AsyncMock()
 
-    cover._tb_update_position(now=datetime.now())
+    cover._tb_update_position(now=dt_util.utcnow())
 
     assert cover._tb_position == 40  # snapped to target
-    cover.hass.async_create_task.assert_called_once()  # STOP scheduled
+    cover.hass.async_create_background_task.assert_called_once()  # STOP scheduled
 
 
 # --- end-stop regression (the "stuck at 1%" bug) --------------------------
@@ -152,9 +156,9 @@ async def test_full_close_reaches_zero_not_one():
     cover._tb_operation = "closing"
     cover._tb_target = 0  # end-stop: stop_margin must NOT apply
     cover._tb_start_position = 50
-    cover._tb_start_time = datetime.now() - timedelta(seconds=100)  # well past 0
+    cover._tb_start_time = dt_util.utcnow() - timedelta(seconds=100)  # well past 0
 
-    cover._tb_update_position(now=datetime.now())
+    cover._tb_update_position(now=dt_util.utcnow())
     assert cover._tb_position == 0
     assert cover._tb_planned_stop is True
 
@@ -167,9 +171,9 @@ async def test_full_open_reaches_hundred():
     cover._tb_operation = "opening"
     cover._tb_target = 100
     cover._tb_start_position = 50
-    cover._tb_start_time = datetime.now() - timedelta(seconds=100)
+    cover._tb_start_time = dt_util.utcnow() - timedelta(seconds=100)
 
-    cover._tb_update_position(now=datetime.now())
+    cover._tb_update_position(now=dt_util.utcnow())
     assert cover._tb_position == 100
     assert cover._tb_planned_stop is True
 
@@ -184,9 +188,9 @@ async def test_planned_intermediate_stop_preserves_target():
     cover._tb_target = 50
     cover._tb_start_position = 38
     # ~4.5s -> calc ~49, past the early-stop threshold (50 - margin ~1.39)
-    cover._tb_start_time = datetime.now() - timedelta(seconds=4.5)
+    cover._tb_start_time = dt_util.utcnow() - timedelta(seconds=4.5)
 
-    cover._tb_update_position(now=datetime.now())
+    cover._tb_update_position(now=dt_util.utcnow())
     assert cover._tb_position == 50
     assert cover._tb_planned_stop is True
 
@@ -200,7 +204,7 @@ async def test_manual_stop_recalculates_position():
     cover._tb_operation = "closing"
     cover._tb_target = 0
     cover._tb_start_position = 80
-    cover._tb_start_time = datetime.now() - timedelta(seconds=7)  # ~61%
+    cover._tb_start_time = dt_util.utcnow() - timedelta(seconds=7)  # ~61%
     cover._tb_planned_stop = False  # manual stop, not a planned target stop
 
     await cover._tb_stop_tracking()

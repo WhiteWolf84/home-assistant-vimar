@@ -2,14 +2,15 @@
 
 NO Home Assistant dependencies required.
 """
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 # Add path to find vimarlink
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'custom_components', 'vimar'))
 
-from vimarlink.vimarlink import VimarProject, VimarLink
+from vimarlink.vimarlink import VimarLink, VimarProject
 
 pytestmark = pytest.mark.no_ha  # No HA required
 
