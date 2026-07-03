@@ -416,7 +416,9 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Se nel frattempo un movimento e' gia' in corso (comando utente/automazione
         # subito dopo l'avvio), non interferire: chi ha preso il controllo vince.
         if self._tb_operation is not None:
-            _LOGGER.info("%s: recovery saltato, movimento gia' in corso (%s)", self.name, self._tb_operation)
+            _LOGGER.info(
+                "%s: recovery saltato, movimento gia' in corso (%s)", self.name, self._tb_operation
+            )
             return
         opening = direction == "opening"
         end_stop = 100 if opening else 0
@@ -662,9 +664,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 _LOGGER.info("%s: Reached target %s%%, sending STOP", self.name, self._tb_position)
                 # FIX: async_stop_cover chiama già _tb_stop_tracking internamente,
                 # non schedulare un task separato per evitare doppia esecuzione
-                self._create_tracked_task(
-                    self.async_stop_cover(), name="vimar_cover_stop"
-                )
+                self._create_tracked_task(self.async_stop_cover(), name="vimar_cover_stop")
             else:
                 _LOGGER.info(
                     "%s: Reached end-stop %s%%, mechanical stop (no STOP command)",
