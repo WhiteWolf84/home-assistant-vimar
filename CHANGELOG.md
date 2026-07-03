@@ -10,6 +10,19 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.7.0] - 2026-07-03
+
+### Fixed
+
+- Unexpected internal errors during a poll are no longer masked as a generic "Error communicating with API". The data coordinator's catch-all disguised real parsing/state bugs (`KeyError`, `TypeError`, …) as a network failure, sending troubleshooting down the wrong path; such non-network exceptions now log a full traceback (file + line) before the integration fails soft (entities go unavailable and it retries), so the true cause is diagnosable instead of hidden.
+
+### Changed
+
+- Internal: added type hints to the base entity (`get_state`, `has_state`, `change_state`) so unguarded `None` usage is caught statically. No behavior change.
+- Development toolchain aligned to Home Assistant 2026.7.0 on Python 3.14 (minimum supported Python stays 3.13.2); repaired the cover test suite after the recent `dt_util`/background-task refactor. No runtime change for users.
+
+---
+
 ## [2026.6.10] - 2026-06-28
 
 ### Fixed
