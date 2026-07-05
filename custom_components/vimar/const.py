@@ -61,6 +61,17 @@ ENERGY_METER_OBJECT_TYPES = frozenset(
     }
 )
 
+# Thermostat refresh: like energy meters, the webserver DB does not track the
+# physical by-me thermostat unless a GETVALUE is issued on the status object
+# (the native UI popup does this during its "device synchronization" phase).
+# Without it, a mode change (e.g. to Absence) switches the regulation setpoint
+# on the device while the DB - and therefore HA - keeps showing the old value.
+CLIMATE_REFRESH_STATUS_NAMES = frozenset({"setpoint", "funzionamento"})
+DEFAULT_CLIMATE_REFRESH_INTERVAL = 120  # seconds, periodic GETVALUE throttle
+# Delay before the post-write GETVALUE: must exceed the coordinator's
+# 15 s write-guard so the refreshed value is not discarded as stale.
+CLIMATE_POST_WRITE_REFRESH_DELAY = 16.0  # seconds
+
 
 # Device overrides
 CONF_OVERRIDE = "device_override"

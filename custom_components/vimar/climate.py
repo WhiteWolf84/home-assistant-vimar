@@ -18,8 +18,9 @@ from homeassistant.components.climate.const import (
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 
-from .const import DEVICE_TYPE_CLIMATES as CURR_PLATFORM
 from .const import (
+    CLIMATE_POST_WRITE_REFRESH_DELAY,
+    CLIMATE_REFRESH_STATUS_NAMES,
     PRESET_CLIMATE_AUTO,
     PRESET_CLIMATE_PROTECTION,
     VIMAR_CLIMATE_ASSENZA,
@@ -46,6 +47,7 @@ from .const import (
     VIMAR_CLIMATE_RIDUZIONE_I,
     VIMAR_CLIMATE_RIDUZIONE_II,
 )
+from .const import DEVICE_TYPE_CLIMATES as CURR_PLATFORM
 from .vimar_entity import VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
@@ -217,10 +219,14 @@ class VimarClimate(VimarEntity, ClimateEntity):
             return PRESET_CLIMATE_AUTO
         if funz == self.get_const_value(VIMAR_CLIMATE_RIDUZIONE):
             return PRESET_ECO
-        if funz == self.get_const_value(VIMAR_CLIMATE_ASSENZA):
-            return PRESET_AWAY
+        # PROTEZIONE must be checked before ASSENZA: Type I thermostats have no
+        # absence mode, so get_const_value(ASSENZA) falls back to the same raw
+        # value as PROTEZIONE ("3"). Matching ASSENZA first would report
+        # PRESET_AWAY, which is not in preset_modes for Type I.
         if funz == self.get_const_value(VIMAR_CLIMATE_PROTEZIONE):
             return PRESET_CLIMATE_PROTECTION
+        if funz == self.get_const_value(VIMAR_CLIMATE_ASSENZA):
+            return PRESET_AWAY
         return PRESET_NONE
 
     @property
@@ -264,6 +270,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
         _LOGGER.info("Vimar Climate setting preset_mode: %s", preset_mode)
         self.change_state("funzionamento", set_function_mode)
+        self._schedule_post_write_refresh()
 
     @property
     def fan_modes(self) -> list[str] | None:
@@ -325,6 +332,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
         if hvac_mode == HVACMode.OFF:
             _LOGGER.info("Vimar Climate setting hvac_mode to off")
             self.change_state("funzionamento", self.get_const_value(VIMAR_CLIMATE_OFF))
+            self._schedule_post_write_refresh()
             return
 
         if hvac_mode not in (HVACMode.HEAT, HVACMode.COOL):
@@ -346,6 +354,9 @@ class VimarClimate(VimarEntity, ClimateEntity):
                 season_key,
                 direction,
             )
+            # Activation reloads the device's stored manual setpoint, which HA
+            # does not know: pull it back once the device has applied the mode.
+            self._schedule_post_write_refresh()
         else:
             # Device is ON: change direction only, preserve operating mode (preset)
             self.change_state(season_key, direction)
@@ -388,8 +399,28 @@ class VimarClimate(VimarEntity, ClimateEntity):
             "setpoint",
             str(set_temperature),
         )
+        self._schedule_post_write_refresh()
 
     # helper
+
+    def _schedule_post_write_refresh(self):
+        """Ask the coordinator to GETVALUE this thermostat after a mode write.
+
+        The webserver DB does not follow the physical device: when a mode
+        change makes the device switch to another stored setpoint (absence,
+        reduction, manual), the DB - and HA - keep the old value until a
+        GETVALUE is issued (the native UI popup does it as "device
+        synchronization"). Refresh setpoint+funzionamento after the
+        write-guard window so the next poll shows the real values.
+        """
+        if self._device is None:
+            return
+        ids = [
+            status.get("status_id")
+            for name, status in self._device.get("status", {}).items()
+            if name in CLIMATE_REFRESH_STATUS_NAMES
+        ]
+        self.coordinator.schedule_status_refresh(ids, CLIMATE_POST_WRITE_REFRESH_DELAY)
 
     @property
     def _has_fancoil(self):

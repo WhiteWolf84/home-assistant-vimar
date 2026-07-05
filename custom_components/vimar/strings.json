@@ -47,7 +47,7 @@
             "state": {
               "none": "Manual",
               "auto": "Schedule",
-              "eco": "Eco",
+              "eco": "Reduction",
               "protezione": "Protection",
               "away": "Away"
             }

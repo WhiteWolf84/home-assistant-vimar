@@ -30,6 +30,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     _LOGGER,
+    CLIMATE_REFRESH_STATUS_NAMES,
     CONF_CERTIFICATE,
     CONF_ENERGY_REFRESH_INTERVAL,
     CONF_GLOBAL_CHANNEL_ID,
@@ -37,10 +38,12 @@ from .const import (
     CONF_OVERRIDE,
     CONF_SECURE,
     DEFAULT_CERTIFICATE,
+    DEFAULT_CLIMATE_REFRESH_INTERVAL,
     DEFAULT_ENERGY_REFRESH_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_TIMEOUT,
     DEVICE_TYPE_BINARY_SENSOR,
+    DEVICE_TYPE_CLIMATES,
     DOMAIN,
     ENERGY_METER_OBJECT_TYPES,
     ENERGY_REFRESH_STATUS_NAMES,
@@ -92,6 +95,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._known_status_ids: list[int] = []
         self._energy_refresh_ids: list[int] = []
         self._last_energy_refresh: float = 0.0
+        self._climate_refresh_ids: list[int] = []
+        self._last_climate_refresh: float = 0.0
+        # Background tasks for delayed post-write GETVALUE refreshes
+        # (see schedule_status_refresh); cancelled on unload.
+        self._refresh_tasks: set[asyncio.Task] = set()
 
         # FIX: single global FIFO for all device writes (SETVALUE). Every
         # change_state() from every entity enqueues its batch here and one
@@ -198,12 +206,58 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             self.vimarconnection.set_device_status(status_id, value, optionals)
 
     async def async_shutdown_write_worker(self) -> None:
-        """Cancel the write worker (on unload/reload)."""
+        """Cancel the write worker and pending refresh tasks (on unload/reload)."""
         if self._write_worker_task is not None:
             self._write_worker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._write_worker_task
             self._write_worker_task = None
+        for task in list(self._refresh_tasks):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._refresh_tasks.clear()
+
+    # --- delayed GETVALUE refresh after writes ---------------------------
+
+    def schedule_status_refresh(self, status_ids: list, delay: float) -> None:
+        """Schedule a GETVALUE refresh of the given status object ids.
+
+        Used by climate entities after a write: the webserver DB does not
+        track the physical thermostat (e.g. the regulation setpoint applied
+        by a mode change) unless a GETVALUE is issued on the status object.
+        The delay must outlast the write-guard (_WRITE_GUARD_SECONDS) so the
+        refreshed value is applied by the next poll instead of being skipped
+        as an in-flight optimistic write.
+        """
+        ids: list[int] = []
+        for sid in status_ids:
+            with contextlib.suppress(ValueError, TypeError):
+                ids.append(int(sid))
+        if not ids:
+            return
+        task = self.hass.async_create_background_task(
+            self._delayed_status_refresh(ids, delay),
+            name=f"vimar_status_refresh_{ids[0]}",
+        )
+        self._refresh_tasks.add(task)
+        task.add_done_callback(self._refresh_tasks.discard)
+
+    async def _delayed_status_refresh(self, status_ids: list[int], delay: float) -> None:
+        """Wait for the device to apply the write, then GETVALUE + repoll."""
+        await asyncio.sleep(delay)
+        if self.vimarconnection is None:
+            return
+        try:
+            await self.hass.async_add_executor_job(
+                self.vimarconnection.request_value_refresh, status_ids
+            )
+        except Exception as err:  # noqa: BLE001 - best-effort refresh
+            _LOGGER.debug("Vimar: post-write status refresh failed: %s", err)
+            return
+        # Pull the refreshed DB values into HA right away instead of waiting
+        # for the next scheduled poll tick.
+        await self.async_request_refresh()
 
     async def _async_update_data(self):
         """Fetch data from API endpoint."""
@@ -237,6 +291,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                     if devices and len(devices) > 0:
                         self._known_status_ids = self._collect_status_ids(devices)
                         self._energy_refresh_ids = self._collect_energy_refresh_ids(devices)
+                        self._climate_refresh_ids = self._collect_climate_refresh_ids(devices)
                         # Include SAI2 alarm CIDs in slim poll
                         if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
                             sai2_ids = self.vimarconnection.get_sai2_status_ids(
@@ -265,6 +320,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 else:
                     _LOGGER.debug("Vimar: slim poll (%d status IDs)", len(self._known_status_ids))
                     await self._maybe_refresh_energy_meters()
+                    await self._maybe_refresh_climates()
                     slim_results = await self.hass.async_add_executor_job(
                         self.vimarconnection.get_status_only, self._known_status_ids
                     )
@@ -458,6 +514,55 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                     ids.append(int(sid))
         return ids
 
+    def _collect_climate_refresh_ids(self, devices: dict) -> list[int]:
+        """Collect climate status object IDs that need periodic GETVALUE.
+
+        Same firmware behavior as energy meters: the webserver DB tracks the
+        physical thermostat only when a GETVALUE is issued on the status
+        object. Without it, setpoint changes made by the device itself (mode
+        change to absence/reduction, wall panel adjustments) never reach HA.
+        """
+        ids: list[int] = []
+        for device in devices.values():
+            if device.get("device_type") != DEVICE_TYPE_CLIMATES:
+                continue
+            for status_name, status in device.get("status", {}).items():
+                if status_name not in CLIMATE_REFRESH_STATUS_NAMES:
+                    continue
+                sid = status.get("status_id")
+                if sid is None:
+                    continue
+                with contextlib.suppress(ValueError, TypeError):
+                    ids.append(int(sid))
+        return ids
+
+    async def _maybe_refresh_climates(self) -> None:
+        """Send GETVALUE to thermostat setpoint/mode statuses if the throttle elapsed."""
+        # Self-heal like _maybe_refresh_energy_meters: rebuild the id list if
+        # a reload left the slim poll active without a fresh discovery.
+        if not self._climate_refresh_ids and self.vimarproject is not None:
+            self._climate_refresh_ids = self._collect_climate_refresh_ids(self.vimarproject.devices)
+
+        if not self._climate_refresh_ids or self.vimarconnection is None:
+            return
+        now = time.monotonic()
+        if now - self._last_climate_refresh < DEFAULT_CLIMATE_REFRESH_INTERVAL:
+            return
+        self._last_climate_refresh = now
+
+        # Skip ids with an in-flight write-guard: a GETVALUE would make the
+        # next poll overwrite the optimistic value with pre-write hardware
+        # state. They will be covered by the post-write refresh instead.
+        guarded = self._pending_write_guards
+        ids = [sid for sid in self._climate_refresh_ids if str(sid) not in guarded]
+        if not ids:
+            return
+        _LOGGER.debug("Vimar: refreshing %d climate statuses via GETVALUE", len(ids))
+        try:
+            await self.hass.async_add_executor_job(self.vimarconnection.request_value_refresh, ids)
+        except Exception as err:  # noqa: BLE001 - best-effort refresh
+            _LOGGER.debug("Vimar: climate refresh failed: %s", err)
+
     async def _maybe_refresh_energy_meters(self) -> None:
         """Send GETVALUE to energy meter statuses if the throttle elapsed."""
         if self._energy_refresh_interval <= 0:
@@ -583,6 +688,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._known_status_ids = []
         self._energy_refresh_ids = []
         self._last_energy_refresh = 0.0
+        self._climate_refresh_ids = []
+        self._last_climate_refresh = 0.0
         self._last_device_count = -1
         self._consecutive_auth_failures = 0
         self._reauth_triggered = False

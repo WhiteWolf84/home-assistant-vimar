@@ -158,3 +158,47 @@ async def test_set_hvac_mode_from_off_does_not_write_setpoint():
     assert "S" not in status_ids  # setpoint untouched
     assert writes[0] == ("F", FUNZ_MANUAL, "NO-OPTIONALS")
     assert ("R", "1", "NO-OPTIONALS") in writes  # regolazione -> cool
+
+
+# --- preset modes -----------------------------------------------------------
+
+
+async def test_set_preset_away_writes_assenza_and_schedules_refresh():
+    """Away preset writes funzionamento=3 (assenza) and schedules a GETVALUE.
+
+    The webserver DB does not follow the physical thermostat: entering
+    absence switches the regulation setpoint on the device while the DB
+    keeps the manual value. The post-write refresh (GETVALUE on setpoint +
+    funzionamento) is what makes HA show the real setpoint afterwards.
+    """
+    climate, _ = _make_climate(_manual_fancoil_status())
+
+    await climate.async_set_preset_mode("away")
+
+    assert _scheduled_writes(climate) == [("F", "3", "NO-OPTIONALS")]
+    refresh = climate.coordinator.schedule_status_refresh
+    assert refresh.call_count == 1
+    ids, _delay = refresh.call_args.args
+    assert sorted(ids) == ["F", "S"]  # funzionamento + setpoint
+
+
+def test_type1_protection_reports_protezione_not_away():
+    """Type I: funzionamento=3 is Protection, and away must not be offered.
+
+    Type I thermostats have no absence mode; get_const_value(ASSENZA) falls
+    back to the protection value ("3"). preset_mode used to match ASSENZA
+    first and report 'away', which is not in preset_modes for Type I.
+    """
+    status = {
+        # no 'regolazione' -> climate_type == "heat_cool" (Type I)
+        "funzionamento": {"status_id": "F", "status_value": "3"},
+        "stagione": {"status_id": "G", "status_value": "0"},
+        "setpoint": {"status_id": "S", "status_value": "20.0"},
+        "temperatura": {"status_id": "T", "status_value": "21.0"},
+    }
+    climate, _ = _make_climate(status)
+
+    assert climate.climate_type == "heat_cool"
+    assert climate.preset_mode == "protezione"
+    assert climate.preset_mode in climate.preset_modes
+    assert "away" not in climate.preset_modes

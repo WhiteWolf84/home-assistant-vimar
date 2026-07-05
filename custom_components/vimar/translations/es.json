@@ -8,7 +8,7 @@
             "state": {
               "none": "Manual",
               "auto": "Programación",
-              "eco": "Eco",
+              "eco": "Reducción",
               "protezione": "Protección",
               "away": "Ausencia"
             }

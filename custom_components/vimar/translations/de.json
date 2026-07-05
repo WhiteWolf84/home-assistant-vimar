@@ -8,7 +8,7 @@
             "state": {
               "none": "Manuell",
               "auto": "Zeitplan",
-              "eco": "Eco",
+              "eco": "Absenkung",
               "protezione": "Schutz",
               "away": "Abwesenheit"
             }
