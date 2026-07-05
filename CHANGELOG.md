@@ -10,6 +10,19 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.7.1] - 2026-07-05
+
+### Fixed
+
+- Thermostat setpoint no longer freezes on the old value after a mode change. The VIMAR webserver DB does not track the physical thermostat unless a GETVALUE is issued on the status object (the native UI popup does this during its "device synchronization" phase — same firmware behavior already handled for energy meters). Switching to Absence/Reduction made the device regulate on its stored per-mode setpoint while Home Assistant kept showing the manual one. Every mode-changing command (preset, on/off, set temperature from another mode) now schedules a GETVALUE on `setpoint` + `funzionamento` right after the write-guard window and repolls, and a periodic GETVALUE (every 120 s) keeps thermostats in sync with changes made from the wall panel or the native VIMAR UI, which previously never reached Home Assistant at all.
+- Type I thermostats in frost-protection mode no longer report an inconsistent preset. These devices have no absence mode, so the absence constant falls back to the protection value (`funzionamento=3`); the preset detection matched absence first and reported `away`, a preset not offered for Type I. Protection is now checked first, so the state correctly shows "Protection".
+
+### Changed
+
+- The "Eco" preset is now labeled with the official VIMAR term in every language ("Riduzione" in Italian, "Reduction" in English, …) so Home Assistant matches the mode names shown on the physical thermostat and in the By-me UI. The underlying preset key stays `eco`: automations referencing it keep working.
+
+---
+
 ## [2026.7.0] - 2026-07-03
 
 ### Fixed
