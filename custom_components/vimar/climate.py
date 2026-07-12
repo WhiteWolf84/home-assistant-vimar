@@ -370,7 +370,15 @@ class VimarClimate(VimarEntity, ClimateEntity):
         makes the firmware reload its stored manual setpoint and discard the
         value we just wrote.
 
-        When the thermostat is off or in another preset (auto/eco/away/...),
+        When the thermostat is in away (absence) mode, also write ONLY the
+        setpoint: the firmware keeps per-mode setpoints and applies a plain
+        SETVALUE to the ACTIVE mode, so this edits the absence setpoint while
+        staying in absence. Verified against the native By-Web UI ("T Assenza"
+        panel): it sends a single SETVALUE on the same 'setpoint' status, with
+        no funzionamento write. Re-sending funzionamento here would drop the
+        thermostat to manual mode instead.
+
+        When the thermostat is off or in another preset (auto/eco/...),
         activate manual mode first and apply the setpoint last. change_state()
         sends the writes sequentially in this order, so the setpoint wins. The
         heat/cool direction is left untouched: the user only chose a
@@ -386,6 +394,15 @@ class VimarClimate(VimarEntity, ClimateEntity):
         # Already in manual mode: a plain setpoint write, like the web UI.
         if self.is_on and self.preset_mode == PRESET_NONE:
             self.change_state("setpoint", str(set_temperature))
+            return
+
+        # In away (absence): plain setpoint write as well — it targets the
+        # absence setpoint and the thermostat STAYS in absence mode (see
+        # docstring). The post-write refresh reads back what the firmware
+        # actually applied, so HA converges to the device truth regardless.
+        if self.is_on and self.preset_mode == PRESET_AWAY:
+            self.change_state("setpoint", str(set_temperature))
+            self._schedule_post_write_refresh()
             return
 
         # Off or another preset: enter manual mode, then override the setpoint.

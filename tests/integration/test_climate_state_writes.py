@@ -160,6 +160,29 @@ async def test_set_hvac_mode_from_off_does_not_write_setpoint():
     assert ("R", "1", "NO-OPTIONALS") in writes  # regolazione -> cool
 
 
+async def test_set_temperature_in_away_writes_only_setpoint_and_refreshes():
+    """In away: a single setpoint SETVALUE, no funzionamento — stays in absence.
+
+    The firmware keeps per-mode setpoints and applies a plain SETVALUE to the
+    active mode, so this edits the absence setpoint. Verified against the
+    By-Web UI "T Assenza" panel (single SETVALUE on the same 'setpoint'
+    status). Writing funzionamento alongside it would drop the thermostat to
+    manual mode (the generic fallback below). The post-write refresh (GETVALUE
+    on setpoint + funzionamento) then shows what the firmware applied.
+    """
+    status = _manual_fancoil_status()
+    status["funzionamento"]["status_value"] = "3"  # VIMAR_CLIMATE_ASSENZA_II
+    climate, _ = _make_climate(status)
+
+    await climate.async_set_temperature(temperature=27.5)
+
+    assert _scheduled_writes(climate) == [("S", "27.5", "NO-OPTIONALS")]
+    refresh = climate.coordinator.schedule_status_refresh
+    assert refresh.call_count == 1
+    ids, _delay = refresh.call_args.args
+    assert sorted(ids) == ["F", "S"]
+
+
 # --- preset modes -----------------------------------------------------------
 
 
