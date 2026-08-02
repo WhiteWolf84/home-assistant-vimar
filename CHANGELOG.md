@@ -10,6 +10,19 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- The integration now **reuses its connection** to the VIMAR web server. Every single request — each poll, each command, each meter reading — used to open a brand new HTTPS connection and negotiate a full TLS handshake, thousands of times a day against a small embedded device. Connections are now kept alive and reused, which makes commands respond faster and takes a constant load off the web server.
+- Energy-meter and thermostat refreshes no longer compete with the poll for the same time budget. They ran inside the poll's timeout while issuing one request per meter and per thermostat, so on larger installations they could use it up on their own and make every entity flicker to "unavailable" for that cycle. They now run in the background, and a refresh that is still in progress is never started twice.
+
+### Security
+
+- The connection status sensor no longer publishes the VIMAR **username** and **session id** as state attributes. Attributes are readable by every Home Assistant user and are kept in the recorder database for weeks; the session id in particular is a live credential for the web server. The sensor still reports host, port, URL, TLS settings and certificate.
+
+---
+
 ## [2026.8.0b0] - 2026-08-02
 
 > **Beta.** Published as a HACS pre-release for on-device testing before a
