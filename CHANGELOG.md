@@ -10,7 +10,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
-## [Unreleased]
+## [2026.8.0b0] - 2026-08-02
+
+> **Beta.** Published as a HACS pre-release for on-device testing before a
+> stable `2026.8.0`. It supersedes `2026.7.2b0` and **includes its fix** (the
+> Absence setpoint write), so beta testers can move straight to this version.
 
 ### Fixed
 
