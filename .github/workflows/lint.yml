@@ -2,7 +2,9 @@ name: Lint
 
 on:
   push:
-    branches: [master, develop, feature/*]
+    # Every branch - see the note in tests.yml: fix/*, perf/* and style/*
+    # branches were never linted before reaching master.
+    branches: ['**']
   pull_request:
     branches: [master]
 

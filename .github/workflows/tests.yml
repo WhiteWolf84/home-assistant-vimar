@@ -2,7 +2,11 @@ name: Tests
 
 on:
   push:
-    branches: [master, develop, feature/*]
+    # Every branch, not just master/develop/feature/*. Working branches named
+    # fix/*, perf/*, style/* matched none of those, so they were pushed - and
+    # one was even tagged for a HACS pre-release - without tests ever running.
+    # That is how a broken CI dependency reached master unnoticed.
+    branches: ['**']
   pull_request:
     branches: [master]
 
