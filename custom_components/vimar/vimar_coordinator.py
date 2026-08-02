@@ -107,6 +107,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # Background tasks for delayed post-write GETVALUE refreshes
         # (see schedule_status_refresh); cancelled on unload.
         self._refresh_tasks: set[asyncio.Task] = set()
+        # In-flight periodic GETVALUE refresh, at most one at a time
+        # (see _schedule_periodic_refreshes).
+        self._periodic_refresh_task: asyncio.Task | None = None
 
         # FIX: single global FIFO for all device writes (SETVALUE). Every
         # change_state() from every entity enqueues its batch here and one
@@ -224,6 +227,18 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._refresh_tasks.clear()
+        self._periodic_refresh_task = None
+
+    async def async_close_connection(self) -> None:
+        """Release the pooled HTTP connections (on unload/reload).
+
+        The connection keeps one HTTP session per executor thread alive for
+        reuse; without this the sockets would linger after a reload.
+        """
+        if self.vimarconnection is None:
+            return
+        with contextlib.suppress(Exception):
+            await self.hass.async_add_executor_job(self.vimarconnection.close)
 
     # --- delayed GETVALUE refresh after writes ---------------------------
 
@@ -326,8 +341,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                             )
                 else:
                     _LOGGER.debug("Vimar: slim poll (%d status IDs)", len(self._known_status_ids))
-                    await self._maybe_refresh_energy_meters()
-                    await self._maybe_refresh_climates()
+                    self._schedule_periodic_refreshes()
                     slim_results = await self.hass.async_add_executor_job(
                         self.vimarconnection.get_status_only, self._known_status_ids
                     )
@@ -542,6 +556,42 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 with contextlib.suppress(ValueError, TypeError):
                     ids.append(int(sid))
         return ids
+
+    def _schedule_periodic_refreshes(self) -> None:
+        """Run the periodic GETVALUE refreshes off the poll's critical path.
+
+        The energy-meter and thermostat refreshes issue ONE SOAP request per
+        status object id, sequentially. They used to be awaited inside the
+        poll's `asyncio.timeout(self._timeout)` block, so they spent the very
+        same budget (6 s by default) that the slim poll needs: on an
+        installation with a handful of meters and thermostats the refresh
+        cycle alone could exhaust it, and every entity went unavailable for
+        that cycle. Worse, `asyncio.timeout` cannot cancel a job already
+        running on an executor thread, so the work carried on in the
+        background while the poll had given up.
+
+        They are best-effort by nature (a missed refresh is retried on the
+        next tick), so they now run as a tracked background task instead. A
+        single task at a time: if the previous refresh is still in flight the
+        tick is skipped, which also protects the shared connection from a
+        pile-up when the web server is slow.
+        """
+        if self._periodic_refresh_task is not None and not self._periodic_refresh_task.done():
+            _LOGGER.debug("Vimar: previous periodic refresh still running, skipping this tick")
+            return
+
+        task = self.hass.async_create_background_task(
+            self._run_periodic_refreshes(), name="vimar_periodic_refresh"
+        )
+        self._periodic_refresh_task = task
+        # Tracked like the post-write refreshes so unload cancels it too.
+        self._refresh_tasks.add(task)
+        task.add_done_callback(self._refresh_tasks.discard)
+
+    async def _run_periodic_refreshes(self) -> None:
+        """Body of the background refresh task (throttles live in the callees)."""
+        await self._maybe_refresh_energy_meters()
+        await self._maybe_refresh_climates()
 
     async def _maybe_refresh_climates(self) -> None:
         """Send GETVALUE to thermostat setpoint/mode statuses if the throttle elapsed."""

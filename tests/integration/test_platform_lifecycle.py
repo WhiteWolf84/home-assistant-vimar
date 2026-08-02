@@ -160,21 +160,28 @@ async def test_ignored_platforms_are_not_forwarded_but_binary_sensor_survives():
     assert DEVICE_TYPE_BINARY_SENSOR in coordinator.forwarded_platforms
 
 
+def _unload_fixture(forwarded, devices_for_platform, unload_result=True):
+    """A coordinator + hass pair ready for async_unload_entry."""
+    coordinator = MagicMock()
+    coordinator.async_shutdown_write_worker = AsyncMock()
+    coordinator.async_close_connection = AsyncMock()
+    coordinator.forwarded_platforms = forwarded
+    coordinator.devices_for_platform = devices_for_platform
+
+    entry = MagicMock(entry_id=ENTRY_ID)
+    hass = MagicMock()
+    hass.data = {DOMAIN: {ENTRY_ID: coordinator}}
+    hass.config_entries.async_unload_platforms = AsyncMock(return_value=unload_result)
+    return coordinator, hass, entry
+
+
 async def test_unload_covers_a_platform_that_registered_no_entities():
     """THE regression: alarm_control_panel with no SAI2 areas must be unloaded.
 
     devices_for_platform is deliberately left empty, reproducing an
     installation where every platform setup returned early.
     """
-    coordinator = MagicMock()
-    coordinator.async_shutdown_write_worker = AsyncMock()
-    coordinator.forwarded_platforms = list(PLATFORMS)
-    coordinator.devices_for_platform = {}
-
-    entry = MagicMock(entry_id=ENTRY_ID)
-    hass = MagicMock()
-    hass.data = {DOMAIN: {ENTRY_ID: coordinator}}
-    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
+    _coord, hass, entry = _unload_fixture(list(PLATFORMS), {})
 
     assert await async_unload_entry(hass, entry) is True
 
@@ -186,15 +193,9 @@ async def test_unload_covers_a_platform_that_registered_no_entities():
 
 async def test_unload_falls_back_to_devices_for_platform():
     """An entry set up before this change has no recorded list; still unload."""
-    coordinator = MagicMock()
-    coordinator.async_shutdown_write_worker = AsyncMock()
-    coordinator.forwarded_platforms = []
-    coordinator.devices_for_platform = {DEVICE_TYPE_LIGHTS: [], DEVICE_TYPE_BINARY_SENSOR: []}
-
-    entry = MagicMock(entry_id=ENTRY_ID)
-    hass = MagicMock()
-    hass.data = {DOMAIN: {ENTRY_ID: coordinator}}
-    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
+    _coord, hass, entry = _unload_fixture(
+        [], {DEVICE_TYPE_LIGHTS: [], DEVICE_TYPE_BINARY_SENSOR: []}
+    )
 
     await async_unload_entry(hass, entry)
 
@@ -204,18 +205,19 @@ async def test_unload_falls_back_to_devices_for_platform():
 
 async def test_failed_unload_keeps_the_coordinator_registered():
     """If HA refuses the unload, the entry must stay in hass.data."""
-    coordinator = MagicMock()
-    coordinator.async_shutdown_write_worker = AsyncMock()
-    coordinator.forwarded_platforms = list(PLATFORMS)
-    coordinator.devices_for_platform = {}
-
-    entry = MagicMock(entry_id=ENTRY_ID)
-    hass = MagicMock()
-    hass.data = {DOMAIN: {ENTRY_ID: coordinator}}
-    hass.config_entries.async_unload_platforms = AsyncMock(return_value=False)
+    _coord, hass, entry = _unload_fixture(list(PLATFORMS), {}, unload_result=False)
 
     assert await async_unload_entry(hass, entry) is False
     assert ENTRY_ID in hass.data[DOMAIN]
+
+
+async def test_unload_releases_the_pooled_http_connections():
+    """Sessions are kept alive for reuse, so unload must close them."""
+    coordinator, hass, entry = _unload_fixture(list(PLATFORMS), {})
+
+    await async_unload_entry(hass, entry)
+
+    coordinator.async_close_connection.assert_awaited_once()
 
 
 async def test_alarm_platform_without_sai2_registers_an_empty_entity_list():

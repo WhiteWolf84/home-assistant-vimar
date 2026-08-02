@@ -100,9 +100,18 @@ class VimarLink:
         """Get last request exception."""
         return self._connection.request_last_exception
 
+    @property
+    def connection(self) -> VimarConnection:
+        """Read-only access to the underlying connection (host, port, ...)."""
+        return self._connection
+
     def install_certificate(self):
         """Download CA certificate from web server."""
         return self._connection.install_certificate()
+
+    def close(self):
+        """Release the pooled HTTP connections (called when unloading)."""
+        self._connection.close()
 
     def login(self):
         """Authenticate and get session ID."""
