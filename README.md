@@ -7,7 +7,7 @@
 
 # VIMAR By-Me / By-Web Integration for Home Assistant
 
-> **Current Version:** 2026.7.1 · **Requires:** Home Assistant 2026.5.0+ · **Python:** 3.13+
+> **Current Version:** 2026.7.1 · **Requires:** Home Assistant 2026.5.0+ · **Python:** 3.14.2+ (imposed by Home Assistant 2026.3+; the standalone `vimarlink` library still runs on 3.13)
 
 A comprehensive Home Assistant custom integration for the VIMAR By-me / By-web bus system. Controls lights, covers, climate, switches, sensors, media players, scenes, and the **SAI2 alarm system** through the VIMAR web server.
 

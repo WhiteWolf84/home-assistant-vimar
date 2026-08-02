@@ -325,7 +325,11 @@ examples/
 ## Compatibility
 
 - **Home Assistant**: Requires 2026.5.0+ (see hacs.json); dev environment on 2026.7.0
-- **Python**: 3.13.2+ required; dev environment on 3.14 (see pyrightconfig.json)
+- **Python**: **3.14.2+** required. Home Assistant 2026.3.0 and later declare
+  `Requires-Python >=3.14.2`, so any supported HA version already runs on it —
+  a claim of "3.13.2+" was contradictory and broke CI when installing HA on
+  3.13. The `vimarlink/` library and `examples/example.py` remain importable on
+  3.13 (they only need `requests`), which the unit-test CI job pins.
 - **VIMAR Firmware**: Tested with v2.5 to v2.11
 - **Hardware**: VIMAR 01945 or 01946 web server required
 
