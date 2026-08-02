@@ -10,7 +10,17 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
-## [Unreleased]
+## [2026.8.0b1] - 2026-08-03
+
+> **Beta.** Published as a HACS pre-release from the `perf/connection-reuse`
+> branch, for on-device testing before it is merged. It builds on `2026.8.0b0`
+> and contains everything that release did.
+>
+> **What to watch while testing:** the connection reuse is a structural change.
+> If the VIMAR web server closes idle keep-alive connections aggressively you
+> may see isolated errors when one is reused; read requests retry once by
+> themselves, commands are never replayed. Anything recurring in the log is
+> worth reporting.
 
 ### Changed
 
