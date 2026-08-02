@@ -32,6 +32,9 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     _vimarconnection: VimarLink | None = None
     _vimarproject: VimarProject | None = None
     _coordinator: VimarDataUpdateCoordinator | None = None
+    # Availability actually pushed to the HA state machine by the last write.
+    # None = never written yet (the first coordinator update always writes).
+    _last_written_available: bool | None = None
 
     ICON = "mdi:checkbox-marked"
 
@@ -60,7 +63,24 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         interamente nel coordinator (_log_poll_summary), che emette due
         sole righe DEBUG per ciclo. Qui si filtra solo l'aggiornamento
         effettivo dell'entity senza produrre log.
+
+        FIX #25: the filter must NOT swallow availability transitions.
+        `available` is only ever published to the state machine by an
+        async_write_ha_state() call, so skipping the write meant a failed
+        poll never surfaced: the coordinator empties _changed_device_ids at
+        the start of every cycle and an exception aborts it before the set
+        is repopulated, so with the old plain filter EVERY entity skipped the
+        write and kept showing its last known value forever while the
+        webserver was down (and, symmetrically, stayed 'unavailable' after
+        recovery until its own state happened to change). Writing on every
+        availability transition is cheap: HA drops a state write whose state
+        and attributes are unchanged.
         """
+        available = self.available
+        if available != self._last_written_available:
+            self._last_written_available = available
+            super()._handle_coordinator_update()
+            return
         if self._device_id in self.coordinator._changed_device_ids:
             super()._handle_coordinator_update()
 
