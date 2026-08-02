@@ -60,6 +60,11 @@ log = _LOGGER
 # SETVALUE within 8-10 s; 15 s gives comfortable headroom.
 _WRITE_GUARD_SECONDS = 15.0
 
+# Sentinel stored in _device_state_hashes by invalidate_device_hash(). It can
+# never collide with a real value: _hash_device_state() returns an md5
+# hexdigest, which is always 32 characters.
+_HASH_INVALIDATED = ""
+
 
 class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the API."""
@@ -910,6 +915,24 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         state_json = json.dumps(state_data, sort_keys=True)
         return hashlib.md5(state_json.encode(), usedforsecurity=False).hexdigest()
 
+    def invalidate_device_hash(self, device_id: str) -> None:
+        """Force the next poll to treat this device as changed.
+
+        Called after an optimistic local write (see
+        VimarEntity.request_statemachine_update): the webserver may answer the
+        next poll with the very value we already have in cache - a monostable
+        device falling back to 0 for the second time, a thermostat rounding a
+        setpoint, a shutter that did not move - and the hash comparison would
+        then find nothing changed and leave the UI out of sync.
+
+        A sentinel is stored instead of deleting the entry, because a MISSING
+        entry means 'device never seen before'. Deleting made every locally
+        written device reappear as `New device detected` on the next poll,
+        which is plainly wrong on an installation whose topology never changed
+        and sent whoever read the log looking for a discovery problem.
+        """
+        self._device_state_hashes[device_id] = _HASH_INVALIDATED
+
     def _detect_state_changes(self, devices: dict[str, dict]) -> set[str]:
         """Detect which devices have changed states.
 
@@ -928,6 +951,15 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if old_hash is None:
                 changed_ids.add(device_id)
                 log.debug("New device detected: %s", device_id)
+            elif old_hash == _HASH_INVALIDATED:
+                # Invalidated by our own write, not a newly discovered device.
+                changed_ids.add(device_id)
+                if log.isEnabledFor(logging.DEBUG):
+                    log.debug(
+                        "Device %s (%s) resynchronised after a local write",
+                        device_id,
+                        device.get("device_friendly_name", "unknown"),
+                    )
             elif new_hash != old_hash:
                 changed_ids.add(device_id)
                 if log.isEnabledFor(10):
