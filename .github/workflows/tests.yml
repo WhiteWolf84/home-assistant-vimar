@@ -40,3 +40,33 @@ jobs:
         with:
           files: ./coverage.xml
           flags: unittests
+
+  # The integration suite drives the entities and the coordinator with mocks
+  # and therefore needs Home Assistant itself. It used to run only on
+  # developer machines, so regressions in cover tracking, climate writes,
+  # entity availability, the SAI2 decoding or the platform lifecycle could
+  # reach master unnoticed.
+  integration-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Pins homeassistant + the matching pytest-homeassistant-custom-component,
+          # so CI runs the same stack as the development environment.
+          pip install -r requirements_dev.txt
+
+      - name: Run integration tests (Home Assistant required)
+        run: |
+          pytest tests/integration/ -v --cov=custom_components/vimar --cov-report=term
