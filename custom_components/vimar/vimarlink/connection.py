@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import xml.etree.ElementTree as xmlTree
+from urllib.parse import quote
 
 import requests
 import urllib3
@@ -14,6 +16,16 @@ from .exceptions import VimarApiError, VimarConfigError, VimarConnectionError
 from .http_adapter import HTTPAdapter
 
 _LOGGER = logging.getLogger(__name__)
+
+# Credentials must never reach the log or an exception message: the VIMAR login
+# endpoint takes them as query parameters, and requests/urllib3 embed the full
+# URL in most of their exception messages ("Max retries exceeded with url:
+# ...?username=admin&password=hunter2"). Those exceptions are logged at ERROR
+# level and bubble up to the config flow, so a single network hiccup during
+# login used to write the plaintext password into home-assistant.log - a file
+# users routinely attach to GitHub issues.
+_REDACTED = "***"
+_SENSITIVE_QUERY_RE = re.compile(r"((?:password|username|sessionid)=)[^&\s'\"]*", re.IGNORECASE)
 # FIX #19: rimosso SSL_IGNORED module-level global. Come globale non veniva
 # mai resettato tra reload della config-entry nello stesso processo, quindi
 # il messaggio debug "ignoring ssl" veniva soppresso anche per nuove istanze.
@@ -71,7 +83,7 @@ class VimarConnection:
 
         if certificate_file is None or certificate_file is False:
             raise VimarConnectionError(
-                f"Certificate download failed: {self.request_last_exception}"
+                f"Certificate download failed: {self.redact(str(self.request_last_exception))}"
             )
 
         old_cert = None
@@ -92,27 +104,50 @@ class VimarConnection:
 
         return cert_changed
 
+    def redact(self, text: str) -> str:
+        """Strip credentials from a message before it is logged or re-raised.
+
+        Two passes, because a credential can appear either verbatim (our own
+        f-strings) or percent-encoded inside a URL echoed back by requests:
+        first the literal secrets, then any sensitive query parameter.
+        """
+        if not text:
+            return text
+        for secret in (self._password, quote(self._password or "", safe="")):
+            if secret:
+                text = text.replace(secret, _REDACTED)
+        return _SENSITIVE_QUERY_RE.sub(rf"\1{_REDACTED}", text)
+
     def login(self) -> str | None:
         """Authenticate and get session ID."""
         login_url = (
-            f"{self._schema}://{self._host}:{self._port}"
-            f"/vimarbyweb/modules/system/user_login.php?"
-            f"sessionid=&username={self._username}&password={self._password}&remember=0&op=login"
+            f"{self._schema}://{self._host}:{self._port}/vimarbyweb/modules/system/user_login.php"
         )
+        # Credentials go through the query-parameter encoder instead of an
+        # f-string: a password containing '&', '#', '+', '%' or a space used to
+        # be spliced raw into the URL, silently truncating or corrupting it, so
+        # a perfectly valid password was reported back as "invalid credentials".
+        login_params = {
+            "sessionid": "",
+            "username": self._username,
+            "password": self._password,
+            "remember": "0",
+            "op": "login",
+        }
 
         use_cert = bool(self._certificate)
 
         if self._schema == "https" and use_cert and not os.path.isfile(self._certificate):
             self.install_certificate()
 
-        result = self._request(login_url)
+        result = self._request(login_url, params=login_params)
 
         if result is False and use_cert:
             curr_ex_str = str(self.request_last_exception)
             if "SSLError" in curr_ex_str or "TLS CA" in curr_ex_str:
                 try:
                     if self.install_certificate():
-                        result = self._request(login_url)
+                        result = self._request(login_url, params=login_params)
                 except Exception:
                     pass
 
@@ -121,7 +156,12 @@ class VimarConnection:
             return None
 
         if result is False:
-            raise VimarConnectionError(f"Error during login: {self.request_last_exception}")
+            # redact(): the underlying requests exception carries the full login
+            # URL, credentials included, and this message is both logged and
+            # surfaced in the config-flow error path.
+            raise VimarConnectionError(
+                f"Error during login: {self.redact(str(self.request_last_exception))}"
+            )
 
         try:
             xml = self._parse_xml(result)
@@ -130,7 +170,9 @@ class VimarConnection:
             logincode = xml.find("result")
             loginmessage = xml.find("message")
         except Exception as err:
-            raise VimarConnectionError(f"Error parsing login response: {err} - {result}")
+            raise VimarConnectionError(
+                f"Error parsing login response: {self.redact(str(err))} - {self.redact(result)}"
+            )
 
         if logincode is not None and logincode.text != "0":
             msg = loginmessage.text if loginmessage is not None else logincode.text
@@ -172,8 +214,13 @@ class VimarConnection:
         post: str | None = None,
         headers: dict | None = None,
         check_ssl: bool = False,
+        params: dict | None = None,
     ) -> str | bool | None:
-        """Execute HTTP request."""
+        """Execute HTTP request.
+
+        `params` is passed to requests so query values are properly encoded;
+        never build a query string with credentials by hand (see login()).
+        """
         try:
             timeouts = (int(self._timeout / 2), self._timeout)
 
@@ -190,18 +237,28 @@ class VimarConnection:
                 s.mount("https://", HTTPAdapter())
 
                 if post is None:
-                    response = s.get(url, headers=headers, verify=check_ssl, timeout=timeouts)
+                    response = s.get(
+                        url, params=params, headers=headers, verify=check_ssl, timeout=timeouts
+                    )
                 else:
                     response = s.post(
-                        url, data=post, headers=headers, verify=check_ssl, timeout=timeouts
+                        url,
+                        params=params,
+                        data=post,
+                        headers=headers,
+                        verify=check_ssl,
+                        timeout=timeouts,
                     )
 
             response.raise_for_status()
             return response.text
 
+        # Every message below goes through redact(): requests and urllib3
+        # embed the requested URL - login credentials included - in most of
+        # their exception strings.
         except HTTPError as http_err:
             self.request_last_exception = http_err
-            _LOGGER.error("HTTP error occurred: %s", str(http_err))
+            _LOGGER.error("HTTP error occurred: %s", self.redact(str(http_err)))
             return False
         except requests.exceptions.Timeout as ex:
             self.request_last_exception = ex
@@ -209,7 +266,7 @@ class VimarConnection:
             return False
         except Exception as err:
             self.request_last_exception = err
-            _LOGGER.error("Error occurred: %s", str(err))
+            _LOGGER.error("Error occurred: %s", self.redact(str(err)))
             return False
 
     def _parse_xml(self, xml: str) -> xmlTree.Element | None:
