@@ -30,6 +30,24 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.7.2b0] - 2026-07-12
+
+> **Beta.** Published as a HACS pre-release for on-device testing before a
+> stable `2026.7.2`. Not yet validated against real hardware.
+
+### Fixed
+
+- Changing the temperature while a thermostat is in Absence ("away") no longer
+  kicks it out of Absence. In away mode the firmware keeps per-mode setpoints and
+  applies a plain SETVALUE to the active mode, so `set_temperature` now writes
+  only the `setpoint` and stays in Absence, exactly like the native By-Web UI
+  "T Assenza" panel (verified by capturing its SOAP traffic). Previously the
+  integration forced manual mode before writing, dropping the thermostat out of
+  any non-manual preset. A post-write GETVALUE reads back what the firmware
+  actually applied so Home Assistant converges to the device truth.
+
+---
+
 ## [2026.7.1] - 2026-07-05
 
 ### Fixed

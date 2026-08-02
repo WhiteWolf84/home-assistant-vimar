@@ -24,6 +24,14 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$GITHUB_REF_NAME" >> $GITHUB_OUTPUT
+          # Mark as prerelease when the version carries an alphabetic
+          # modifier (e.g. 2026.7.2b0, ...rc1, ...a0) so beta tags do not
+          # ship to stable HACS users.
+          if [[ "$VERSION" =~ [a-zA-Z] ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
       
       - name: Extract changelog for this version
         id: changelog
@@ -47,6 +55,6 @@ jobs:
           files: |
             vimar-${{ steps.get_version.outputs.version }}.zip
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.get_version.outputs.prerelease }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
