@@ -24,7 +24,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-cov requests
+          # requests-mock is a TEST-only dependency: it fakes the HTTP
+          # transport so the connection layer can be exercised without a
+          # VIMAR web server. It does not pull in Home Assistant, so the
+          # "unit tests run standalone" contract still holds.
+          pip install pytest pytest-cov requests requests-mock
 
       - name: Run unit tests (no HA required)
         run: |
