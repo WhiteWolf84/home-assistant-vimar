@@ -10,6 +10,26 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Entities now go **unavailable** when the VIMAR web server is unreachable. To avoid useless work, an entity refreshed itself only when the poll reported its device as changed; a failed poll reports nothing as changed, so the update was skipped and Home Assistant kept showing the last known values — lights still "on", the last thermostat reading, the last shutter position — indefinitely, with no sign that the connection was gone and no way for automations to notice. Availability changes are now always published, in both directions, so an outage is visible immediately and entities come back by themselves once the web server answers again.
+- Logins with a password containing `&`, `=`, `#`, `+`, `%` or a space now work. The credentials were pasted straight into the login URL, so those characters broke the request apart and the web server received a truncated password: the user was told the credentials were invalid while they were perfectly correct. They are now encoded properly.
+- The VIMAR password is no longer written to `home-assistant.log`. A network error during login produced an error message containing the full login URL, credentials included, which was logged and shown in the configuration dialog — and log files are routinely attached to bug reports. Passwords, usernames and session ids are now masked in every message the connection layer logs or raises.
+- Reloading the integration no longer leaves a platform half-loaded on installations without a SAI2 alarm. The unload step only undid platforms that had registered at least one entity, so the alarm platform — loaded, then skipped for lack of alarm areas — was never released. What gets loaded is now recorded at setup and is exactly what gets unloaded.
+
+### Security
+
+- The `vimar.exec_vimar_sql` service, which runs arbitrary SQL against the VIMAR web server database, is now restricted to **administrator** accounts. It could previously be called by any Home Assistant user, including non-admin and script-only accounts, while the far less dangerous `vimar.reload` service was already admin-only.
+
+### Changed
+
+- Minimum supported Home Assistant version raised to **2026.5.0** (development happens on 2026.7.0).
+- Internal: added 88 tests covering the four fixes above plus the SQL response parser, the SAI2 alarm bitmask decoding (armed/disarmed/triggered state and zone open/tamper flags) and friendly-name formatting. Test count 53 → 141, coverage 26% → 34%.
+
+---
+
 ## [2026.7.1] - 2026-07-05
 
 ### Fixed

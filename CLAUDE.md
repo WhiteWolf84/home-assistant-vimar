@@ -324,7 +324,7 @@ examples/
 
 ## Compatibility
 
-- **Home Assistant**: Requires 2026.1.0+ (see manifest.json); dev environment on 2026.7.0
+- **Home Assistant**: Requires 2026.5.0+ (see hacs.json); dev environment on 2026.7.0
 - **Python**: 3.13.2+ required; dev environment on 3.14 (see pyrightconfig.json)
 - **VIMAR Firmware**: Tested with v2.5 to v2.11
 - **Hardware**: VIMAR 01945 or 01946 web server required
