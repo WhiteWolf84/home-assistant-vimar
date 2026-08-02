@@ -124,21 +124,26 @@ class VimarStatusSensor(BinarySensorEntity):
     _attr_should_poll = True
 
     def __init__(self, coordinator: VimarDataUpdateCoordinator):
-        """Initialize the sensor."""
+        """Initialize the sensor.
+
+        State attributes are readable by every Home Assistant user and are
+        written to the recorder database, where they are kept for weeks: the
+        VIMAR username and the live SessionID (a bearer credential for the web
+        server) used to be published here and are no longer exposed. What is
+        left describes how the integration is connected, not who it is.
+        """
         self._coordinator = coordinator
         vimarconfig = coordinator.vimarconfig
-        conn = coordinator.vimarconnection._connection
-        self._attr_name = "Vimar Connection to " + str(conn._host) + ":" + str(conn._port)
+        conn = coordinator.vimarconnection.connection
+        self._attr_name = f"Vimar Connection to {conn.host}:{conn.port}"
         self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
         self._attr_extra_state_attributes = {
-            "Host": conn._host,
-            "Port": conn._port,
-            "Secure": conn._schema == "https",
-            "Verify SSL": conn._schema == "https" and vimarconfig.get(CONF_VERIFY_SSL),
-            "Vimar Url": f"{conn._schema}://{conn._host}:{conn._port}",
-            "Certificate": conn._certificate,
-            "Username": conn._username,
-            "SessionID": coordinator.vimarconnection._session_id,
+            "Host": conn.host,
+            "Port": conn.port,
+            "Secure": conn.schema == "https",
+            "Verify SSL": conn.schema == "https" and vimarconfig.get(CONF_VERIFY_SSL),
+            "Vimar Url": conn.base_url,
+            "Certificate": conn.certificate,
         }
         self._attr_is_on = False
 
