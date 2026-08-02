@@ -406,6 +406,14 @@ class VimarLink:
             return "SYNCDB"
         return "NO-OPTIONALS"
 
+    def execute_sql(self, select: str):
+        """Run a raw SELECT and return the parsed payload (public entry point).
+
+        Exposed so callers (the admin-only `vimar.exec_vimar_sql` service) do
+        not have to reach into the private `_request_vimar_sql`.
+        """
+        return self._request_vimar_sql(select)
+
     def get_device_status(self, object_id):
         """Get attribute status for a single device."""
         status_list = {}

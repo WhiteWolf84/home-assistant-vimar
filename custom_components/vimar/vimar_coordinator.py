@@ -85,6 +85,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self.entry = entry
         self.vimarconfig = vimarconfig
         self.devices_for_platform = {}
+        # Platforms actually handed to async_forward_entry_setups. Unloading
+        # must mirror THIS list, not devices_for_platform: a platform whose
+        # setup returns early without registering entities (e.g.
+        # alarm_control_panel on an installation without SAI2 areas) was
+        # forwarded but would never be unloaded, leaving it half-loaded across
+        # a reload.
+        self.forwarded_platforms: list[str] = []
         if entry:
             self.entity_unique_id_prefix = entry.unique_id or ""
 
@@ -696,6 +703,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._device_state_hashes = {}
         self._pending_write_guards = {}
         self.devices_for_platform = {}
+        self.forwarded_platforms = []
         vimarconfig = self.vimarconfig
         schema = "https" if vimarconfig.get(CONF_SECURE) else "http"
         host = vimarconfig.get(CONF_HOST)
@@ -747,6 +755,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         platforms = [
             i for i in PLATFORMS if i not in ignored_platforms or i == DEVICE_TYPE_BINARY_SENSOR
         ]
+        # Recorded BEFORE awaiting the forward so async_unload_entry can undo
+        # a setup that failed halfway through.
+        self.forwarded_platforms = list(platforms)
         await self.hass.config_entries.async_forward_entry_setups(self.entry, platforms)
 
         self._platforms_registered = True

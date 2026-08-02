@@ -137,6 +137,10 @@ async def async_setup_entry(
 
     if vimarproject is None or vimarproject.sai2_groups is None:
         _LOGGER.debug("SAI2: no alarm areas found, skipping alarm platform")
+        # Record the platform as set up with zero entities: the unload path
+        # keys off coordinator.forwarded_platforms, but leaving the key absent
+        # here made devices_for_platform disagree with what was loaded.
+        coordinator.devices_for_platform[CURR_PLATFORM] = []
         return
 
     # Register the single SAI Alarm device.

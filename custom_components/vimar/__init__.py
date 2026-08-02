@@ -163,7 +163,7 @@ async def add_services(hass: HomeAssistant):
             await coordinator.validate_vimar_credentials()
             if coordinator.vimarconnection:
                 payload = await hass.async_add_executor_job(
-                    coordinator.vimarconnection._request_vimar_sql, sql
+                    coordinator.vimarconnection.execute_sql, sql
                 )
                 _LOGGER.info(
                     SERVICE_EXEC_VIMAR_SQL + " done: SQL: %s . Result: %s",
@@ -171,11 +171,16 @@ async def add_services(hass: HomeAssistant):
                     str(payload),
                 )
 
-    hass.services.async_register(
+    # Admin-only: this runs arbitrary SQL against the VIMAR web server
+    # database. Registered with hass.services.async_register it was callable
+    # by ANY Home Assistant user (including non-admin and script-only
+    # accounts), unlike the far less dangerous reload service next to it.
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_EXEC_VIMAR_SQL,
         service_exec_vimar_sql_call,
-        SERVICE_EXEC_VIMAR_SQL_SCHEMA,
+        schema=SERVICE_EXEC_VIMAR_SQL_SCHEMA,
     )
 
     async def _handle_reload(service):
@@ -200,7 +205,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     coordinator: VimarDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     await coordinator.async_shutdown_write_worker()
-    platforms = list(coordinator.devices_for_platform.keys())
+    # Unload exactly what was forwarded at setup. Deriving the list from
+    # devices_for_platform missed any platform that returned early without
+    # registering entities (alarm_control_panel on installations without SAI2),
+    # leaving it loaded forever and breaking the next reload.
+    platforms = coordinator.forwarded_platforms or list(coordinator.devices_for_platform.keys())
     unloaded = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unloaded and entry.entry_id in hass.data[DOMAIN]:
         hass.data[DOMAIN].pop(entry.entry_id)
