@@ -54,22 +54,67 @@ class SensorSpec(NamedTuple):
 #: so any rule that asks "what does this measure?" claims them first and dresses
 #: a 0/1 flag up as a measurement: `temperature_alarm` was published as 0 °C,
 #: indistinguishable from a real freezing reading.
-NOT_A_READING = frozenset({"alarm", "reset", "request", "minmax", "history"})
+NOT_A_READING = frozenset({"alarm", "reset", "request", "minmax", "history", "mode", "modo"})
 
-#: Whole field names carrying a category rather than a quantity. `fase` is the
-#: installation's phase type - "monofase" or "trifase" - and matched the rule
-#: written for per-phase currents, so it was published in ampere.
-NOT_A_READING_FIELDS = frozenset({"fase"})
+#: Whole field names carrying a category or an operating mode rather than a
+#: quantity. `fase` is the installation's phase type - "monofase" or "trifase" -
+#: and matched the rule written for per-phase currents, so it was published in
+#: ampere; `forzatura` and `funzionamento` are load-control modes that were
+#: published as 0 kW.
+NOT_A_READING_FIELDS = frozenset({"fase", "forzatura", "funzionamento"})
+
+#: Instantaneous power flows on a load-control device, in kW. Confirmed on real
+#: hardware: each one has a cumulative `energia_totale_*` counterpart in kWh
+#: (`consumo_totale` 1.490 kW next to `energia_totale_consumo` 66698.4 kWh), and
+#: the flows add up - consumo = autoconsumo + prelievo, produzione = autoconsumo
+#: + immissione - which only holds for instantaneous power.
+#: Listed by full name on purpose. `produzione_presente` also names a flow but
+#: is a flag: 2978 samples of `produzione_totale` over a week spanned -3.94 to
+#: 5.05 kW, while `produzione_presente` never moved off 1.
+POWER_FLOW_FIELDS = frozenset(
+    {
+        "autoconsumo_totale",
+        "consumo_totale",
+        "immissione_totale",
+        "prelievo_totale",
+        "produzione_totale",
+        "scambio_totale",
+    }
+)
 
 
-def not_a_reading(name: str) -> bool:
+def _is_boolean_range(status_range: str | None) -> bool:
+    """Return True for a webserver range that only permits 0 or 1.
+
+    The webserver publishes `min=0|max=1` for its flags (`dynamic_mode`,
+    `reset_history`) and a full int32 span for real readings. A field that
+    cannot hold anything but 0 or 1 is not a measurement, whatever its name
+    suggests - and unlike the name, this is stated by the device itself.
+
+    Trade-off: a genuine 0..1 reading (a power factor, say) would be caught
+    here and reported without a unit. That is the deliberate direction of
+    error - visibly incomplete beats convincingly wrong - and such a field
+    lands in the debug log where a proper rule can be added for it.
+    """
+    if not status_range:
+        return False
+    parts = dict(piece.split("=", 1) for piece in status_range.split("|") if "=" in piece)
+    return parts.get("min") == "0" and parts.get("max") == "1"
+
+
+def not_a_reading(name: str, status_range: str | None = None) -> bool:
     """Return True when this field holds a flag or a category, not a value.
 
-    Matched on whole underscore-separated parts, never as a substring: the
-    substring matching this guard exists to contain is exactly what turned
-    `fase` into a current and `temperature_alarm` into a temperature.
+    The name is matched on whole underscore-separated parts, never as a
+    substring: the substring matching this guard exists to contain is exactly
+    what turned `fase` into a current and `temperature_alarm` into a
+    temperature.
     """
-    return name in NOT_A_READING_FIELDS or bool(set(name.split("_")) & NOT_A_READING)
+    if name in NOT_A_READING_FIELDS:
+        return True
+    if set(name.split("_")) & NOT_A_READING:
+        return True
+    return _is_boolean_range(status_range)
 
 
 def state_class_for(device_class: SensorDeviceClass | None) -> SensorStateClass | None:
@@ -202,8 +247,9 @@ class VimarSensor(VimarEntity, SensorEntity):
 
         name = self._measurement_name
         object_type = self._device["object_type"]
+        status_range = (self._device["status"].get(name) or {}).get("status_range")
 
-        if not_a_reading(name):
+        if not_a_reading(name, status_range):
             return SensorSpec(None, None)
 
         if object_type in ENERGY_METER_OBJECT_TYPES:
@@ -220,6 +266,8 @@ class VimarSensor(VimarEntity, SensorEntity):
                     UnitOfReactivePower.KILO_VOLT_AMPERE_REACTIVE,
                     SensorDeviceClass.REACTIVE_POWER,
                 )
+            if name in POWER_FLOW_FIELDS:
+                return SensorSpec(UnitOfPower.KILO_WATT, SensorDeviceClass.POWER)
             if "fase" in name:
                 return SensorSpec(UnitOfElectricCurrent.AMPERE, SensorDeviceClass.CURRENT)
             if any(x in name for x in ("_date", "_time", "_datetime")):

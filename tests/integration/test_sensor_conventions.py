@@ -50,14 +50,20 @@ pytestmark = pytest.mark.integration  # Home Assistant required
 METER = "CH_Misuratore"
 
 
-def _sensor(measurement, object_type=METER, value="12.50", device_class=None):
+def _sensor(measurement, object_type=METER, value="12.50", device_class=None, status_range=""):
     """Build a VimarSensor around one measurement, bypassing HA's platform."""
     device = {
         "object_id": "768",
         "object_type": object_type,
         "object_name": "Contatore",
         "device_class": device_class,
-        "status": {measurement: {"status_id": "769", "status_value": value}},
+        "status": {
+            measurement: {
+                "status_id": "769",
+                "status_value": value,
+                "status_range": status_range,
+            }
+        },
     }
 
     coordinator = MagicMock()
@@ -372,6 +378,105 @@ def test_not_a_reading_matches_whole_parts_only():
     assert not not_a_reading("alarming_power")
     assert not not_a_reading("temperature")
     assert not not_a_reading("corrente_fase_1")
+
+
+# ---------------------------------------------------------------------------
+# Every field of a real installation
+#
+# Read from live hardware (01945, firmware 2.x) rather than invented, after a
+# first attempt at the guard above stripped the unit from six genuine power
+# readings. Each entry is what the field was measured to be, not what its name
+# suggests:
+#
+#   * the six `*_totale` flows are instantaneous power in kW - each has a
+#     cumulative `energia_totale_*` counterpart in kWh, and they add up
+#     (consumo = autoconsumo + prelievo), which only holds for power;
+#   * `produzione_presente` names a flow but never moved off 1 in a week,
+#     while `produzione_totale` took 528 distinct values from -3.94 to 5.05;
+#   * `dynamic_mode` and `reset_history` declare `min=0|max=1` themselves.
+# ---------------------------------------------------------------------------
+
+REAL_FIELDS = [
+    # (field, object_type, status_range, expected unit, expected device class)
+    ("energia_assoluta", "CH_Misuratore", "", "kWh", SensorDeviceClass.ENERGY),
+    ("energia_parziale", "CH_Misuratore", "", "kWh", SensorDeviceClass.ENERGY),
+    (
+        "potenza_attiva",
+        "CH_Misuratore",
+        "min=-2147483648|max=2147483648",
+        "kW",
+        SensorDeviceClass.POWER,
+    ),
+    (
+        "potenza_reattiva",
+        "CH_Misuratore",
+        "min=-2147483648|max=2147483648",
+        "kvar",
+        SensorDeviceClass.REACTIVE_POWER,
+    ),
+    ("dynamic_mode", "CH_Misuratore", "min=0|max=1", None, None),
+    ("reset_history", "CH_Misuratore", "min=0|max=1", None, None),
+    ("reset_partial", "CH_Misuratore", "", None, None),
+    ("energia_totale_autoconsumo", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
+    ("energia_totale_consumo", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
+    ("energia_totale_immissione", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
+    ("energia_totale_prelievo", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
+    ("energia_totale_produzione", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
+    ("energia_totale_scambio", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
+    ("autoconsumo_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
+    ("consumo_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
+    ("immissione_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
+    ("prelievo_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
+    ("produzione_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
+    ("scambio_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
+    ("produzione_presente", "CH_Carichi_Custom", "", None, None),
+    ("fase", "CH_Carichi_Custom", "", None, None),
+    ("custom_date", "CH_Carichi_Custom", "", None, None),
+    ("custom_time", "CH_Carichi_Custom", "", None, None),
+    ("custom_datetime", "CH_Carichi_Custom", "", None, None),
+    ("forzatura", "CH_Carichi_3F", "", None, None),
+    ("funzionamento", "CH_Carichi_3F", "", None, None),
+]
+
+
+@pytest.mark.parametrize(
+    ("field", "object_type", "status_range", "unit", "device_class"),
+    REAL_FIELDS,
+    ids=[f"{row[1].removeprefix('CH_')}.{row[0]}" for row in REAL_FIELDS],
+)
+def test_a_real_installation_classifies_exactly_as_measured(
+    field, object_type, status_range, unit, device_class
+):
+    sensor = _sensor(field, object_type, value="1.0", status_range=status_range)
+
+    assert sensor.native_unit_of_measurement == unit
+    assert sensor.device_class is device_class
+
+
+def test_the_power_flows_are_not_confused_with_their_energy_counterparts():
+    """`consumo_totale` (kW now) and `energia_totale_consumo` (kWh total) are
+    two different sensors on the same device; a rule matching "consumo" as a
+    substring would collapse them."""
+    power = _sensor("consumo_totale", "CH_Carichi_Custom")
+    energy = _sensor("energia_totale_consumo", "CH_Carichi_Custom")
+
+    assert power.device_class is SensorDeviceClass.POWER
+    assert energy.device_class is SensorDeviceClass.ENERGY
+    assert energy.state_class is SensorStateClass.TOTAL_INCREASING
+
+
+def test_a_field_the_device_limits_to_zero_or_one_is_never_a_measurement():
+    """The webserver states the range itself; that beats guessing from a name."""
+    sensor = _sensor("qualcosa_di_ignoto", METER, value="1", status_range="min=0|max=1")
+
+    assert sensor.device_class is None
+    assert sensor.native_unit_of_measurement is None
+
+
+def test_a_wide_range_does_not_trigger_the_boolean_guard():
+    assert not not_a_reading("potenza_attiva", "min=-2147483648|max=2147483648")
+    assert not not_a_reading("consumo_totale", "")
+    assert not not_a_reading("consumo_totale", None)
 
 
 # ---------------------------------------------------------------------------

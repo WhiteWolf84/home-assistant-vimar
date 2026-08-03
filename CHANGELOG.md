@@ -12,9 +12,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
----
+### Fixed
 
-## [2026.8.0b4] - 2026-08-03
+- The six instantaneous power readings on a load-control device keep their unit. `2026.8.0b4` stopped guessing that any unrecognised field on a meter was a power reading, which was right in principle but stripped the unit from `consumo_totale`, `produzione_totale`, `autoconsumo_totale`, `immissione_totale`, `prelievo_totale` and `scambio_totale` — genuine readings in kW. They are now listed by name. Verified against live hardware: each has a cumulative `energia_totale_*` counterpart in kWh, and the values add up (consumption = self-consumption + withdrawal), which only holds for instantaneous power.
+- Load-control modes and flags are no longer published as power. `forzatura`, `funzionamento`, `dynamic_mode`, `reset_history`, `reset_partial` and `produzione_presente` were all reported as readings in kW, sitting at "0 kW" — the same fault as the weather station flags, on hardware that is far more common. Thirteen such entities were found on a single test installation.
+- A field the web server itself declares as limited to 0 or 1 is never treated as a measurement, whatever its name suggests. The device states this in the data it sends, which is better evidence than a guess based on the field name.
 
 > **Beta.** Includes everything in `2026.8.0b3`, which it replaces, and fixes
 > what field-testing that beta uncovered.
