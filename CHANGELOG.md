@@ -12,6 +12,27 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+---
+
+## [2026.8.0b4] - 2026-08-03
+
+> **Beta.** Includes everything in `2026.8.0b3`, which it replaces, and fixes
+> what field-testing that beta uncovered.
+
+### Action required after upgrading — reactive power sensors only
+
+Unchanged from `2026.8.0b3`; skip this if you already did it. If you have
+"Potenza Reattiva" sensors, Home Assistant will log this once and **stop
+recording their long-term statistics** until you act:
+
+> The unit of sensor.… (kvar) cannot be converted to the unit of previously
+> compiled statistics (kW).
+
+Those sensors were recording as if they measured real power in kW, and kW
+cannot be converted to kvar because the two measure different things. Clear it
+in **Settings → Devices & services → Repairs**, opening the "units changed"
+issue for each sensor and choosing to delete the old statistics.
+
 ### Fixed
 
 - Fields that are switches or labels are no longer presented as measurements. The integration works out what a value means from the name the web server gives it, and the web server names its flags after the thing they relate to — so a field called `temperature_alarm`, which is only ever 0 or 1, was being published as a temperature of **0 °C**, indistinguishable from a genuinely freezing reading. The same happened to `temperature_reset`, `wind_speed_alarm` and their siblings. The integration now asks "is this a reading at all?" before asking "a reading of what?".
