@@ -295,7 +295,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """Set status from _device to class variables."""
 
     @property
-    def is_default_state(self):
+    def is_default_state(self) -> bool:
         """Return True of in default state - resulting in default icon."""
         return False
 

@@ -2,32 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable
 from xml.etree import ElementTree
-
-try:
-    from ..const import (
-        DEVICE_TYPE_CLIMATES,
-        DEVICE_TYPE_COVERS,
-        DEVICE_TYPE_LIGHTS,
-        DEVICE_TYPE_MEDIA_PLAYERS,
-        DEVICE_TYPE_OTHERS,
-        DEVICE_TYPE_SCENES,
-        DEVICE_TYPE_SENSORS,
-        DEVICE_TYPE_SWITCHES,
-    )
-except ImportError:
-    DEVICE_TYPE_LIGHTS = "light"
-    DEVICE_TYPE_COVERS = "cover"
-    DEVICE_TYPE_SWITCHES = "switch"
-    DEVICE_TYPE_CLIMATES = "climate"
-    DEVICE_TYPE_MEDIA_PLAYERS = "media_player"
-    DEVICE_TYPE_SCENES = "scene"
-    DEVICE_TYPE_SENSORS = "sensor"
-    DEVICE_TYPE_OTHERS = "other"
-
-import contextlib
 
 from .connection import VimarConnection
 from .device_queries import (
@@ -42,19 +20,35 @@ from .device_queries import (
     get_sai2_zones_query,
     get_status_only_query,
 )
+from .device_types import (
+    CLIMATE_OBJECT_TYPES,
+    COVER_OBJECT_TYPES,
+    DEVICE_CLASS_OUTLET,
+    DEVICE_CLASS_POWER,
+    DEVICE_CLASS_SHUTTER,
+    DEVICE_CLASS_SWITCH,
+    DEVICE_CLASS_TEMPERATURE,
+    DEVICE_CLASS_WIND_SPEED,
+    DEVICE_CLASS_WINDOW,
+    DEVICE_TYPE_CLIMATES,
+    DEVICE_TYPE_COVERS,
+    DEVICE_TYPE_LIGHTS,
+    DEVICE_TYPE_MEDIA_PLAYERS,
+    DEVICE_TYPE_OTHERS,
+    DEVICE_TYPE_SCENES,
+    DEVICE_TYPE_SENSORS,
+    DEVICE_TYPE_SWITCHES,
+    DIMMER_OBJECT_TYPES,
+    ENERGY_METER_OBJECT_TYPES,
+    KNX_SWITCH_OBJECT_TYPES,
+    KNX_TEMPERATURE_OBJECT_TYPES,
+    KNX_WINDSPEED_OBJECT_TYPES,
+)
 from .exceptions import VimarApiError
 from .sql_parser import parse_sql_payload
 
 _LOGGER = logging.getLogger(__name__)
 MAX_ROWS_PER_REQUEST = 300
-
-DEVICE_CLASS_OUTLET = "outlet"
-DEVICE_CLASS_SWITCH = "switch"
-DEVICE_CLASS_SHUTTER = "shutter"
-DEVICE_CLASS_WINDOW = "window"
-DEVICE_CLASS_POWER = "power"
-DEVICE_CLASS_TEMPERATURE = "temperature"
-DEVICE_CLASS_PRESSURE = "pressure"
 
 
 class VimarLink:
@@ -969,33 +963,16 @@ class VimarProject:
                 device_type = DEVICE_TYPE_LIGHTS
                 icon = "mdi:ceiling-light"
 
-        elif obj_type in [
-            "CH_KNX_GENERIC_ONOFF",
-            "CH_KNX_GENERIC_TIME_S",
-            "CH_KNX_RELE",
-            "CH_KNX_GENERIC_ENABLE",
-            "CH_KNX_GENERIC_RESET",
-        ]:
+        elif obj_type in KNX_SWITCH_OBJECT_TYPES:
             device_type = DEVICE_TYPE_SWITCHES
             device_class = DEVICE_CLASS_SWITCH
             icon = ["mdi:toggle-switch", "mdi:toggle-switch-off"]
 
-        elif obj_type in [
-            "CH_Dimmer_Automation",
-            "CH_Dimmer_RGB",
-            "CH_Dimmer_White",
-            "CH_Dimmer_Hue",
-        ]:
+        elif obj_type in DIMMER_OBJECT_TYPES:
             device_type = DEVICE_TYPE_LIGHTS
             icon = ["mdi:speedometer", "mdi:speedometer-slow"]
 
-        elif obj_type in [
-            "CH_ShutterWithoutPosition_Automation",
-            "CH_ShutterBlindWithoutPosition_Automation",
-            "CH_Shutter_Automation",
-            "CH_Shutter_Slat_Automation",
-            "CH_ShutterBlind_Automation",
-        ]:
+        elif obj_type in COVER_OBJECT_TYPES:
             if "FERNBEDIENUNG" in obj_name:
                 device_type = DEVICE_TYPE_COVERS
                 device_class = DEVICE_CLASS_WINDOW
@@ -1005,15 +982,7 @@ class VimarProject:
                 device_class = DEVICE_CLASS_SHUTTER
                 icon = ["mdi:window-shutter", "mdi:window-shutter-open"]
 
-        elif obj_type in [
-            "CH_Clima",
-            "CH_HVAC_NoZonaNeutra",
-            "CH_HVAC_RiscaldamentoNoZonaNeutra",
-            "CH_Fancoil",
-            "CH_HVAC",
-            "CH_HVAC_FanCoil",
-            "CH_HVAC_FanCoilWithNeutralZone",
-        ]:
+        elif obj_type in CLIMATE_OBJECT_TYPES:
             device_type = DEVICE_TYPE_CLIMATES
             icon = "mdi:thermometer-lines"
             _LOGGER.debug("Climate: %s / %s", obj_type, device["object_name"])
@@ -1023,13 +992,7 @@ class VimarProject:
             icon = "hass:palette"
             _LOGGER.debug("Scene: %s / %s", obj_type, device["object_name"])
 
-        elif obj_type in [
-            "CH_Misuratore",
-            "CH_Carichi_Custom",
-            "CH_Carichi",
-            "CH_Carichi_3F",
-            "CH_KNX_GENERIC_POWER_KW",
-        ]:
+        elif obj_type in ENERGY_METER_OBJECT_TYPES:
             device_type = DEVICE_TYPE_SENSORS
             device_class = DEVICE_CLASS_POWER
             icon = "mdi:chart-bell-curve-cumulative"
@@ -1038,14 +1001,18 @@ class VimarProject:
             device_type = DEVICE_TYPE_SENSORS
             icon = "mdi:pulse"
 
-        elif obj_type == "CH_KNX_GENERIC_TEMPERATURE_C":
+        elif obj_type in KNX_TEMPERATURE_OBJECT_TYPES:
             device_type = DEVICE_TYPE_SENSORS
             device_class = DEVICE_CLASS_TEMPERATURE
             icon = "mdi:thermometer"
 
-        elif obj_type == "CH_KNX_GENERIC_WINDSPEED":
+        elif obj_type in KNX_WINDSPEED_OBJECT_TYPES:
             device_type = DEVICE_TYPE_SENSORS
-            device_class = DEVICE_CLASS_PRESSURE
+            # Was DEVICE_CLASS_PRESSURE: an anemometer reported as a pressure
+            # sensor. Home Assistant validates the unit against the device
+            # class, so m/s on a "pressure" sensor logged a warning on every
+            # startup and offered the wrong unit conversions in the UI.
+            device_class = DEVICE_CLASS_WIND_SPEED
             icon = "mdi:windsock"
 
         elif obj_type == "CH_WEATHERSTATION":

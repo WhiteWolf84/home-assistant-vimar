@@ -12,10 +12,99 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+---
+
+## [2026.8.0b5] - 2026-08-03
+
+> **Beta.** Fixes a regression introduced by `2026.8.0b4`, which it replaces.
+> If you are on `b4`, six power readings on your load-control device currently
+> have no unit; this restores them. The action required for reactive power
+> sensors, first described in `b3`, is unchanged and does not repeat if you
+> have already done it.
+
+### Fixed
+
+- The six instantaneous power readings on a load-control device keep their unit. `2026.8.0b4` stopped guessing that any unrecognised field on a meter was a power reading, which was right in principle but stripped the unit from `consumo_totale`, `produzione_totale`, `autoconsumo_totale`, `immissione_totale`, `prelievo_totale` and `scambio_totale` — genuine readings in kW. They are now listed by name. Verified against live hardware: each has a cumulative `energia_totale_*` counterpart in kWh, and the values add up (consumption = self-consumption + withdrawal), which only holds for instantaneous power.
+- Load-control modes and flags are no longer published as power. `forzatura`, `funzionamento`, `dynamic_mode`, `reset_history`, `reset_partial` and `produzione_presente` were all reported as readings in kW, sitting at "0 kW" — the same fault as the weather station flags, on hardware that is far more common. Thirteen such entities were found on a single test installation.
+- A field the web server itself declares as limited to 0 or 1 is never treated as a measurement, whatever its name suggests. The device states this in the data it sends, which is better evidence than a guess based on the field name.
+
+---
+
+## [2026.8.0b4] - 2026-08-03
+
+> **Beta.** Includes everything in `2026.8.0b3`, which it replaces, and fixes
+> what field-testing that beta uncovered.
+
+### Action required after upgrading — reactive power sensors only
+
+Unchanged from `2026.8.0b3`; skip this if you already did it. If you have
+"Potenza Reattiva" sensors, Home Assistant will log this once and **stop
+recording their long-term statistics** until you act:
+
+> The unit of sensor.… (kvar) cannot be converted to the unit of previously
+> compiled statistics (kW).
+
+Those sensors were recording as if they measured real power in kW, and kW
+cannot be converted to kvar because the two measure different things. Clear it
+in **Settings → Devices & services → Repairs**, opening the "units changed"
+issue for each sensor and choosing to delete the old statistics.
+
+### Fixed
+
+- Fields that are switches or labels are no longer presented as measurements. The integration works out what a value means from the name the web server gives it, and the web server names its flags after the thing they relate to — so a field called `temperature_alarm`, which is only ever 0 or 1, was being published as a temperature of **0 °C**, indistinguishable from a genuinely freezing reading. The same happened to `temperature_reset`, `wind_speed_alarm` and their siblings. The integration now asks "is this a reading at all?" before asking "a reading of what?".
+- The "Fase" field on load-control devices is shown as text instead of a current in ampere. It holds the type of electrical supply — `monofase` or `trifase` — and was matching the rule written for per-phase currents. Since `2026.8.0b3` this showed as "unknown", because text cannot be turned into a number; it now simply shows the value. Genuine per-phase currents are unaffected.
+- An unrecognised field on an energy meter is no longer assumed to be power in kW. Anything the integration did not have a rule for was labelled as a power reading, which looks entirely plausible and therefore cannot be spotted. Such a field now appears without a unit — visibly incomplete rather than convincingly wrong — and is named in the debug log so a proper rule can be added.
+
+---
+
+## [2026.8.0b3] - 2026-08-03
+
+> **Beta.** Field-testing the sensor changes before they are merged. Unlike
+> `2026.8.0b1` and `2026.8.0b2`, which only removed failure modes, this one
+> changes what you will see: sensor values become numbers rather than text
+> (`11.00` becomes `11.0`), the brightness sensor changes unit and the wind
+> sensor changes type, so Home Assistant may ask you to confirm the unit for
+> those entities. Recorded history keeps the old format up to the upgrade and
+> the new one after it.
+
+### Action required after upgrading — reactive power sensors only
+
+If you have "Potenza Reattiva" sensors, Home Assistant will log this once and
+**stop recording their long-term statistics** until you act:
+
+> The unit of sensor.… (kvar) cannot be converted to the unit of previously
+> compiled statistics (kW). Generation of long term statistics will be
+> suppressed unless the unit changes back to kW or a compatible unit.
+
+This is the correction working as intended, not a fault. Those sensors were
+recording as if they measured real power in kW; the statistics already stored
+under that unit are wrong, and kW cannot be converted to kvar because the two
+measure different things.
+
+To clear it: **Settings → Devices & services → Repairs**, open the
+"units changed" issue for each sensor and choose to delete the old statistics.
+The sensor then starts a clean series in kvar.
+
+Only reactive power is affected. Brightness, wind speed and temperature also
+changed, but they had no state class before and so had no statistics to
+contradict — they simply start recording for the first time.
+
 ### Fixed
 
 - Starting the integration no longer risks failing on a slower web server. Logging in and reading the whole configuration were given the same few seconds allowed for a routine status poll, even though they are far slower by nature: measured on real hardware, the login alone used 72% of that budget on a perfectly healthy system. Anything slower — a busier web server, or a Home Assistant start where every integration competes for resources — made the first attempt fail and the integration report itself as unavailable. Setup now gets its own, generous allowance, while routine polling keeps the short one, because a slow poll really is a symptom worth reporting quickly.
 - Connection errors are reported properly instead of turning into a second, confusing error. Any failure message containing a `%` character — which is common, because web addresses encode special characters that way — made the error handling itself crash while trying to display the message. The result was an obscure internal error in place of a clear "cannot connect".
+- Sensors now go through Home Assistant's standard handling of measurements instead of bypassing it. The integration was writing the raw text it received from the web server straight into the sensor's value, skipping the step where Home Assistant converts units, applies the unit you may have chosen for that specific sensor, rounds to a sensible number of decimals, and turns the text into a number. Values are now real numbers, and a reading the web server cannot express (a momentary blank, say) shows as "unknown" for that one reading instead of leaving a stray piece of text in the history.
+- Four measurements were described to Home Assistant incorrectly, which made it log a warning at every start and refuse to handle their units:
+  - the brightness sensor was declared in lumen, a unit Home Assistant does not accept for light level (it uses lux);
+  - the wind sensor was declared a **pressure** sensor;
+  - reactive power was declared as ordinary power in kW, so it looked like real consumption and could be added to the Energy dashboard as if it were;
+  - date and time readings on energy meters were declared as timestamps, which Home Assistant only accepts in a specific format that the web server does not use — displaying one raised an error instead of showing the value.
+- Temperature, brightness and wind sensors now keep long-term statistics. They were missing the marker that tells Home Assistant a value is worth recording over time, so their history disappeared with the normal database cleanup (10 days by default) and they could not be used in long-term graphs.
+- Scenes now use Home Assistant's own record of when they were last activated, instead of keeping a second copy of the same information that could disagree with it.
+
+### Changed
+
+- The list of which VIMAR device models are energy meters, thermostats, shutters and so on now exists in exactly one place. It was written out by hand in three files that had to be kept in agreement, with a comment asking whoever edited one to remember the others. Forgetting produced a meter that appears in Home Assistant but never updates, or updates but shows no unit. A test now fails if the lists and the code that uses them ever disagree.
 
 ### Removed
 

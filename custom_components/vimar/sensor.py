@@ -2,20 +2,32 @@
 
 # import copy
 import logging
+from typing import NamedTuple
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.components.sensor.const import SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor.const import (
+    DEVICE_CLASS_STATE_CLASSES,
+    SensorDeviceClass,
+    SensorStateClass,
+)
 from homeassistant.const import (
+    LIGHT_LUX,
     UnitOfElectricCurrent,
     UnitOfEnergy,
     UnitOfPower,
+    UnitOfReactivePower,
     UnitOfSpeed,
     UnitOfTemperature,
 )
+from homeassistant.util.enum import try_parse_enum
 
-from .const import DEVICE_TYPE_CLIMATES
+from .const import DEVICE_TYPE_CLIMATES, ENERGY_METER_OBJECT_TYPES
 from .const import DEVICE_TYPE_SENSORS as CURR_PLATFORM
 from .vimar_entity import VimarEntity, vimar_setup_entry
+from .vimarlink.device_types import (
+    KNX_TEMPERATURE_OBJECT_TYPES,
+    KNX_WINDSPEED_OBJECT_TYPES,
+)
 
 # SCAN_INTERVAL = timedelta(seconds=20)
 # MIN_TIME_BETWEEN_UPDATES = timedelta(seconds=5)
@@ -23,6 +35,112 @@ from .vimar_entity import VimarEntity, vimar_setup_entry
 # see: https://developers.home-assistant.io/docs/core/entity/sensor/
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class SensorSpec(NamedTuple):
+    """The unit and device class a single Vimar measurement maps to.
+
+    Kept index-addressable (it is a tuple) because the previous version of
+    class_and_units() returned a plain ``[unit, device_class]`` list.
+    """
+
+    unit: str | None
+    device_class: SensorDeviceClass | None
+
+
+#: Name parts marking a field that is a flag, a counter reset or a category -
+#: not a reading of anything. The webserver names these after the quantity they
+#: relate to (`temperature_alarm`, `wind_speed_reset`, `temperature_request_minmax`),
+#: so any rule that asks "what does this measure?" claims them first and dresses
+#: a 0/1 flag up as a measurement: `temperature_alarm` was published as 0 °C,
+#: indistinguishable from a real freezing reading.
+NOT_A_READING = frozenset({"alarm", "reset", "request", "minmax", "history", "mode", "modo"})
+
+#: Whole field names carrying a category or an operating mode rather than a
+#: quantity. `fase` is the installation's phase type - "monofase" or "trifase" -
+#: and matched the rule written for per-phase currents, so it was published in
+#: ampere; `forzatura` and `funzionamento` are load-control modes that were
+#: published as 0 kW.
+NOT_A_READING_FIELDS = frozenset({"fase", "forzatura", "funzionamento"})
+
+#: Instantaneous power flows on a load-control device, in kW. Confirmed on real
+#: hardware: each one has a cumulative `energia_totale_*` counterpart in kWh
+#: (`consumo_totale` 1.490 kW next to `energia_totale_consumo` 66698.4 kWh), and
+#: the flows add up - consumo = autoconsumo + prelievo, produzione = autoconsumo
+#: + immissione - which only holds for instantaneous power.
+#: Listed by full name on purpose. `produzione_presente` also names a flow but
+#: is a flag: 2978 samples of `produzione_totale` over a week spanned -3.94 to
+#: 5.05 kW, while `produzione_presente` never moved off 1.
+POWER_FLOW_FIELDS = frozenset(
+    {
+        "autoconsumo_totale",
+        "consumo_totale",
+        "immissione_totale",
+        "prelievo_totale",
+        "produzione_totale",
+        "scambio_totale",
+    }
+)
+
+
+def _is_boolean_range(status_range: str | None) -> bool:
+    """Return True for a webserver range that only permits 0 or 1.
+
+    The webserver publishes `min=0|max=1` for its flags (`dynamic_mode`,
+    `reset_history`) and a full int32 span for real readings. A field that
+    cannot hold anything but 0 or 1 is not a measurement, whatever its name
+    suggests - and unlike the name, this is stated by the device itself.
+
+    Trade-off: a genuine 0..1 reading (a power factor, say) would be caught
+    here and reported without a unit. That is the deliberate direction of
+    error - visibly incomplete beats convincingly wrong - and such a field
+    lands in the debug log where a proper rule can be added for it.
+    """
+    if not status_range:
+        return False
+    parts = dict(piece.split("=", 1) for piece in status_range.split("|") if "=" in piece)
+    return parts.get("min") == "0" and parts.get("max") == "1"
+
+
+def not_a_reading(name: str, status_range: str | None = None) -> bool:
+    """Return True when this field holds a flag or a category, not a value.
+
+    The name is matched on whole underscore-separated parts, never as a
+    substring: the substring matching this guard exists to contain is exactly
+    what turned `fase` into a current and `temperature_alarm` into a
+    temperature.
+    """
+    if name in NOT_A_READING_FIELDS:
+        return True
+    if set(name.split("_")) & NOT_A_READING:
+        return True
+    return _is_boolean_range(status_range)
+
+
+def state_class_for(device_class: SensorDeviceClass | None) -> SensorStateClass | None:
+    """Pick the state class Home Assistant allows for a device class.
+
+    Derived from HA's own DEVICE_CLASS_STATE_CLASSES table rather than from a
+    hand-written if/elif chain, so a state class that HA considers impossible
+    for the device class cannot be produced. Getting that pair wrong is not
+    cosmetic: HA logs a warning and long-term statistics are not recorded.
+
+    Energy meters are cumulative counters, hence TOTAL_INCREASING; everything
+    else that HA accepts as a measurement gets MEASUREMENT, which is what makes
+    it eligible for statistics at all. Temperature, illuminance and wind speed
+    used to fall through with no state class and therefore recorded no history
+    beyond the recorder's purge window.
+    """
+    if device_class is None:
+        return None
+    allowed = DEVICE_CLASS_STATE_CLASSES.get(device_class)
+    if not allowed:
+        return None
+    if SensorStateClass.TOTAL_INCREASING in allowed:
+        return SensorStateClass.TOTAL_INCREASING
+    if SensorStateClass.MEASUREMENT in allowed:
+        return SensorStateClass.MEASUREMENT
+    return None
 
 
 async def async_setup_entry(hass, entry, async_add_devices):
@@ -103,65 +221,94 @@ class VimarSensor(VimarEntity, SensorEntity):
         return super().name + " " + self._measurement_display_name
 
     @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement."""
-        class_and_unit = self.class_and_units()
-        # _LOGGER.warning("DEBUG units for %s %s %s", self._device["object_type"], self._measurement_name, class_and_unit[0]);
-        return class_and_unit[0]
-
-    @property
-    def device_class(self):
+    def device_class(self) -> SensorDeviceClass | None:
         """Return the class of this device, from component DEVICE_CLASSES."""
-        class_and_unit = self.class_and_units()
-        return class_and_unit[1]
+        return self.class_and_units().device_class
 
     @property
     def state_class(self) -> SensorStateClass | None:
         """Return the state class of this entity."""
-        class_and_unit = self.class_and_units()
-        if class_and_unit[1] == SensorDeviceClass.ENERGY:
-            return SensorStateClass.TOTAL_INCREASING
-        elif class_and_unit[1] in (SensorDeviceClass.POWER, SensorDeviceClass.CURRENT):
-            return SensorStateClass.MEASUREMENT
-        return None
+        return state_class_for(self.class_and_units().device_class)
 
-    def class_and_units(self):
-        """Return the class and unit of measurement."""
+    def class_and_units(self) -> SensorSpec:
+        """Return the unit and device class for this measurement.
+
+        Every unit here has to be one Home Assistant accepts for the paired
+        device class (see DEVICE_CLASS_UNITS): an invalid pair is not ignored,
+        it logs a warning on every start and disables unit conversion in the
+        UI.
+
+        The rules below match on parts of the field name, which is the only
+        thing the webserver gives us to go on. That is why the "is this a
+        reading at all?" question is asked FIRST: see NOT_A_READING.
+        """
         if self._class_and_units is not None:
             return self._class_and_units
-        """Return the class of this device, from component DEVICE_CLASSES."""
-        if self._device["object_type"] in [
-            "CH_Misuratore",
-            "CH_Carichi_Custom",
-            "CH_Carichi",
-            "CH_Carichi_3F",
-            "CH_KNX_GENERIC_POWER_KW",
-        ]:
-            if any(x in self._measurement_name for x in ["energia"]):
-                return [UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY]
-            elif any(x in self._measurement_name for x in ["potenza_attiva"]):
-                return [UnitOfPower.KILO_WATT, SensorDeviceClass.POWER]
-            elif any(x in self._measurement_name for x in ["fase"]):
-                return [UnitOfElectricCurrent.AMPERE, SensorDeviceClass.CURRENT]
-            elif any(x in self._measurement_name for x in ["_date", "_time", "_datetime"]):
-                return ["", SensorDeviceClass.TIMESTAMP]
-            else:
-                return [UnitOfPower.KILO_WATT, SensorDeviceClass.POWER]
-        elif self._device["object_type"] in ["CH_KNX_GENERIC_TEMPERATURE_C"] or any(
-            x in self._measurement_name for x in ["temperature"]
-        ):
+
+        name = self._measurement_name
+        object_type = self._device["object_type"]
+        status_range = (self._device["status"].get(name) or {}).get("status_range")
+
+        if not_a_reading(name, status_range):
+            return SensorSpec(None, None)
+
+        if object_type in ENERGY_METER_OBJECT_TYPES:
+            if "energia" in name:
+                return SensorSpec(UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY)
+            if "potenza_attiva" in name:
+                return SensorSpec(UnitOfPower.KILO_WATT, SensorDeviceClass.POWER)
+            if "potenza_reattiva" in name:
+                # Reactive power is measured in kvar, not kW. Reported as POWER
+                # in kW it was silently wrong: HA would happily convert it to
+                # watts and add it to the energy dashboard as if it were real
+                # power.
+                return SensorSpec(
+                    UnitOfReactivePower.KILO_VOLT_AMPERE_REACTIVE,
+                    SensorDeviceClass.REACTIVE_POWER,
+                )
+            if name in POWER_FLOW_FIELDS:
+                return SensorSpec(UnitOfPower.KILO_WATT, SensorDeviceClass.POWER)
+            if "fase" in name:
+                return SensorSpec(UnitOfElectricCurrent.AMPERE, SensorDeviceClass.CURRENT)
+            if any(x in name for x in ("_date", "_time", "_datetime")):
+                # Was SensorDeviceClass.TIMESTAMP, which HA only accepts as a
+                # timezone-aware datetime object; the webserver gives us a
+                # string, so HA raised ValueError when rendering the state.
+                # No device class: the raw value is shown as-is.
+                return SensorSpec(None, None)
+            # Anything else on a meter used to fall through to "power in kW",
+            # which is a guess, and a guess that cannot be spotted: an
+            # unrecognised field would appear as a plausible power reading.
+            # An unlabelled value is visibly incomplete instead, and the log
+            # line makes the field discoverable so a real rule can be added.
+            _LOGGER.debug(
+                "Meter field '%s' on %s has no unit rule; reporting it without "
+                "a unit or device class. Add one to class_and_units() if it is "
+                "a real measurement",
+                name,
+                object_type,
+            )
+            return SensorSpec(None, None)
+
+        if object_type in KNX_TEMPERATURE_OBJECT_TYPES or "temperature" in name:
             # see: https://github.com/h4de5/home-assistant-vimar/issues/20
-            return [UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE]
-        elif self._device["object_type"] in ["CH_KNX_GENERIC_WINDSPEED"] or any(
-            x in self._measurement_name for x in ["wind_speed"]
-        ):
+            return SensorSpec(UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE)
+
+        if object_type in KNX_WINDSPEED_OBJECT_TYPES or "wind_speed" in name:
             # see: https://github.com/h4de5/home-assistant-vimar/issues/20
-            return [UnitOfSpeed.METERS_PER_SECOND, self._device["device_class"]]
-        elif any(x in self._measurement_name for x in ["brightness"]):
+            # Was self._device["device_class"], which parse_device_type set to
+            # "pressure" for anemometers: m/s on a pressure sensor.
+            return SensorSpec(UnitOfSpeed.METERS_PER_SECOND, SensorDeviceClass.WIND_SPEED)
+
+        if "brightness" in name:
             # see: https://github.com/h4de5/home-assistant-vimar/issues/20
-            return ["lm", SensorDeviceClass.ILLUMINANCE]
-        else:
-            return [None, self._device["device_class"]]
+            # Was "lm" (lumen), which HA rejects for illuminance: lux only.
+            return SensorSpec(LIGHT_LUX, SensorDeviceClass.ILLUMINANCE)
+
+        # Fall back to whatever parse_device_type guessed for the whole device,
+        # but only if it is a device class HA knows: an unrecognised string
+        # would make HA refuse to add the entity.
+        return SensorSpec(None, try_parse_enum(SensorDeviceClass, self._device["device_class"]))
 
         # ‘its_night’: {‘status_id’: ‘3369’, ‘status_value’: ‘1’, ‘status_range’: ‘’},
         # ‘its_raining’: {‘status_id’: ‘3371’, ‘status_value’: ‘0’, ‘status_range’: ‘’},
@@ -205,11 +352,6 @@ class VimarSensor(VimarEntity, SensorEntity):
         # return str(VimarEntity.unique_id) + '-' + self._device['status'][self._measurement_name]['status_id']
 
     @property
-    def state(self):
-        """Return the value of the sensor."""
-        return self.get_state(self._measurement_name)
-
-    @property
     def extra_state_attributes(self):
         """Return the state attributes."""
         base_attr = super().extra_state_attributes
@@ -225,16 +367,37 @@ class VimarSensor(VimarEntity, SensorEntity):
     #             self._state_value = float(self._device['status'][self._measurement_name]['status_value'])
 
     @property
-    def native_unit_of_measurement(self):
+    def native_unit_of_measurement(self) -> str | None:
         """Return the native unit_of_measurement of this sensor."""
-        class_and_unit = self.class_and_units()
-        # _LOGGER.warning("DEBUG units for %s %s %s", self._device["object_type"], self._measurement_name, class_and_unit[0]);
-        return class_and_unit[0]
+        return self.class_and_units().unit
 
     @property
-    def native_value(self):
-        """Return the native value of this sensor."""
-        return self.get_state(self._measurement_name)
+    def native_value(self) -> float | str | None:
+        """Return the native value of this sensor.
+
+        The webserver always hands us strings. Anything with a device class is
+        converted to a number here rather than passed through: HA raises
+        ValueError when a numeric sensor reports a non-numeric state, so an
+        unparseable reading would take out the whole entity instead of showing
+        as unknown for that one poll.
+        """
+        value = self.get_state(self._measurement_name)
+        if value is None:
+            return None
+        spec = self.class_and_units()
+        if spec.device_class is None and spec.unit is None:
+            # No unit, no device class: a plain text/diagnostic reading.
+            return value
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            _LOGGER.debug(
+                "%s: non-numeric value %r for %s, reporting unknown",
+                self.name,
+                value,
+                self._measurement_name,
+            )
+            return None
 
 
 class VimarSensorContainer(VimarEntity):
@@ -301,17 +464,17 @@ class VimarClimateTempSensor(VimarEntity, SensorEntity):
         return SensorDeviceClass.TEMPERATURE
 
     @property
-    def state_class(self) -> str:
+    def state_class(self) -> SensorStateClass:
         """Return measurement state class."""
         return SensorStateClass.MEASUREMENT
 
     @property
-    def native_unit_of_measurement(self):
+    def native_unit_of_measurement(self) -> str:
         """Return Celsius."""
         return UnitOfTemperature.CELSIUS
 
     @property
-    def native_value(self):
+    def native_value(self) -> float | None:
         """Return the measured temperature."""
         val = self.get_state(self._status_key)
         if val is not None:
@@ -320,8 +483,3 @@ class VimarClimateTempSensor(VimarEntity, SensorEntity):
             except (ValueError, TypeError):
                 return None
         return None
-
-    @property
-    def state(self):
-        """Return the measured temperature."""
-        return self.native_value
