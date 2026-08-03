@@ -623,6 +623,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         """Aggiorna posizione durante tracking ogni 1%."""
         self._tb_calculate_position()
 
+        if self._tb_position is None:
+            # Cannot happen while tracking: _tb_start_tracking sets a position
+            # before the timer is armed. Bail rather than compare None to a
+            # number, which would kill the timer callback with a TypeError.
+            return
+
         should_stop = False
         send_stop_command = False
 
@@ -685,7 +691,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     def _tb_calculate_position(self) -> None:
         """Calcola posizione attuale basata sul tempo trascorso con compensazione ritardo relè."""
-        if not self._tb_start_time:
+        if not self._tb_start_time or self._tb_start_position is None:
             return
 
         elapsed_total = (dt_util.utcnow() - self._tb_start_time).total_seconds()

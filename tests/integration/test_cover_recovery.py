@@ -29,6 +29,7 @@ from custom_components.vimar.cover import (  # noqa: E402
     RECOVERY_MAX_AGE_SECONDS,
     VimarCover,
 )
+from custom_components.vimar.vimar_entity import MISSING_DEVICE  # noqa: E402
 
 pytestmark = pytest.mark.integration  # Home Assistant required
 
@@ -45,10 +46,11 @@ def _make_cover(travel_up=36, travel_down=35, position=50):
     cover._recovery_direction = None
     cover._recovery_target = None
     cover._background_tasks = set()  # tracked by _create_tracked_task
-    cover._device = None  # -> VimarEntity.extra_state_attributes returns {}
-    # VimarEntity.name is a read-only property (derives from _device); with
-    # _device=None it resolves to "Unknown Device 0", which is fine here since
-    # name is only used in log messages, not asserted on.
+    # -> VimarEntity.extra_state_attributes returns {}. VimarEntity.name is a
+    # read-only property deriving from _device; with the placeholder it
+    # resolves to "Unknown Device 0", fine here since name only appears in
+    # log messages and is never asserted on.
+    cover._device = MISSING_DEVICE
     cover.hass = MagicMock()
     cover._use_time_based_tracking = MagicMock(return_value=True)
     cover._get_position_mode = MagicMock(return_value="auto")

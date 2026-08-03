@@ -53,8 +53,13 @@ class VimarLight(VimarEntity, LightEntity):
         return self.recalculate_brightness(int(self.get_state("value") or 0))
 
     @property
-    def rgb_color(self) -> tuple[int, int, int] | None:
-        """Return RGB colors."""
+    def rgb_color(self) -> tuple[int, int, int]:
+        """Return RGB colors.
+
+        Never None: every component falls back to 0. The `| None` this used to
+        declare came from the base class signature and made hs_color, which
+        unpacks the result, look like it could be handed nothing.
+        """
         return (
             int(self.get_state("red") or 0),
             int(self.get_state("green") or 0),

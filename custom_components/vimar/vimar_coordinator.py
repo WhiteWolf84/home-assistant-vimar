@@ -22,7 +22,7 @@ from homeassistant.const import (
     CONF_VERIFY_SSL,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, PlatformNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
@@ -69,8 +69,16 @@ _HASH_INVALIDATED = ""
 class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the API."""
 
-    vimarconnection: VimarLink | None = None
-    vimarproject: VimarProject | None = None
+    # Built in __init__ and never unset, so every user of them can rely on
+    # their being there. They used to default to None at class level and only
+    # be assigned by init_vimarproject(), which left roughly half the call
+    # sites guarding for None and the other half not - the half without a
+    # guard being right in practice, since the entry setup calls
+    # init_vimarproject() before anything can reach them. Constructing them
+    # up front costs nothing (neither touches the network) and replaces a
+    # convention with an invariant.
+    vimarconnection: VimarLink
+    vimarproject: VimarProject
     _timeout: float = DEFAULT_TIMEOUT
     # Separate, generous budget for login + full discovery (see __init__).
     _setup_timeout: float = 30.0
@@ -265,8 +273,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         The connection keeps one HTTP session per executor thread alive for
         reuse; without this the sockets would linger after a reload.
         """
-        if self.vimarconnection is None:
-            return
         with contextlib.suppress(Exception):
             await self.hass.async_add_executor_job(self.vimarconnection.close)
 
@@ -298,8 +304,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     async def _delayed_status_refresh(self, status_ids: list[int], delay: float) -> None:
         """Wait for the device to apply the write, then GETVALUE + repoll."""
         await asyncio.sleep(delay)
-        if self.vimarconnection is None:
-            return
         try:
             await self.hass.async_add_executor_job(
                 self.vimarconnection.request_value_refresh, status_ids
@@ -347,10 +351,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._changed_device_ids = set()
 
         try:
-            if self.vimarproject is None:
-                raise PlatformNotReady
-
-            if self.vimarconnection is None or not self.vimarconnection.is_logged():
+            if not self.vimarconnection.is_logged():
                 async with asyncio.timeout(self._setup_timeout):
                     await self.validate_vimar_credentials()
 
@@ -660,7 +661,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         if not self._climate_refresh_ids and self.vimarproject is not None:
             self._climate_refresh_ids = self._collect_climate_refresh_ids(self.vimarproject.devices)
 
-        if not self._climate_refresh_ids or self.vimarconnection is None:
+        if not self._climate_refresh_ids:
             return
         now = time.monotonic()
         if now - self._last_climate_refresh < DEFAULT_CLIMATE_REFRESH_INTERVAL:
@@ -709,8 +710,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         now = time.monotonic()
         if now - self._last_energy_refresh < self._energy_refresh_interval:
             return
-        if self.vimarconnection is None:
-            return
         self._last_energy_refresh = now
         _LOGGER.debug(
             "Vimar: refreshing %d energy meter statuses via GETVALUE",
@@ -732,9 +731,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         Group values respect the per-group optimistic-update guard so
         in-flight commands aren't overwritten by stale reads.
         """
-        if self.vimarproject is None or self.vimarconnection is None:
-            return
-
         if self.vimarproject.sai2_groups:
             group_ids = list(self.vimarproject.sai2_groups.keys())
             fresh_values = await self.hass.async_add_executor_job(
@@ -796,24 +792,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     # Existing methods
     # ------------------------------------------------------------------
 
-    async def init_vimarproject(self) -> None:
-        """Init VimarLink and VimarProject from entry config."""
-        self._last_devices_hash = ""
-        self._first_update_data_executed = False
-        self._platforms_registered = False
-        self._slim_poll_active = False
-        self._known_status_ids = []
-        self._energy_refresh_ids = []
-        self._last_energy_refresh = 0.0
-        self._climate_refresh_ids = []
-        self._last_climate_refresh = 0.0
-        self._last_device_count = -1
-        self._consecutive_auth_failures = 0
-        self._reauth_triggered = False
-        self._device_state_hashes = {}
-        self._pending_write_guards = {}
-        self.devices_for_platform = {}
-        self.forwarded_platforms = []
+    def _build_vimar_objects(self) -> None:
+        """Create VimarLink and VimarProject from the entry config.
+
+        Pure construction: neither object touches the network here, which is
+        why this can run from __init__ and make their presence an invariant
+        rather than something callers have to check for.
+        """
         vimarconfig = self.vimarconfig
         schema = "https" if vimarconfig.get(CONF_SECURE) else "http"
         host = vimarconfig.get(CONF_HOST)
@@ -841,13 +826,29 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self.vimarconnection = vimarconnection
         self.vimarproject = vimarproject
 
+    async def init_vimarproject(self) -> None:
+        """Reset all polling state and rebuild VimarLink and VimarProject."""
+        self._last_devices_hash = ""
+        self._first_update_data_executed = False
+        self._platforms_registered = False
+        self._slim_poll_active = False
+        self._known_status_ids = []
+        self._energy_refresh_ids = []
+        self._last_energy_refresh = 0.0
+        self._climate_refresh_ids = []
+        self._last_climate_refresh = 0.0
+        self._last_device_count = -1
+        self._consecutive_auth_failures = 0
+        self._reauth_triggered = False
+        self._device_state_hashes = {}
+        self._pending_write_guards = {}
+        self.devices_for_platform = {}
+        self.forwarded_platforms = []
+        self._build_vimar_objects()
+
     async def validate_vimar_credentials(self) -> None:
         """Validate Vimar credential config."""
-        if self.vimarconnection is None:
-            await self.init_vimarproject()
         try:
-            if self.vimarconnection is None:
-                raise PlatformNotReady("Vimar connection not initialized")
             valid_login = await self.hass.async_add_executor_job(self.vimarconnection.check_login)
             if not valid_login:
                 raise ConfigEntryAuthFailed("Invalid credentials")
