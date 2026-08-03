@@ -12,12 +12,27 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+---
+
+## [2026.8.1b0] - 2026-08-04
+
+> **Beta.** Three defects that could each produce wrong behaviour at runtime,
+> none of which had been reported by anyone: they were found by making the
+> code state its own assumptions and letting a type checker read them. All
+> three are in paths that are used rarely, which is exactly why they had
+> survived. **No manual action is needed after upgrading.**
+
 ### Fixed
 
-- The `vimar.update_entities` service no longer risks corrupting the device list. It rebuilt the entire set of devices on a thread of its own, without coordinating with the regular polling that may have been reading — and modifying — the same data at that moment. Two things touching the same structure at once can leave it inconsistent in ways that are hard to attribute afterwards. The service now asks the integration to run one of its normal update cycles, and updates can no longer overlap.
+- The `vimar.update_entities` service no longer risks corrupting the device list. It rebuilt the entire set of devices on a thread of its own, without coordinating with the regular polling that may have been reading — and modifying — the same data at that moment. Two things writing to the same structure at once can leave it inconsistent in ways that are impossible to attribute afterwards. The service now asks the integration to run one of its normal update cycles, and updates can no longer overlap.
+- Calling that service now refreshes what you see straight away. It wrote the new data where the integration itself would not look for it, so entities kept showing the old values until the next scheduled poll came round — up to a full polling interval later, for a service whose entire purpose is "update now".
 - Unmuting an audio device that reports no volume no longer fails. Muting recorded "no volume" as the level to return to, and unmuting then crashed while trying to calculate it — leaving the player silent with nothing but an error in the log to explain why.
-- A shutter can no longer lose its position timer partway through a movement. The routine that recalculates the position while the shutter moves compared the position against a number without being sure one had been set; had that happened, the exception would have stopped the timer and left the shutter tracking nothing.
-- Calling that service now refreshes what you see straight away. It wrote the new data where the integration itself would not look for it, so entities kept showing the old values until the next scheduled poll came round — up to the full polling interval later, for a service whose entire purpose is "update now".
+- A shutter can no longer lose its position timer partway through a movement. The routine that recalculates position while the shutter moves compared that position against a number without being certain one had been set. Had it not been, the resulting error would have stopped the timer for good, leaving the shutter moving with nothing tracking it.
+
+### Changed
+
+- Internal: the integration now states which of its internal values are always present instead of leaving it to be inferred. Roughly half the code checked whether a value was missing and half did not, and the half that did not was right — but nothing could tell the two apart, and the two defects above were hiding in that gap. Six checks that could never have fired were removed with it.
+- Internal: six more type-checking rules are enforced, the ones that flag exactly this kind of gap. Test count 360 → 376.
 
 ---
 
