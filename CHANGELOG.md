@@ -10,6 +10,53 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.0b2] - 2026-08-03
+
+> **Beta.** Same purpose as `2026.8.0b1`, which it replaces and fully
+> includes: field-testing the connection reuse before it is merged.
+>
+> First 10 minutes on real hardware were clean — no connection errors, polls
+> between 0.065 s and 0.15 s for 268 status objects, no drift over time. The
+> measurements also confirmed why the refresh change was needed: the periodic
+> meter + thermostat refresh takes 4–6 s of sequential requests, against a 6 s
+> poll budget it used to share.
+
+### Fixed
+
+- The debug log no longer reports devices as newly discovered when the
+  integration itself has just written to them. After every command, the
+  affected device was listed as `New device detected` on the next poll — five
+  thermostats at once after a scene, a shutter three polls in a row — which
+  looked like a discovery problem on installations whose configuration had not
+  changed at all. The underlying resynchronisation, which is what makes the
+  interface follow a device that answers with the value it already had, is
+  unchanged; only the way it is recorded, and reported, was wrong.
+
+---
+
+## [2026.8.0b1] - 2026-08-03
+
+> **Beta.** Published as a HACS pre-release from the `perf/connection-reuse`
+> branch, for on-device testing before it is merged. It builds on `2026.8.0b0`
+> and contains everything that release did.
+>
+> **What to watch while testing:** the connection reuse is a structural change.
+> If the VIMAR web server closes idle keep-alive connections aggressively you
+> may see isolated errors when one is reused; read requests retry once by
+> themselves, commands are never replayed. Anything recurring in the log is
+> worth reporting.
+
+### Changed
+
+- The integration now **reuses its connection** to the VIMAR web server. Every single request — each poll, each command, each meter reading — used to open a brand new HTTPS connection and negotiate a full TLS handshake, thousands of times a day against a small embedded device. Connections are now kept alive and reused, which makes commands respond faster and takes a constant load off the web server.
+- Energy-meter and thermostat refreshes no longer compete with the poll for the same time budget. They ran inside the poll's timeout while issuing one request per meter and per thermostat, so on larger installations they could use it up on their own and make every entity flicker to "unavailable" for that cycle. They now run in the background, and a refresh that is still in progress is never started twice.
+
+### Security
+
+- The connection status sensor no longer publishes the VIMAR **username** and **session id** as state attributes. Attributes are readable by every Home Assistant user and are kept in the recorder database for weeks; the session id in particular is a live credential for the web server. The sensor still reports host, port, URL, TLS settings and certificate.
+
+---
+
 ## [2026.8.0b0] - 2026-08-02
 
 > **Beta.** Published as a HACS pre-release for on-device testing before a

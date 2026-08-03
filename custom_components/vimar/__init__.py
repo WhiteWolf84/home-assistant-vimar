@@ -205,6 +205,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     coordinator: VimarDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     await coordinator.async_shutdown_write_worker()
+    await coordinator.async_close_connection()
     # Unload exactly what was forwarded at setup. Deriving the list from
     # devices_for_platform missed any platform that returned early without
     # registering entities (alarm_control_panel on installations without SAI2),

@@ -60,6 +60,11 @@ log = _LOGGER
 # SETVALUE within 8-10 s; 15 s gives comfortable headroom.
 _WRITE_GUARD_SECONDS = 15.0
 
+# Sentinel stored in _device_state_hashes by invalidate_device_hash(). It can
+# never collide with a real value: _hash_device_state() returns an md5
+# hexdigest, which is always 32 characters.
+_HASH_INVALIDATED = ""
+
 
 class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the API."""
@@ -107,6 +112,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # Background tasks for delayed post-write GETVALUE refreshes
         # (see schedule_status_refresh); cancelled on unload.
         self._refresh_tasks: set[asyncio.Task] = set()
+        # In-flight periodic GETVALUE refresh, at most one at a time
+        # (see _schedule_periodic_refreshes).
+        self._periodic_refresh_task: asyncio.Task | None = None
 
         # FIX: single global FIFO for all device writes (SETVALUE). Every
         # change_state() from every entity enqueues its batch here and one
@@ -224,6 +232,18 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._refresh_tasks.clear()
+        self._periodic_refresh_task = None
+
+    async def async_close_connection(self) -> None:
+        """Release the pooled HTTP connections (on unload/reload).
+
+        The connection keeps one HTTP session per executor thread alive for
+        reuse; without this the sockets would linger after a reload.
+        """
+        if self.vimarconnection is None:
+            return
+        with contextlib.suppress(Exception):
+            await self.hass.async_add_executor_job(self.vimarconnection.close)
 
     # --- delayed GETVALUE refresh after writes ---------------------------
 
@@ -326,8 +346,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                             )
                 else:
                     _LOGGER.debug("Vimar: slim poll (%d status IDs)", len(self._known_status_ids))
-                    await self._maybe_refresh_energy_meters()
-                    await self._maybe_refresh_climates()
+                    self._schedule_periodic_refreshes()
                     slim_results = await self.hass.async_add_executor_job(
                         self.vimarconnection.get_status_only, self._known_status_ids
                     )
@@ -542,6 +561,42 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 with contextlib.suppress(ValueError, TypeError):
                     ids.append(int(sid))
         return ids
+
+    def _schedule_periodic_refreshes(self) -> None:
+        """Run the periodic GETVALUE refreshes off the poll's critical path.
+
+        The energy-meter and thermostat refreshes issue ONE SOAP request per
+        status object id, sequentially. They used to be awaited inside the
+        poll's `asyncio.timeout(self._timeout)` block, so they spent the very
+        same budget (6 s by default) that the slim poll needs: on an
+        installation with a handful of meters and thermostats the refresh
+        cycle alone could exhaust it, and every entity went unavailable for
+        that cycle. Worse, `asyncio.timeout` cannot cancel a job already
+        running on an executor thread, so the work carried on in the
+        background while the poll had given up.
+
+        They are best-effort by nature (a missed refresh is retried on the
+        next tick), so they now run as a tracked background task instead. A
+        single task at a time: if the previous refresh is still in flight the
+        tick is skipped, which also protects the shared connection from a
+        pile-up when the web server is slow.
+        """
+        if self._periodic_refresh_task is not None and not self._periodic_refresh_task.done():
+            _LOGGER.debug("Vimar: previous periodic refresh still running, skipping this tick")
+            return
+
+        task = self.hass.async_create_background_task(
+            self._run_periodic_refreshes(), name="vimar_periodic_refresh"
+        )
+        self._periodic_refresh_task = task
+        # Tracked like the post-write refreshes so unload cancels it too.
+        self._refresh_tasks.add(task)
+        task.add_done_callback(self._refresh_tasks.discard)
+
+    async def _run_periodic_refreshes(self) -> None:
+        """Body of the background refresh task (throttles live in the callees)."""
+        await self._maybe_refresh_energy_meters()
+        await self._maybe_refresh_climates()
 
     async def _maybe_refresh_climates(self) -> None:
         """Send GETVALUE to thermostat setpoint/mode statuses if the throttle elapsed."""
@@ -860,6 +915,24 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         state_json = json.dumps(state_data, sort_keys=True)
         return hashlib.md5(state_json.encode(), usedforsecurity=False).hexdigest()
 
+    def invalidate_device_hash(self, device_id: str) -> None:
+        """Force the next poll to treat this device as changed.
+
+        Called after an optimistic local write (see
+        VimarEntity.request_statemachine_update): the webserver may answer the
+        next poll with the very value we already have in cache - a monostable
+        device falling back to 0 for the second time, a thermostat rounding a
+        setpoint, a shutter that did not move - and the hash comparison would
+        then find nothing changed and leave the UI out of sync.
+
+        A sentinel is stored instead of deleting the entry, because a MISSING
+        entry means 'device never seen before'. Deleting made every locally
+        written device reappear as `New device detected` on the next poll,
+        which is plainly wrong on an installation whose topology never changed
+        and sent whoever read the log looking for a discovery problem.
+        """
+        self._device_state_hashes[device_id] = _HASH_INVALIDATED
+
     def _detect_state_changes(self, devices: dict[str, dict]) -> set[str]:
         """Detect which devices have changed states.
 
@@ -878,6 +951,15 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if old_hash is None:
                 changed_ids.add(device_id)
                 log.debug("New device detected: %s", device_id)
+            elif old_hash == _HASH_INVALIDATED:
+                # Invalidated by our own write, not a newly discovered device.
+                changed_ids.add(device_id)
+                if log.isEnabledFor(logging.DEBUG):
+                    log.debug(
+                        "Device %s (%s) resynchronised after a local write",
+                        device_id,
+                        device.get("device_friendly_name", "unknown"),
+                    )
             elif new_hash != old_hash:
                 changed_ids.add(device_id)
                 if log.isEnabledFor(10):

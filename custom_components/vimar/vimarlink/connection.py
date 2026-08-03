@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
+import threading
 import xml.etree.ElementTree as xmlTree
 from urllib.parse import quote
 
@@ -57,11 +59,89 @@ class VimarConnection:
         self.request_last_exception: Exception | None = None
         # FIX #19: per-instance flag (era SSL_IGNORED globale di modulo)
         self._ssl_ignore_logged: bool = False
+        # HTTP sessions, one per worker thread (see _get_http_session).
+        self._thread_sessions = threading.local()
+        self._all_http_sessions: list[requests.Session] = []
+        self._http_sessions_lock = threading.Lock()
+
+    # -- read-only view of the connection settings (for diagnostics) --------
 
     @property
     def session_id(self) -> str | None:
         """Get current session ID."""
         return self._session_id
+
+    @property
+    def host(self) -> str:
+        """Web server host."""
+        return self._host
+
+    @property
+    def port(self) -> int:
+        """Web server port."""
+        return self._port
+
+    @property
+    def schema(self) -> str:
+        """URL schema in use ('http' or 'https')."""
+        return self._schema
+
+    @property
+    def base_url(self) -> str:
+        """Base URL of the web server."""
+        return f"{self._schema}://{self._host}:{self._port}"
+
+    @property
+    def certificate(self) -> str | None:
+        """Path of the CA certificate in use, if any."""
+        return self._certificate
+
+    # -- HTTP session reuse -------------------------------------------------
+
+    def _get_http_session(self) -> requests.Session:
+        """Return this thread's HTTP session, creating it on first use.
+
+        A fresh requests.Session used to be built - and thrown away - for
+        EVERY request, which discarded the connection pool it exists for: each
+        SOAP call paid a full TCP connect plus a TLS handshake, on hardware
+        that negotiates RSA/AES256-SHA slowly. With an 8 s poll plus the
+        per-object GETVALUE refreshes that is thousands of handshakes a day
+        against a small embedded web server.
+
+        The session is kept per THREAD rather than per instance on purpose:
+        requests.Session is not documented as thread-safe, and Home Assistant
+        runs our blocking calls on an executor pool where a write job and a
+        refresh job can overlap. One session per worker thread gives full
+        connection reuse without serialising unrelated requests or changing
+        any of the timing the write-guards depend on.
+        """
+        session = getattr(self._thread_sessions, "session", None)
+        if session is None:
+            session = requests.Session()
+            # max_retries=1 only covers idempotent methods (GET), so a stale
+            # keep-alive connection dropped by the web server is retried on a
+            # fresh socket instead of failing a whole poll. SETVALUE POSTs are
+            # never replayed.
+            session.mount("https://", HTTPAdapter(max_retries=1))
+            session.mount("http://", requests.adapters.HTTPAdapter(max_retries=1))
+            self._thread_sessions.session = session
+            with self._http_sessions_lock:
+                self._all_http_sessions.append(session)
+        return session
+
+    def close(self) -> None:
+        """Close every HTTP session opened by this connection.
+
+        Called when the config entry is unloaded so a reload does not leak
+        sockets. Sessions belonging to other worker threads are closed too:
+        closing is safe from any thread once nothing is in flight.
+        """
+        with self._http_sessions_lock:
+            sessions, self._all_http_sessions = self._all_http_sessions, []
+        for session in sessions:
+            with contextlib.suppress(Exception):
+                session.close()
+        self._thread_sessions = threading.local()
 
     def install_certificate(self) -> bool:
         """Download CA certificate from web server."""
@@ -233,22 +313,23 @@ class VimarConnection:
                     _LOGGER.debug("Request ignores ssl certificate")
                     self._ssl_ignore_logged = True
 
-            with requests.Session() as s:
-                s.mount("https://", HTTPAdapter())
+            # Reused across requests (see _get_http_session): do NOT close it
+            # here, closing is what used to throw the connection pool away.
+            s = self._get_http_session()
 
-                if post is None:
-                    response = s.get(
-                        url, params=params, headers=headers, verify=check_ssl, timeout=timeouts
-                    )
-                else:
-                    response = s.post(
-                        url,
-                        params=params,
-                        data=post,
-                        headers=headers,
-                        verify=check_ssl,
-                        timeout=timeouts,
-                    )
+            if post is None:
+                response = s.get(
+                    url, params=params, headers=headers, verify=check_ssl, timeout=timeouts
+                )
+            else:
+                response = s.post(
+                    url,
+                    params=params,
+                    data=post,
+                    headers=headers,
+                    verify=check_ssl,
+                    timeout=timeouts,
+                )
 
             response.raise_for_status()
             return response.text

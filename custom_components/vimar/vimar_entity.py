@@ -172,8 +172,11 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         """
         if self._coordinator is not None:
             self._coordinator._changed_device_ids.add(self._device_id)
-            # FIX #24: forza rilettura hash al prossimo poll
-            self._coordinator._device_state_hashes.pop(self._device_id, None)
+            # FIX #24: forza rilettura hash al prossimo poll. Usa il metodo del
+            # coordinator (sentinella) invece di cancellare la voce: una voce
+            # ASSENTE significa "device mai visto", e il pop faceva ricomparire
+            # ogni device scritto localmente come "New device detected".
+            self._coordinator.invalidate_device_hash(self._device_id)
         self.async_write_ha_state()
 
     def _apply_state_change(self, state: str, value: object) -> tuple[str, str, str] | None:
