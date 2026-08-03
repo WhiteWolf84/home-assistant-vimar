@@ -24,6 +24,28 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 > those entities. Recorded history keeps the old format up to the upgrade and
 > the new one after it.
 
+### Action required after upgrading — reactive power sensors only
+
+If you have "Potenza Reattiva" sensors, Home Assistant will log this once and
+**stop recording their long-term statistics** until you act:
+
+> The unit of sensor.… (kvar) cannot be converted to the unit of previously
+> compiled statistics (kW). Generation of long term statistics will be
+> suppressed unless the unit changes back to kW or a compatible unit.
+
+This is the correction working as intended, not a fault. Those sensors were
+recording as if they measured real power in kW; the statistics already stored
+under that unit are wrong, and kW cannot be converted to kvar because the two
+measure different things.
+
+To clear it: **Settings → Devices & services → Repairs**, open the
+"units changed" issue for each sensor and choose to delete the old statistics.
+The sensor then starts a clean series in kvar.
+
+Only reactive power is affected. Brightness, wind speed and temperature also
+changed, but they had no state class before and so had no statistics to
+contradict — they simply start recording for the first time.
+
 ### Fixed
 
 - Starting the integration no longer risks failing on a slower web server. Logging in and reading the whole configuration were given the same few seconds allowed for a routine status poll, even though they are far slower by nature: measured on real hardware, the login alone used 72% of that budget on a perfectly healthy system. Anything slower — a busier web server, or a Home Assistant start where every integration competes for resources — made the first attempt fail and the integration report itself as unavailable. Setup now gets its own, generous allowance, while routine polling keeps the short one, because a slow poll really is a symptom worth reporting quickly.
