@@ -75,6 +75,10 @@ def _coordinator(timeout=0.3, setup_timeout=3.0, slim_poll_active=True):
     coordinator._consecutive_auth_failures = 0
     coordinator._refresh_tasks = set()
     coordinator._periodic_refresh_task = None
+    # _async_update_data serialises itself on this; the fixture bypasses
+    # __init__, so it has to be provided here.
+    coordinator._update_lock = asyncio.Lock()
+    coordinator._force_full_discovery = False
     coordinator._write_worker_task = None
     coordinator.devices_for_platform = {}
     coordinator.last_update_success = True

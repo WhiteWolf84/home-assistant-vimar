@@ -144,12 +144,15 @@ async def add_services(hass: HomeAssistant):
     """Add services."""
 
     async def service_update_call(call):
+        # Goes through the coordinator instead of running its own executor job.
+        # The old version rebuilt the whole device tree on a separate thread
+        # while a scheduled poll could be reading and mutating it, and wrote
+        # the result behind the coordinator's back, so entities only saw it
+        # whenever the next poll happened to run.
         forced = call.data.get("forced")
         for item in hass.data[DOMAIN].values():
             coordinator: VimarDataUpdateCoordinator = item
-            await coordinator.validate_vimar_credentials()
-            if coordinator.vimarproject:
-                await hass.async_add_executor_job(coordinator.vimarproject.update, forced)
+            await coordinator.async_force_refresh(forced)
 
     hass.services.async_register(DOMAIN, SERVICE_UPDATE, service_update_call, SERVICE_UPDATE_SCHEMA)
 
