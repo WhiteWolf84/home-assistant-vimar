@@ -14,6 +14,68 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.0] - 2026-08-03
+
+> First stable release since `2026.7.1`. It contains everything from the
+> `2026.8.0b0`–`b5` pre-releases and from `2026.7.2b0`, all validated against
+> real hardware (web server 01945). The sections below describe the net effect
+> of upgrading from `2026.7.1`; the individual pre-release entries are kept
+> further down for reference.
+>
+> **Minimum Home Assistant version is now 2026.5.0.**
+
+### Action required after upgrading — reactive power sensors only
+
+Skip this unless you have "Potenza Reattiva" sensors. Home Assistant will log
+this once and **stop recording their long-term statistics** until you act:
+
+> The unit of sensor.… (kvar) cannot be converted to the unit of previously
+> compiled statistics (kW).
+
+Those sensors were being recorded as if they measured real power in kW, and kW
+cannot be converted to kvar because the two measure different things. Clear it
+in **Settings → Devices & services → Repairs**, opening the "units changed"
+issue for each sensor and choosing to delete the old statistics. The sensor
+then starts a clean series in the correct unit.
+
+### Security
+
+- The VIMAR password is no longer written to `home-assistant.log`. A network error during login produced a message containing the full login URL, credentials included, which was logged and shown in the configuration dialog — and log files are routinely attached to bug reports. Passwords, usernames and session ids are now masked in everything the connection layer logs or raises.
+- The connection status sensor no longer publishes the VIMAR **username** and **session id** as state attributes. Attributes are readable by every Home Assistant user and kept in the recorder database for weeks; the session id in particular is a live credential for the web server. Host, port, URL, TLS settings and certificate are still reported.
+- The `vimar.exec_vimar_sql` service, which runs arbitrary SQL against the web server database, is now restricted to **administrator** accounts. It could previously be called by any Home Assistant user, including non-admin and script-only ones, while the far less dangerous `vimar.reload` was already admin-only.
+
+### Fixed
+
+- Entities now go **unavailable** when the VIMAR web server is unreachable. An entity refreshed itself only when the poll reported its device as changed, and a failed poll reports nothing as changed — so Home Assistant kept showing the last known values indefinitely: lights still "on", the last thermostat reading, the last shutter position, with no sign the connection was gone and no way for automations to notice.
+- Logins with a password containing `&`, `=`, `#`, `+`, `%` or a space now work. The credentials were pasted straight into the login URL, so those characters broke the request apart and the web server received a truncated password — the user was told the credentials were invalid while they were perfectly correct.
+- Starting the integration no longer risks failing on a slower web server. Logging in and reading the whole configuration were given the same few seconds allowed for a routine status poll, though they are far slower by nature: measured on real hardware, the login alone used 72% of that budget on a perfectly healthy system.
+- Connection errors are reported properly instead of turning into a second, confusing error. Any failure message containing a `%` — common, because web addresses encode special characters that way — made the error handling itself crash while displaying the message, replacing a clear "cannot connect" with an obscure internal error.
+- Reloading the integration no longer leaves a platform half-loaded on installations without a SAI2 alarm. The unload step only undid platforms that had registered at least one entity, so the alarm platform — loaded, then skipped for lack of alarm areas — was never released.
+- Changing the temperature while a thermostat is in Absence no longer kicks it out of Absence. The integration forced manual mode before writing; it now writes only the setpoint, exactly like the native By-Web "T Assenza" panel, and reads back what the firmware actually applied.
+- Sensors now go through Home Assistant's standard handling of measurements instead of bypassing it. The raw text from the web server was written straight into the sensor value, skipping unit conversion, any unit you had chosen for that sensor, sensible rounding, and the conversion from text to number. Values are now real numbers, and a reading the web server cannot express shows as "unknown" for that one reading instead of leaving stray text in the history.
+- Four measurements were described to Home Assistant incorrectly, which made it log a warning at every start and refuse to handle their units: brightness was declared in lumen (Home Assistant uses lux for light level); the wind sensor was declared a **pressure** sensor; reactive power was declared as ordinary power in kW, so it looked like real consumption and could be added to the Energy dashboard as such; and date/time readings on energy meters were declared as timestamps in a format the web server does not use, so displaying one raised an error instead of showing the value.
+- Fields that are switches, modes or labels are no longer published as measurements. The integration works out what a value means from the name the web server gives it, and the web server names its flags after the thing they relate to — so `temperature_alarm`, only ever 0 or 1, was published as a temperature of **0 °C**, indistinguishable from a genuinely freezing reading. On load-control hardware the same fault affected the operating mode, the forcing flag and the counter resets, all published as "0 kW". Thirteen such entities were found on a single test installation.
+- The "Fase" field on load-control devices is shown as text rather than a current in ampere: it holds the type of electrical supply, `monofase` or `trifase`. Genuine per-phase currents are unaffected.
+- An unrecognised field on an energy meter is no longer assumed to be power in kW. A wrong unit that looks plausible cannot be spotted; such a field now appears without a unit and is named in the debug log so a proper rule can be added.
+- Temperature, brightness and wind sensors now keep long-term statistics. They were missing the marker that tells Home Assistant a value is worth recording over time, so their history disappeared with the normal database cleanup and they could not be used in long-term graphs.
+- Scenes use Home Assistant's own record of when they were last activated, instead of a second copy of the same information that could disagree with it.
+- The debug log no longer reports devices as newly discovered when the integration itself has just written to them. After every command the affected device was listed as `New device detected` on the next poll — five thermostats at once after a scene — which looked like a discovery problem on installations whose configuration had not changed at all.
+
+### Changed
+
+- The integration now **reuses its connection** to the VIMAR web server. Every single request — each poll, each command, each meter reading — used to open a brand new HTTPS connection and negotiate a full TLS handshake, thousands of times a day against a small embedded device. Connections are now kept alive and reused, which makes commands respond faster and takes a constant load off the web server.
+- Energy-meter and thermostat refreshes no longer compete with the poll for the same time budget. They ran inside the poll's timeout while issuing one request per meter and per thermostat, so on larger installations they could use it up on their own and make every entity flicker to "unavailable" for that cycle. They now run in the background, and a refresh still in progress is never started twice.
+- Minimum supported Home Assistant version raised to **2026.5.0** (development happens on 2026.7.0).
+- Internal: the list of which VIMAR device models are energy meters, thermostats, shutters and so on now exists in exactly one place instead of three files that had to be kept in agreement by hand.
+- Internal: test count 53 → **360**, with the sensor rules pinned against the fields of a real installation rather than against what their names suggest.
+
+### Removed
+
+- Four modules that were never used by the integration (338 lines), including a duplicate copy of the code that handles the web server's legacy encryption — the kind of duplicate where a fix can silently be applied to the wrong copy. The README described two of them as part of the architecture.
+- The `vimar.reload_default` service, which appeared in the service list with a name and description but was never implemented: calling it returned "service not found". Use `vimar.reload`, or the "delete and reload all entities" option in the integration settings.
+
+---
+
 ## [2026.8.0b5] - 2026-08-03
 
 > **Beta.** Fixes a regression introduced by `2026.8.0b4`, which it replaces.
