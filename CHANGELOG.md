@@ -10,6 +10,20 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Starting the integration no longer risks failing on a slower web server. Logging in and reading the whole configuration were given the same few seconds allowed for a routine status poll, even though they are far slower by nature: measured on real hardware, the login alone used 72% of that budget on a perfectly healthy system. Anything slower — a busier web server, or a Home Assistant start where every integration competes for resources — made the first attempt fail and the integration report itself as unavailable. Setup now gets its own, generous allowance, while routine polling keeps the short one, because a slow poll really is a symptom worth reporting quickly.
+- Connection errors are reported properly instead of turning into a second, confusing error. Any failure message containing a `%` character — which is common, because web addresses encode special characters that way — made the error handling itself crash while trying to display the message. The result was an obscure internal error in place of a clear "cannot connect".
+
+### Removed
+
+- Four modules that were never used by the integration (338 lines), including a duplicate copy of the code that handles the VIMAR web server's legacy encryption — the kind of duplicate where a fix can silently be applied to the wrong copy. The README described two of them as part of the architecture.
+- The `vimar.reload_default` service, which appeared in the service list with a name and description but was never implemented: calling it returned "service not found". Use `vimar.reload`, or the "delete and reload all entities" option in the integration settings.
+
+---
+
 ## [2026.8.0b2] - 2026-08-03
 
 > **Beta.** Same purpose as `2026.8.0b1`, which it replaces and fully
