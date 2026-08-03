@@ -31,6 +31,7 @@ from custom_components.vimar.cover import (  # noqa: E402
     RELAY_DELAY,
     VimarCover,
 )
+from custom_components.vimar.vimar_entity import MISSING_DEVICE  # noqa: E402
 
 pytestmark = pytest.mark.integration  # Home Assistant required
 
@@ -49,6 +50,7 @@ def _make_cover(travel_up=36, travel_down=35, position=50, poll_seconds=8):
     cover._tb_unsub = None
     cover._tb_planned_stop = False
     cover._background_tasks = set()  # tracked by _create_tracked_task
+    cover._device = MISSING_DEVICE  # __init__ is bypassed; no class-level default
     # VimarEntity.name is a read-only property (derives from _device); leaving
     # it unset resolves to "Unknown Device 0", which is fine here since name is
     # only used in log messages, not asserted on.

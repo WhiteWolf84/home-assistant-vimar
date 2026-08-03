@@ -14,17 +14,17 @@ produced 241 errors, and the distribution matters far more than the total.
 | --- | ---: | --- |
 | `reportIncompatibleVariableOverride` | 136 | Off, deliberately — see below |
 | `reportArgumentType` | 30 | Not triaged |
-| `reportOptionalMemberAccess` | 14 | Off — needs a behaviour change |
+| `reportOptionalMemberAccess` | 14 | **Enabled** |
 | `reportOperatorIssue` | 14 | Not triaged |
-| `reportOptionalSubscript` | 14 | Off — needs a behaviour change |
+| `reportOptionalSubscript` | 14 | **Enabled** |
 | `reportIncompatibleMethodOverride` | 9 | **Enabled** |
-| `reportOptionalOperand` | 8 | Off — needs a behaviour change |
+| `reportOptionalOperand` | 8 | **Enabled** |
 | `reportPrivateImportUsage` | 5 | Not triaged |
 | `reportAttributeAccessIssue` | 5 | Not triaged |
 | `reportGeneralTypeIssues` | 2 | Not triaged |
 | `reportAssignmentType` | 2 | Not triaged |
 | `reportCallIssue` | 1 | Not triaged |
-| `reportOptionalIterable` | 1 | Off — needs a behaviour change |
+| `reportOptionalIterable` | 1 | **Enabled** |
 
 Reproduce the measurement by copying `pyrightconfig.json`, setting every
 `"none"` to `"error"`, and running `pyright -p <copy>`.
@@ -48,6 +48,36 @@ entire HA pipeline with a raw value:
 instead". Nothing but a type checker catches the violation: at runtime the
 override simply wins.
 
+### The `reportOptional*` family
+
+37 diagnostics, and the family that had already produced two live crashes
+before it was turned on (the percent-formatting one in
+`vimarlink/exceptions.py`, and an unguarded attribute access before that). Two
+more were sitting in the code when it was enabled:
+
+- `media_player.async_mute_volume` stored `volume_level`, which is `None` when
+  the device has no `volume` status. Unmuting then raised
+  `TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'` and the
+  player stayed silent, with only a traceback to explain why.
+- `cover._tb_update_position` compared `_tb_position` against a number with no
+  guarantee that tracking had set it, inside a timer callback where an
+  exception kills the timer.
+
+Clearing the family was not a config edit. `VimarEntity` declared `_device`,
+`_vimarconnection`, `_vimarproject` and `_coordinator` as `Optional`, and about
+half the readers checked for `None` while the other half did not — the
+unchecked half being right in practice, since entities are only built from
+devices that are in the project. That ambiguity is what stopped a checker (or a
+reader) telling a real gap from a redundant guard. The contract is now stated:
+
+- the coordinator builds its `VimarLink` and `VimarProject` in `__init__`
+  rather than only in `init_vimarproject()`; neither touches the network, so
+  there is nothing to defer;
+- an entity whose device cannot be found carries `MISSING_DEVICE`, an inert
+  placeholder compared by identity, so every guard that read
+  `if self._device is None` fires in exactly the same circumstances.
+
+
 ## Off deliberately
 
 ### `reportIncompatibleVariableOverride`
@@ -58,17 +88,17 @@ overriding them with a plain `@property` is the normal pattern across
 integrations. Enabling this rule would mean 136 suppressions for no defect
 found.
 
-## Off, pending a real change
+## Still to triage
 
-### The `reportOptional*` family (37 diagnostics)
+`reportArgumentType` (30), `reportOperatorIssue` (14),
+`reportAttributeAccessIssue` (5), `reportPrivateImportUsage` (5),
+`reportGeneralTypeIssues` (2), `reportAssignmentType` (2), `reportCallIssue`
+(1). Same approach: measure what each one actually finds before deciding
+whether the fix is worth the churn.
 
-These are genuine null-safety gaps, and the same family as the crash fixed in
-`vimarlink/exceptions.py`. Clearing them is not a config edit: `VimarEntity`
-declares `_device`, `_vimarconnection` and `_vimarproject` as `Optional`, and
-roughly half the call sites guard for `None` while the other half assume it is
-set. The half without guards are right in practice — an entity is only ever
-constructed after the coordinator has initialised — but making that hold for
-the type checker means changing what happens when a device *is* missing at
-construction time, which today produces an entity that raises `AttributeError`
-on first use. That is a runtime behaviour change and deserves its own commit,
-with its own tests.
+## Not covered at all
+
+Both CI lint jobs are scoped to `./custom_components/vimar`, so the `tests/`
+tree is checked by neither `ruff` nor `black`. `black` and `ruff format` also
+disagree there — on how to lay out an `assert` with a message — so widening the
+scope means first deciding which of the two is authoritative.

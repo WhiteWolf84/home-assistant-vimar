@@ -15,6 +15,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 ### Fixed
 
 - The `vimar.update_entities` service no longer risks corrupting the device list. It rebuilt the entire set of devices on a thread of its own, without coordinating with the regular polling that may have been reading — and modifying — the same data at that moment. Two things touching the same structure at once can leave it inconsistent in ways that are hard to attribute afterwards. The service now asks the integration to run one of its normal update cycles, and updates can no longer overlap.
+- Unmuting an audio device that reports no volume no longer fails. Muting recorded "no volume" as the level to return to, and unmuting then crashed while trying to calculate it — leaving the player silent with nothing but an error in the log to explain why.
+- A shutter can no longer lose its position timer partway through a movement. The routine that recalculates the position while the shutter moves compared the position against a number without being sure one had been set; had that happened, the exception would have stopped the timer and left the shutter tracking nothing.
 - Calling that service now refreshes what you see straight away. It wrote the new data where the integration itself would not look for it, so entities kept showing the old values until the next scheduled poll came round — up to the full polling interval later, for a service whose entire purpose is "update now".
 
 ---

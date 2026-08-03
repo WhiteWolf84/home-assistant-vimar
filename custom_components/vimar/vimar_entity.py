@@ -15,6 +15,26 @@ from .const import (
 from .vimar_coordinator import VimarDataUpdateCoordinator
 from .vimarlink.vimarlink import VimarDevice, VimarLink, VimarProject
 
+#: Stands in for a device that was not found at construction time. Compared by
+#: identity, so every check that used to read `if self._device is None` fires in
+#: exactly the same circumstances and means exactly the same thing.
+#: An entity holding this is inert: it has no statuses, so has_state() is
+#: False, get_state() finds nothing, and `available` is already False because
+#: the id is absent from the coordinator's data.
+MISSING_DEVICE: VimarDevice = {
+    "object_id": "",
+    "room_ids": [],
+    "room_names": [],
+    "room_name": "",
+    "object_name": "",
+    "object_type": "",
+    "status": {},
+    "device_type": "",
+    "device_class": "",
+    "device_friendly_name": "",
+    "icon": "",
+}
+
 
 class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     """Vimar abstract base entity.
@@ -27,11 +47,19 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
 
     _logger = _LOGGER
     _logger_is_debug = False
-    _device: VimarDevice | None = None
+    # Never None. __init__ substitutes MISSING_DEVICE when the lookup fails,
+    # so the "device could not be found" case is a value the code can carry
+    # rather than an absence every reader has to remember to check for. Half
+    # the readers did check and half did not, and the ones that did not were
+    # right in practice: entities are only ever built from devices that are in
+    # the project (see vimar_setup_entry).
+    _device: VimarDevice
     _device_id: str = "0"
-    _vimarconnection: VimarLink | None = None
-    _vimarproject: VimarProject | None = None
-    _coordinator: VimarDataUpdateCoordinator | None = None
+    # Assigned unconditionally in __init__ from the coordinator, which builds
+    # both objects in its own __init__.
+    _vimarconnection: VimarLink
+    _vimarproject: VimarProject
+    _coordinator: VimarDataUpdateCoordinator
     # Availability actually pushed to the HA state machine by the last write.
     # None = never written yet (the first coordinator update always writes).
     _last_written_available: bool | None = None
@@ -49,11 +77,16 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         self._attributes: dict = {}
         self._reset_status()
 
-        if self._vimarproject is not None and self._device_id in self._vimarproject.devices:
+        if self._device_id in self._vimarproject.devices:
             self._device = self._vimarproject.devices[self._device_id]
             self._logger = logging.getLogger(str(PACKAGE_NAME) + "." + self.entity_platform)
             self._logger_is_debug = self._logger.isEnabledFor(logging.DEBUG)
         else:
+            # Should not happen: entities are built from the project's own
+            # device list. Carry an inert placeholder rather than leaving the
+            # attribute unset, so a single bad id degrades this one entity
+            # instead of raising AttributeError on first use.
+            self._device = MISSING_DEVICE
             self._logger.warning("Cannot find device #%s", self._device_id)
 
     def _handle_coordinator_update(self) -> None:
@@ -113,7 +146,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     @property
     def device_name(self):
         """Return the name of the device."""
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return f"Unknown Device {self._device_id}"
         name = self._device.get("device_friendly_name")
         if name is None:
@@ -132,7 +165,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         FIX #8: build and return a fresh dict each time instead of mutating
         self._attributes in place.
         """
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return {}
 
         attrs: dict = {}
@@ -216,7 +249,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         Order matters for thermostats: the activating mode (funzionamento) must
         be sent before the setpoint so the setpoint wins.
         """
-        if self._device is None or "status" not in self._device:
+        if self._device is MISSING_DEVICE or "status" not in self._device:
             self._logger.warning(
                 "Cannot change state for device %s - device data not available", self._device_id
             )
@@ -256,7 +289,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
 
     def has_state(self, state: str) -> bool:
         """Return true if local device has a given state."""
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return False
         if "status" in self._device and self._device["status"] and state in self._device["status"]:
             return True
@@ -265,7 +298,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     @property
     def icon(self):
         """Icon to use in the frontend, if any."""
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return self.ICON
 
         device_icon = self._device.get("icon")
@@ -279,7 +312,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     @property
     def device_class(self):
         """Return the class of this device, from component DEVICE_CLASSES."""
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return None
         return self._device.get("device_class")
 
@@ -302,7 +335,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     @property
     def device_info(self) -> DeviceInfo | None:
         """Return device information for device registry."""
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return None
 
         room_name = None
@@ -327,7 +360,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
     @property
     def entity_platform(self):
         """Return device_type (platform overrrided in sensor class)"""
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return "unknown"
         return self._device.get("device_type", "unknown")
 

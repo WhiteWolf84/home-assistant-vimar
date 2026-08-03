@@ -175,7 +175,11 @@ class VimarMediaplayer(VimarEntity, MediaPlayerEntity):
     async def async_mute_volume(self, mute):
         """Mute the volume."""
         if mute:
-            self._last_volume = self.volume_level
+            # volume_level returns None when the device has no "volume" status.
+            # Storing that made unmuting raise TypeError on None * 100, so the
+            # player stayed silent with an error in the log; keep the last
+            # value we did manage to read instead.
+            self._last_volume = self.volume_level or self._last_volume
             self.change_state("volume", 0)
         else:
             self.change_state("volume", str(int(self._last_volume * 100)))

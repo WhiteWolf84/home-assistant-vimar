@@ -48,7 +48,7 @@ from .const import (
     VIMAR_CLIMATE_RIDUZIONE_II,
 )
 from .const import DEVICE_TYPE_CLIMATES as CURR_PLATFORM
-from .vimar_entity import VimarEntity, vimar_setup_entry
+from .vimar_entity import MISSING_DEVICE, VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -430,7 +430,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
         synchronization"). Refresh setpoint+funzionamento after the
         write-guard window so the next poll shows the real values.
         """
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return
         ids = [
             status.get("status_id")
@@ -448,7 +448,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
         physical fan coil is present. The only reliable discriminant is
         object_type matching against FANCOIL_OBJECT_TYPES.
         """
-        if self._device is None:
+        if self._device is MISSING_DEVICE:
             return False
         return self._device.get("object_type", "") in FANCOIL_OBJECT_TYPES
 
