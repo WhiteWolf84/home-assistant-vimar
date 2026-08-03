@@ -72,6 +72,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     vimarconnection: VimarLink | None = None
     vimarproject: VimarProject | None = None
     _timeout: float = DEFAULT_TIMEOUT
+    # Separate, generous budget for login + full discovery (see __init__).
+    _setup_timeout: float = 30.0
     webserver_id = ""
     entity_unique_id_prefix = ""
     _first_update_data_executed = False
@@ -158,6 +160,17 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         timeout = vimarconfig.get(CONF_TIMEOUT) or DEFAULT_TIMEOUT
         if timeout > 0:
             self._timeout = float(timeout)
+        # Budget for logging in and for a full discovery, which are rare and
+        # inherently much slower than a slim poll: measured on real hardware,
+        # a cold login alone took 4.3 s of the 6 s default budget while the
+        # slim polls that follow it run in ~0.07 s. Timing the setup phase with
+        # the poll's stopwatch meant a slightly slower web server - or a busy
+        # Home Assistant start, when every integration competes for the
+        # executor - failed the very first refresh and left the integration
+        # "not ready". Floor and ceiling keep it sane at both ends of the
+        # configurable range (2..60 s): never less than 30 s, never so long
+        # that a genuinely stuck setup hangs instead of failing and retrying.
+        self._setup_timeout = min(max(self._timeout * 5, 30.0), 120.0)
         uptade_interval = float(vimarconfig.get(CONF_SCAN_INTERVAL) or DEFAULT_SCAN_INTERVAL)
         if uptade_interval < 1:
             uptade_interval = DEFAULT_SCAN_INTERVAL
@@ -305,13 +318,17 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 raise PlatformNotReady
 
             if self.vimarconnection is None or not self.vimarconnection.is_logged():
-                async with asyncio.timeout(self._timeout):
+                async with asyncio.timeout(self._setup_timeout):
                     await self.validate_vimar_credentials()
 
-            async with asyncio.timeout(self._timeout):
-                forced = not self._first_update_data_executed or not self._platforms_registered
+            forced = not self._first_update_data_executed or not self._platforms_registered
+            full_discovery = forced or not self._slim_poll_active
+            # Discovery gets the generous budget, the slim poll keeps the tight
+            # one: see _setup_timeout.
+            budget = self._setup_timeout if full_discovery else self._timeout
 
-                if forced or not self._slim_poll_active:
+            async with asyncio.timeout(budget):
+                if full_discovery:
                     _LOGGER.debug("Vimar: running full discovery")
                     devices = await self.hass.async_add_executor_job(self.vimarproject.update, True)
 
