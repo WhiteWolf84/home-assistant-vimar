@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from custom_components.vimar.sensor import (  # noqa: E402
     VimarSensor,
+    not_a_reading,
     state_class_for,
 )
 
@@ -73,14 +74,23 @@ def _sensor(measurement, object_type=METER, value="12.50", device_class=None):
 ALL_MEASUREMENTS = [
     ("energia_assoluta", METER),
     ("energia_parziale", METER),
+    ("energia_totale_consumo", "CH_Carichi_Custom"),
     ("potenza_attiva", METER),
     ("potenza_reattiva", METER),
-    ("corrente_fase_1", METER),
-    ("reset_date", METER),
+    ("corrente_fase_1", "CH_Carichi_3F"),
+    ("fase", "CH_Carichi_Custom"),
+    ("custom_datetime", "CH_Carichi_Custom"),
+    ("campo_mai_visto", "CH_Carichi_Custom"),
     ("temperature", "CH_WEATHERSTATION"),
     ("temperature_min", "CH_KNX_GENERIC_TEMPERATURE_C"),
+    ("temperature_max", "CH_WEATHERSTATION"),
+    ("temperature_alarm", "CH_WEATHERSTATION"),
+    ("temperature_reset", "CH_WEATHERSTATION"),
+    ("temperature_request_minmax", "CH_WEATHERSTATION"),
     ("wind_speed", "CH_WEATHERSTATION"),
     ("wind_speed_max", "CH_KNX_GENERIC_WINDSPEED"),
+    ("wind_speed_alarm", "CH_WEATHERSTATION"),
+    ("wind_speed_reset", "CH_WEATHERSTATION"),
     ("brightness", "CH_WEATHERSTATION"),
     ("its_raining", "CH_WEATHERSTATION"),
     ("contatore_assoluto", "CH_CONTATORE_IMPULSI"),
@@ -276,6 +286,92 @@ def test_state_class_for_never_returns_an_impossible_pair():
 
 def test_state_class_for_has_no_opinion_without_a_device_class():
     assert state_class_for(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Fields that are not readings at all
+#
+# The rules match on parts of the field name, because the name is all the
+# webserver gives us. The webserver also names its flags after the quantity
+# they relate to, so "what does this measure?" asked first claims them:
+# `temperature_alarm` (a 0/1 flag) was published as **0 °C**, which is
+# indistinguishable from a real freezing reading, and `fase` (the phase type,
+# "monofase"/"trifase") was published in ampere. Found on real hardware.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "measurement",
+    [
+        "temperature_alarm",
+        "temperature_reset",
+        "temperature_request_minmax",
+        "wind_speed_alarm",
+        "wind_speed_reset",
+        "wind_speed_request_minmax",
+        "reset_history",
+    ],
+)
+def test_a_flag_is_not_dressed_up_as_a_measurement(measurement):
+    """THE regression: a 0/1 flag published as 0 °C or 0 m/s."""
+    sensor = _sensor(measurement, "CH_WEATHERSTATION", value="0")
+
+    assert sensor.device_class is None
+    assert sensor.native_unit_of_measurement is None
+    assert sensor.state_class is None
+    assert sensor.native_value == "0"  # shown as-is, not converted
+
+
+@pytest.mark.parametrize("value", ["monofase", "trifase"])
+def test_the_phase_type_is_text_not_a_current(value):
+    """`fase` is the installation's phase type, and matched the current rule."""
+    sensor = _sensor("fase", "CH_Carichi_Custom", value=value)
+
+    assert sensor.device_class is None
+    assert sensor.native_unit_of_measurement is None
+    assert sensor.native_value == value
+
+
+@pytest.mark.parametrize(
+    ("measurement", "object_type", "expected_class"),
+    [
+        ("temperature", "CH_WEATHERSTATION", SensorDeviceClass.TEMPERATURE),
+        ("temperature_min", "CH_WEATHERSTATION", SensorDeviceClass.TEMPERATURE),
+        ("temperature_max", "CH_WEATHERSTATION", SensorDeviceClass.TEMPERATURE),
+        ("wind_speed", "CH_WEATHERSTATION", SensorDeviceClass.WIND_SPEED),
+        ("wind_speed_max", "CH_WEATHERSTATION", SensorDeviceClass.WIND_SPEED),
+        ("corrente_fase_1", "CH_Carichi_3F", SensorDeviceClass.CURRENT),
+        ("energia_totale_consumo", "CH_Carichi_Custom", SensorDeviceClass.ENERGY),
+    ],
+)
+def test_the_guard_does_not_declass_real_readings(measurement, object_type, expected_class):
+    """The risk of a guard like this is catching too much. `_min`/`_max` are
+    genuine readings, and `corrente_fase_1` is a genuine per-phase current -
+    the rule `fase` was written for."""
+    assert _sensor(measurement, object_type).device_class is expected_class
+
+
+def test_an_unknown_meter_field_is_not_guessed_to_be_power():
+    """Anything unrecognised on a meter used to fall through to power in kW.
+
+    A wrong unit that looks plausible cannot be spotted; a missing one can.
+    """
+    sensor = _sensor("campo_mai_visto", "CH_Carichi_Custom", value="123")
+
+    assert sensor.device_class is None
+    assert sensor.native_unit_of_measurement is None
+
+
+def test_not_a_reading_matches_whole_parts_only():
+    """Substring matching is the bug this guard exists to contain; it must not
+    reintroduce it by matching inside a word."""
+    assert not_a_reading("temperature_alarm")
+    assert not_a_reading("fase")
+    # "alarm"/"reset" as a fragment of a longer word must NOT match
+    assert not not_a_reading("resettabile")
+    assert not not_a_reading("alarming_power")
+    assert not not_a_reading("temperature")
+    assert not not_a_reading("corrente_fase_1")
 
 
 # ---------------------------------------------------------------------------

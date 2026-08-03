@@ -12,6 +12,12 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fields that are switches or labels are no longer presented as measurements. The integration works out what a value means from the name the web server gives it, and the web server names its flags after the thing they relate to — so a field called `temperature_alarm`, which is only ever 0 or 1, was being published as a temperature of **0 °C**, indistinguishable from a genuinely freezing reading. The same happened to `temperature_reset`, `wind_speed_alarm` and their siblings. The integration now asks "is this a reading at all?" before asking "a reading of what?".
+- The "Fase" field on load-control devices is shown as text instead of a current in ampere. It holds the type of electrical supply — `monofase` or `trifase` — and was matching the rule written for per-phase currents. Since `2026.8.0b3` this showed as "unknown", because text cannot be turned into a number; it now simply shows the value. Genuine per-phase currents are unaffected.
+- An unrecognised field on an energy meter is no longer assumed to be power in kW. Anything the integration did not have a rule for was labelled as a power reading, which looks entirely plausible and therefore cannot be spotted. Such a field now appears without a unit — visibly incomplete rather than convincingly wrong — and is named in the debug log so a proper rule can be added.
+
 ---
 
 ## [2026.8.0b3] - 2026-08-03

@@ -48,6 +48,30 @@ class SensorSpec(NamedTuple):
     device_class: SensorDeviceClass | None
 
 
+#: Name parts marking a field that is a flag, a counter reset or a category -
+#: not a reading of anything. The webserver names these after the quantity they
+#: relate to (`temperature_alarm`, `wind_speed_reset`, `temperature_request_minmax`),
+#: so any rule that asks "what does this measure?" claims them first and dresses
+#: a 0/1 flag up as a measurement: `temperature_alarm` was published as 0 °C,
+#: indistinguishable from a real freezing reading.
+NOT_A_READING = frozenset({"alarm", "reset", "request", "minmax", "history"})
+
+#: Whole field names carrying a category rather than a quantity. `fase` is the
+#: installation's phase type - "monofase" or "trifase" - and matched the rule
+#: written for per-phase currents, so it was published in ampere.
+NOT_A_READING_FIELDS = frozenset({"fase"})
+
+
+def not_a_reading(name: str) -> bool:
+    """Return True when this field holds a flag or a category, not a value.
+
+    Matched on whole underscore-separated parts, never as a substring: the
+    substring matching this guard exists to contain is exactly what turned
+    `fase` into a current and `temperature_alarm` into a temperature.
+    """
+    return name in NOT_A_READING_FIELDS or bool(set(name.split("_")) & NOT_A_READING)
+
+
 def state_class_for(device_class: SensorDeviceClass | None) -> SensorStateClass | None:
     """Pick the state class Home Assistant allows for a device class.
 
@@ -167,13 +191,20 @@ class VimarSensor(VimarEntity, SensorEntity):
         Every unit here has to be one Home Assistant accepts for the paired
         device class (see DEVICE_CLASS_UNITS): an invalid pair is not ignored,
         it logs a warning on every start and disables unit conversion in the
-        UI. Two pairs were invalid and are fixed below.
+        UI.
+
+        The rules below match on parts of the field name, which is the only
+        thing the webserver gives us to go on. That is why the "is this a
+        reading at all?" question is asked FIRST: see NOT_A_READING.
         """
         if self._class_and_units is not None:
             return self._class_and_units
 
         name = self._measurement_name
         object_type = self._device["object_type"]
+
+        if not_a_reading(name):
+            return SensorSpec(None, None)
 
         if object_type in ENERGY_METER_OBJECT_TYPES:
             if "energia" in name:
@@ -197,7 +228,19 @@ class VimarSensor(VimarEntity, SensorEntity):
                 # string, so HA raised ValueError when rendering the state.
                 # No device class: the raw value is shown as-is.
                 return SensorSpec(None, None)
-            return SensorSpec(UnitOfPower.KILO_WATT, SensorDeviceClass.POWER)
+            # Anything else on a meter used to fall through to "power in kW",
+            # which is a guess, and a guess that cannot be spotted: an
+            # unrecognised field would appear as a plausible power reading.
+            # An unlabelled value is visibly incomplete instead, and the log
+            # line makes the field discoverable so a real rule can be added.
+            _LOGGER.debug(
+                "Meter field '%s' on %s has no unit rule; reporting it without "
+                "a unit or device class. Add one to class_and_units() if it is "
+                "a real measurement",
+                name,
+                object_type,
+            )
+            return SensorSpec(None, None)
 
         if object_type in KNX_TEMPERATURE_OBJECT_TYPES or "temperature" in name:
             # see: https://github.com/h4de5/home-assistant-vimar/issues/20
