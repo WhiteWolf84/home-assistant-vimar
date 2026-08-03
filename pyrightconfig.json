@@ -16,7 +16,8 @@
 
     "typeCheckingMode": "basic",
     "reportDeprecated": "error",
-    "reportIncompatibleMethodOverride": "none",
+    "reportIncompatibleMethodOverride": "error",
+
     "reportIncompatibleVariableOverride": "none",
     "reportPrivateImportUsage": "none",
     "reportOptionalMemberAccess": "none",

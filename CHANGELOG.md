@@ -17,6 +17,19 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 - Starting the integration no longer risks failing on a slower web server. Logging in and reading the whole configuration were given the same few seconds allowed for a routine status poll, even though they are far slower by nature: measured on real hardware, the login alone used 72% of that budget on a perfectly healthy system. Anything slower — a busier web server, or a Home Assistant start where every integration competes for resources — made the first attempt fail and the integration report itself as unavailable. Setup now gets its own, generous allowance, while routine polling keeps the short one, because a slow poll really is a symptom worth reporting quickly.
 - Connection errors are reported properly instead of turning into a second, confusing error. Any failure message containing a `%` character — which is common, because web addresses encode special characters that way — made the error handling itself crash while trying to display the message. The result was an obscure internal error in place of a clear "cannot connect".
 
+- Sensors now go through Home Assistant's standard handling of measurements instead of bypassing it. The integration was writing the raw text it received from the web server straight into the sensor's value, skipping the step where Home Assistant converts units, applies the unit you may have chosen for that specific sensor, rounds to a sensible number of decimals, and turns the text into a number. Values are now real numbers, and a reading the web server cannot express (a momentary blank, say) shows as "unknown" for that one reading instead of leaving a stray piece of text in the history.
+- Four measurements were described to Home Assistant incorrectly, which made it log a warning at every start and refuse to handle their units:
+  - the brightness sensor was declared in lumen, a unit Home Assistant does not accept for light level (it uses lux);
+  - the wind sensor was declared a **pressure** sensor;
+  - reactive power was declared as ordinary power in kW, so it looked like real consumption and could be added to the Energy dashboard as if it were;
+  - date and time readings on energy meters were declared as timestamps, which Home Assistant only accepts in a specific format that the web server does not use — displaying one raised an error instead of showing the value.
+- Temperature, brightness and wind sensors now keep long-term statistics. They were missing the marker that tells Home Assistant a value is worth recording over time, so their history disappeared with the normal database cleanup (10 days by default) and they could not be used in long-term graphs.
+- Scenes now use Home Assistant's own record of when they were last activated, instead of keeping a second copy of the same information that could disagree with it.
+
+### Changed
+
+- The list of which VIMAR device models are energy meters, thermostats, shutters and so on now exists in exactly one place. It was written out by hand in three files that had to be kept in agreement, with a comment asking whoever edited one to remember the others. Forgetting produced a meter that appears in Home Assistant but never updates, or updates but shows no unit. A test now fails if the lists and the code that uses them ever disagree.
+
 ### Removed
 
 - Four modules that were never used by the integration (338 lines), including a duplicate copy of the code that handles the VIMAR web server's legacy encryption — the kind of duplicate where a fix can silently be applied to the wrong copy. The README described two of them as part of the architecture.

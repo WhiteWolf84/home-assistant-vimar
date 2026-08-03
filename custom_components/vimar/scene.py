@@ -58,21 +58,18 @@ class VimarScene(VimarEntity, Scene):
     # scene properties
 
     @property
-    def is_default_state(self):
+    def is_default_state(self) -> bool:
         """Return True of in default state - resulting in default icon."""
         return True
 
-    @property
-    def state(self) -> str:
-        """Return the state of the scene.
-
-        Returns the ISO 8601 timestamp of the last activation, or STATE_UNKNOWN
-        if the scene has never been activated. The value is persisted across
-        HA restarts via RestoreEntity (inherited from Scene base class).
-        """
-        if self._last_activated is None:
-            return STATE_UNKNOWN
-        return self._last_activated.isoformat()
+    # `state` is deliberately NOT overridden. BaseScene declares it @final and
+    # already does exactly what this class used to reimplement: Scene's @final
+    # _async_activate() - the method the scene.turn_on service actually calls -
+    # records the activation timestamp, writes the state and only then invokes
+    # our async_activate(). It also restores that timestamp from the recorder
+    # on startup. The override reproduced all of it against a second, parallel
+    # timestamp, so the two could disagree; _last_activated is kept only to
+    # publish the value as an attribute.
 
     @property
     def extra_state_attributes(self):
@@ -87,10 +84,10 @@ class VimarScene(VimarEntity, Scene):
     async def async_activate(self, **kwargs) -> None:
         """Activate scene. Try to get entities into requested state.
 
-        _last_activated is set BEFORE change_state() because change_state()
-        internally calls request_statemachine_update() → async_write_ha_state().
-        If we set it after, that first write would still see _last_activated=None
-        and persist STATE_UNKNOWN instead of the timestamp.
+        Called by Scene._async_activate(), which has already recorded the
+        activation timestamp and written the state. _last_activated is our own
+        copy, kept only for the `last_activated` attribute, and is set before
+        change_state() because that triggers another state write.
         """
         self._last_activated = dt_util.utcnow()
 

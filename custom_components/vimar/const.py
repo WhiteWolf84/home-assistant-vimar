@@ -2,6 +2,41 @@
 
 import logging
 
+# Device classification lives in the standalone library so that it has exactly
+# one definition: vimarlink cannot import this module (it must stay free of
+# Home Assistant), so anything both sides need has to sit below both.
+from .vimarlink.device_types import (
+    DEVICE_TYPE_ALARM,
+    DEVICE_TYPE_BINARY_SENSOR,
+    DEVICE_TYPE_CLIMATES,
+    DEVICE_TYPE_COVERS,
+    DEVICE_TYPE_FANS,
+    DEVICE_TYPE_LIGHTS,
+    DEVICE_TYPE_MEDIA_PLAYERS,
+    DEVICE_TYPE_OTHERS,
+    DEVICE_TYPE_SCENES,
+    DEVICE_TYPE_SENSORS,
+    DEVICE_TYPE_SWITCHES,
+    ENERGY_METER_OBJECT_TYPES,
+)
+
+# Re-exported: the rest of the integration keeps importing these from .const,
+# which stays the one place Home Assistant code looks for constants.
+_RE_EXPORTED = (
+    DEVICE_TYPE_ALARM,
+    DEVICE_TYPE_BINARY_SENSOR,
+    DEVICE_TYPE_CLIMATES,
+    DEVICE_TYPE_COVERS,
+    DEVICE_TYPE_FANS,
+    DEVICE_TYPE_LIGHTS,
+    DEVICE_TYPE_MEDIA_PLAYERS,
+    DEVICE_TYPE_OTHERS,
+    DEVICE_TYPE_SCENES,
+    DEVICE_TYPE_SENSORS,
+    DEVICE_TYPE_SWITCHES,
+    ENERGY_METER_OBJECT_TYPES,
+)
+
 _LOGGER = logging.getLogger(__package__)
 PACKAGE_NAME = __package__
 
@@ -50,17 +85,6 @@ ENERGY_REFRESH_STATUS_NAMES = frozenset(
     }
 )
 
-# Object types of energy meter devices (kept in sync with vimarlink.parse_device_type).
-ENERGY_METER_OBJECT_TYPES = frozenset(
-    {
-        "CH_Misuratore",
-        "CH_Carichi",
-        "CH_Carichi_Custom",
-        "CH_Carichi_3F",
-        "CH_KNX_GENERIC_POWER_KW",
-    }
-)
-
 # Thermostat refresh: like energy meters, the webserver DB does not track the
 # physical by-me thermostat unless a GETVALUE is issued on the status object
 # (the native UI popup does this during its "device synchronization" phase).
@@ -100,18 +124,7 @@ COVER_POSITION_MODES = [
 ]
 
 # vimar integration specific const
-
-DEVICE_TYPE_LIGHTS = "light"
-DEVICE_TYPE_COVERS = "cover"
-DEVICE_TYPE_SWITCHES = "switch"
-DEVICE_TYPE_CLIMATES = "climate"
-DEVICE_TYPE_MEDIA_PLAYERS = "media_player"
-DEVICE_TYPE_SCENES = "scene"
-DEVICE_TYPE_FANS = "fan"
-DEVICE_TYPE_SENSORS = "sensor"
-DEVICE_TYPE_OTHERS = "other"
-DEVICE_TYPE_ALARM = "alarm_control_panel"
-
+# (DEVICE_TYPE_* are imported from vimarlink.device_types at the top)
 
 VIMAR_CLIMATE_OFF = "VIMAR_CLIMATE_OFF"
 VIMAR_CLIMATE_AUTO = "VIMAR_CLIMATE_AUTO"
@@ -159,7 +172,6 @@ AVAILABLE_PLATFORMS = {
     DEVICE_TYPE_SENSORS: "sensor",
     # DEVICE_TYPE_OTHERS: ''
 }
-DEVICE_TYPE_BINARY_SENSOR = "binary_sensor"
 PLATFORMS = [
     DEVICE_TYPE_ALARM,
     DEVICE_TYPE_BINARY_SENSOR,
