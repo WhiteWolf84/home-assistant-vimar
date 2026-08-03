@@ -118,6 +118,18 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # (see _schedule_periodic_refreshes).
         self._periodic_refresh_task: asyncio.Task | None = None
 
+        # Serialises everything that reads or rebuilds vimarproject.devices.
+        # DataUpdateCoordinator does NOT do this for us: its _async_refresh has
+        # no lock, so a scheduled poll and an on-demand refresh can overlap.
+        # That matters here because the two halves of an update run in
+        # different places - vimarproject.update() rebuilds the whole device
+        # tree on an executor thread while _apply_slim_results() mutates it on
+        # the event loop - so an overlap is a genuine data race over a plain
+        # dict, not just duplicated work.
+        self._update_lock = asyncio.Lock()
+        # Set by async_force_refresh() to make the next cycle a full discovery.
+        self._force_full_discovery = False
+
         # FIX: single global FIFO for all device writes (SETVALUE). Every
         # change_state() from every entity enqueues its batch here and one
         # worker drains them sequentially, so concurrent commands (e.g.
@@ -299,8 +311,29 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # for the next scheduled poll tick.
         await self.async_request_refresh()
 
+    async def async_force_refresh(self, forced: bool = True) -> None:
+        """Refresh on demand, through the coordinator's own update cycle.
+
+        The `vimar.update_entities` service used to call
+        `vimarproject.update()` on an executor thread of its own, which is the
+        one thing that must not happen: it rebuilds the device tree from
+        scratch while a scheduled poll may be halfway through reading and
+        mutating it. Going through async_refresh() means the request is
+        serialised with every other update by _update_lock, and the result
+        reaches the entities the normal way instead of being written behind
+        the coordinator's back.
+        """
+        if forced:
+            self._force_full_discovery = True
+        await self.async_refresh()
+
     async def _async_update_data(self):
         """Fetch data from API endpoint."""
+        async with self._update_lock:
+            return await self._async_update_data_locked()
+
+    async def _async_update_data_locked(self):
+        """Run one update cycle. Callers must hold _update_lock."""
         _LOGGER.debug("Updating coordinator..")
 
         # FIX #23b: svuota il set a inizio ciclo cosi' ogni poll parte pulito.
@@ -321,7 +354,12 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 async with asyncio.timeout(self._setup_timeout):
                     await self.validate_vimar_credentials()
 
-            forced = not self._first_update_data_executed or not self._platforms_registered
+            forced = (
+                not self._first_update_data_executed
+                or not self._platforms_registered
+                or self._force_full_discovery
+            )
+            self._force_full_discovery = False
             full_discovery = forced or not self._slim_poll_active
             # Discovery gets the generous budget, the slim poll keeps the tight
             # one: see _setup_timeout.

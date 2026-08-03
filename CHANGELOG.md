@@ -12,6 +12,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+### Fixed
+
+- The `vimar.update_entities` service no longer risks corrupting the device list. It rebuilt the entire set of devices on a thread of its own, without coordinating with the regular polling that may have been reading — and modifying — the same data at that moment. Two things touching the same structure at once can leave it inconsistent in ways that are hard to attribute afterwards. The service now asks the integration to run one of its normal update cycles, and updates can no longer overlap.
+- Calling that service now refreshes what you see straight away. It wrote the new data where the integration itself would not look for it, so entities kept showing the old values until the next scheduled poll came round — up to the full polling interval later, for a service whose entire purpose is "update now".
+
 ---
 
 ## [2026.8.0] - 2026-08-03
