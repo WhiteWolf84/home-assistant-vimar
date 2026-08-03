@@ -58,8 +58,6 @@ SERVICE_UPDATE = "update_entities"
 SERVICE_UPDATE_SCHEMA = vol.Schema({vol.Optional("forced", default=True): cv.boolean})
 SERVICE_EXEC_VIMAR_SQL = "exec_vimar_sql"
 SERVICE_EXEC_VIMAR_SQL_SCHEMA = vol.Schema({vol.Required("sql"): cv.string})
-SERVICE_RELOAD_DEFAULT = "reload_default"
-SERVICE_RELOAD_DEFAULT_SCHEMA = vol.Schema({})
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType):

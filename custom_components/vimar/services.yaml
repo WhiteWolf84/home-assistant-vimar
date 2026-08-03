@@ -20,11 +20,6 @@ exec_vimar_sql:
       description: SQL Query to be run on the webserver.
       example: SELECT 1
 
-reload_default:
-  name: Remove and reload
-  description: >
-    Removing all entites and then reload - reseting everything to default names.
-
 reload:
   name: Reload
   description: Reload Vimar integration.

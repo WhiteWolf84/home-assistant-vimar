@@ -167,9 +167,7 @@ custom_components/vimar/
 │   ├── exceptions.py            # Error classes
 │   ├── http_adapter.py          # SSL/TLS legacy support
 │   ├── sql_parser.py            # Response parser
-│   ├── vimarlink.py             # Main API facade
-│   ├── vimarlink_auth.py        # Auth with legacy TLS
-│   └── vimarlink_protocol_async.py  # Async protocol
+│   └── vimarlink.py             # Main API facade
 ├── alarm_control_panel.py       # SAI2 alarm platform
 ├── binary_sensor.py             # Binary sensors + SAI2 zones
 ├── climate.py                   # HVAC / thermostats
