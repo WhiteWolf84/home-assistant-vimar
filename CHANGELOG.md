@@ -12,11 +12,22 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+---
+
+## [2026.8.0b3] - 2026-08-03
+
+> **Beta.** Field-testing the sensor changes before they are merged. Unlike
+> `2026.8.0b1` and `2026.8.0b2`, which only removed failure modes, this one
+> changes what you will see: sensor values become numbers rather than text
+> (`11.00` becomes `11.0`), the brightness sensor changes unit and the wind
+> sensor changes type, so Home Assistant may ask you to confirm the unit for
+> those entities. Recorded history keeps the old format up to the upgrade and
+> the new one after it.
+
 ### Fixed
 
 - Starting the integration no longer risks failing on a slower web server. Logging in and reading the whole configuration were given the same few seconds allowed for a routine status poll, even though they are far slower by nature: measured on real hardware, the login alone used 72% of that budget on a perfectly healthy system. Anything slower — a busier web server, or a Home Assistant start where every integration competes for resources — made the first attempt fail and the integration report itself as unavailable. Setup now gets its own, generous allowance, while routine polling keeps the short one, because a slow poll really is a symptom worth reporting quickly.
 - Connection errors are reported properly instead of turning into a second, confusing error. Any failure message containing a `%` character — which is common, because web addresses encode special characters that way — made the error handling itself crash while trying to display the message. The result was an obscure internal error in place of a clear "cannot connect".
-
 - Sensors now go through Home Assistant's standard handling of measurements instead of bypassing it. The integration was writing the raw text it received from the web server straight into the sensor's value, skipping the step where Home Assistant converts units, applies the unit you may have chosen for that specific sensor, rounds to a sensible number of decimals, and turns the text into a number. Values are now real numbers, and a reading the web server cannot express (a momentary blank, say) shows as "unknown" for that one reading instead of leaving a stray piece of text in the history.
 - Four measurements were described to Home Assistant incorrectly, which made it log a warning at every start and refuse to handle their units:
   - the brightness sensor was declared in lumen, a unit Home Assistant does not accept for light level (it uses lux);
