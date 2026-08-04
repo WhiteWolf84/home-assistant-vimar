@@ -14,6 +14,22 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.1b1] - 2026-08-04
+
+> **Beta.** Includes everything in `2026.8.1b0`, which it replaces, and stops
+> a warning Home Assistant logs after every restart. **No manual action
+> needed**, and nothing you have recorded is lost or changed.
+
+### Fixed
+
+- The six total energy counters on a load-control device are no longer declared as counters that can only ever rise. Home Assistant was logging, after every restart, that `energia_totale_produzione` and its siblings "should be strictly increasing" and inviting you to report a bug. They are not a bug: the VIMAR device does not count these totals, it **recalculates** them once an hour, and the recalculated figure is occasionally a little lower than the previous one — measured on real hardware, eight step-backs in 34 hours, always on the hour, the largest being 3.42 kWh out of 38 900.
+
+  Nothing was ever wrong with the recorded data: Home Assistant only reads a drop as a counter reset when the value falls below 90% of the previous one, and these are around 0.006%. The energy dashboard was never inflated. The declaration is simply now the accurate one, and it produces exactly the same statistics, so your history carries on untouched.
+
+  The true meter registers — `energia_assoluta` and `energia_parziale`, which the meter really does count — keep the stronger declaration. Over the same 34 hours they produced 1128 readings without a single step back.
+
+---
+
 ## [2026.8.1b0] - 2026-08-04
 
 > **Beta.** Three defects that could each produce wrong behaviour at runtime,

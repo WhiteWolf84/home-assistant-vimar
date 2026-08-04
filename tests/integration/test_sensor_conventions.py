@@ -397,15 +397,30 @@ def test_not_a_reading_matches_whole_parts_only():
 # ---------------------------------------------------------------------------
 
 REAL_FIELDS = [
-    # (field, object_type, status_range, expected unit, expected device class)
-    ("energia_assoluta", "CH_Misuratore", "", "kWh", SensorDeviceClass.ENERGY),
-    ("energia_parziale", "CH_Misuratore", "", "kWh", SensorDeviceClass.ENERGY),
+    # (field, object_type, status_range, unit, device class, state class)
+    (
+        "energia_assoluta",
+        "CH_Misuratore",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL_INCREASING,
+    ),
+    (
+        "energia_parziale",
+        "CH_Misuratore",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL_INCREASING,
+    ),
     (
         "potenza_attiva",
         "CH_Misuratore",
         "min=-2147483648|max=2147483648",
         "kW",
         SensorDeviceClass.POWER,
+        SensorStateClass.MEASUREMENT,
     ),
     (
         "potenza_reattiva",
@@ -413,44 +428,177 @@ REAL_FIELDS = [
         "min=-2147483648|max=2147483648",
         "kvar",
         SensorDeviceClass.REACTIVE_POWER,
+        SensorStateClass.MEASUREMENT,
     ),
-    ("dynamic_mode", "CH_Misuratore", "min=0|max=1", None, None),
-    ("reset_history", "CH_Misuratore", "min=0|max=1", None, None),
-    ("reset_partial", "CH_Misuratore", "", None, None),
-    ("energia_totale_autoconsumo", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
-    ("energia_totale_consumo", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
-    ("energia_totale_immissione", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
-    ("energia_totale_prelievo", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
-    ("energia_totale_produzione", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
-    ("energia_totale_scambio", "CH_Carichi_Custom", "", "kWh", SensorDeviceClass.ENERGY),
-    ("autoconsumo_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
-    ("consumo_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
-    ("immissione_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
-    ("prelievo_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
-    ("produzione_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
-    ("scambio_totale", "CH_Carichi_Custom", "", "kW", SensorDeviceClass.POWER),
-    ("produzione_presente", "CH_Carichi_Custom", "", None, None),
-    ("fase", "CH_Carichi_Custom", "", None, None),
-    ("custom_date", "CH_Carichi_Custom", "", None, None),
-    ("custom_time", "CH_Carichi_Custom", "", None, None),
-    ("custom_datetime", "CH_Carichi_Custom", "", None, None),
-    ("forzatura", "CH_Carichi_3F", "", None, None),
-    ("funzionamento", "CH_Carichi_3F", "", None, None),
+    ("dynamic_mode", "CH_Misuratore", "min=0|max=1", None, None, None),
+    ("reset_history", "CH_Misuratore", "min=0|max=1", None, None, None),
+    ("reset_partial", "CH_Misuratore", "", None, None, None),
+    (
+        "energia_totale_autoconsumo",
+        "CH_Carichi_Custom",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL,
+    ),
+    (
+        "energia_totale_consumo",
+        "CH_Carichi_Custom",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL,
+    ),
+    (
+        "energia_totale_immissione",
+        "CH_Carichi_Custom",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL,
+    ),
+    (
+        "energia_totale_prelievo",
+        "CH_Carichi_Custom",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL,
+    ),
+    (
+        "energia_totale_produzione",
+        "CH_Carichi_Custom",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL,
+    ),
+    (
+        "energia_totale_scambio",
+        "CH_Carichi_Custom",
+        "",
+        "kWh",
+        SensorDeviceClass.ENERGY,
+        SensorStateClass.TOTAL,
+    ),
+    (
+        "autoconsumo_totale",
+        "CH_Carichi_Custom",
+        "",
+        "kW",
+        SensorDeviceClass.POWER,
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "consumo_totale",
+        "CH_Carichi_Custom",
+        "",
+        "kW",
+        SensorDeviceClass.POWER,
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "immissione_totale",
+        "CH_Carichi_Custom",
+        "",
+        "kW",
+        SensorDeviceClass.POWER,
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "prelievo_totale",
+        "CH_Carichi_Custom",
+        "",
+        "kW",
+        SensorDeviceClass.POWER,
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "produzione_totale",
+        "CH_Carichi_Custom",
+        "",
+        "kW",
+        SensorDeviceClass.POWER,
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "scambio_totale",
+        "CH_Carichi_Custom",
+        "",
+        "kW",
+        SensorDeviceClass.POWER,
+        SensorStateClass.MEASUREMENT,
+    ),
+    ("produzione_presente", "CH_Carichi_Custom", "", None, None, None),
+    ("fase", "CH_Carichi_Custom", "", None, None, None),
+    ("custom_date", "CH_Carichi_Custom", "", None, None, None),
+    ("custom_time", "CH_Carichi_Custom", "", None, None, None),
+    ("custom_datetime", "CH_Carichi_Custom", "", None, None, None),
+    ("forzatura", "CH_Carichi_3F", "", None, None, None),
+    ("funzionamento", "CH_Carichi_3F", "", None, None, None),
 ]
 
 
 @pytest.mark.parametrize(
-    ("field", "object_type", "status_range", "unit", "device_class"),
+    ("field", "object_type", "status_range", "unit", "device_class", "state_class"),
     REAL_FIELDS,
     ids=[f"{row[1].removeprefix('CH_')}.{row[0]}" for row in REAL_FIELDS],
 )
 def test_a_real_installation_classifies_exactly_as_measured(
-    field, object_type, status_range, unit, device_class
+    field, object_type, status_range, unit, device_class, state_class
 ):
     sensor = _sensor(field, object_type, value="1.0", status_range=status_range)
 
     assert sensor.native_unit_of_measurement == unit
     assert sensor.device_class is device_class
+    assert sensor.state_class is state_class
+
+
+# ---------------------------------------------------------------------------
+# Counted vs recomputed energy
+#
+# The load-control device recomputes its `energia_totale_*` aggregates once an
+# hour instead of counting them, and the recomputed figure is sometimes lower
+# than the previous one: measured on real hardware, `energia_totale_produzione`
+# stepped back from 38922.32 to 38919.84 kWh, always at :59, eight times over
+# 34 hours. The true meter registers on the same installation took 1128 samples
+# in that period without a single step back.
+#
+# TOTAL_INCREASING is a promise that data does not keep. It never corrupted the
+# statistics - HA only reads a drop as a counter reset below 90% of the previous
+# value, and these are 0.006% - but it did log a warning after every restart
+# telling the user to file a bug for correct behaviour.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "flow", ["autoconsumo", "consumo", "immissione", "prelievo", "produzione", "scambio"]
+)
+def test_a_recomputed_total_is_not_declared_strictly_increasing(flow):
+    sensor = _sensor(f"energia_totale_{flow}", "CH_Carichi_Custom", value="38919.84")
+
+    assert sensor.device_class is SensorDeviceClass.ENERGY
+    assert sensor.state_class is SensorStateClass.TOTAL
+
+
+@pytest.mark.parametrize("register", ["energia_assoluta", "energia_parziale"])
+def test_a_counted_register_stays_strictly_increasing(register):
+    """The distinction is the point: a real counter keeps the stronger claim."""
+    sensor = _sensor(register, METER, value="25108.51")
+
+    assert sensor.state_class is SensorStateClass.TOTAL_INCREASING
+
+
+def test_both_energy_state_classes_still_produce_the_same_statistics():
+    """Why the switch costs no history: identical metadata, so the stored
+    series carries on rather than being invalidated."""
+    from homeassistant.components.sensor.recorder import DEFAULT_STATISTICS
+
+    total = DEFAULT_STATISTICS[SensorStateClass.TOTAL]
+    increasing = DEFAULT_STATISTICS[SensorStateClass.TOTAL_INCREASING]
+
+    assert total.types == increasing.types == {"sum"}
+    assert total.mean_type == increasing.mean_type
 
 
 def test_the_power_flows_are_not_confused_with_their_energy_counterparts():
@@ -461,8 +609,11 @@ def test_the_power_flows_are_not_confused_with_their_energy_counterparts():
     energy = _sensor("energia_totale_consumo", "CH_Carichi_Custom")
 
     assert power.device_class is SensorDeviceClass.POWER
+    assert power.state_class is SensorStateClass.MEASUREMENT
     assert energy.device_class is SensorDeviceClass.ENERGY
-    assert energy.state_class is SensorStateClass.TOTAL_INCREASING
+    # TOTAL, not TOTAL_INCREASING: this one is recomputed hourly and does step
+    # back. See the "counted vs recomputed" section below.
+    assert energy.state_class is SensorStateClass.TOTAL
 
 
 def test_a_field_the_device_limits_to_zero_or_one_is_never_a_measurement():

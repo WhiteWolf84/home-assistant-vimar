@@ -42,10 +42,31 @@ class SensorSpec(NamedTuple):
 
     Kept index-addressable (it is a tuple) because the previous version of
     class_and_units() returned a plain ``[unit, device_class]`` list.
+
+    ``state_class`` is normally left as None, meaning "whatever the device
+    class implies" (see state_class_for). It is only set for the handful of
+    fields whose behaviour differs from what their device class suggests.
     """
 
     unit: str | None
     device_class: SensorDeviceClass | None
+    state_class: SensorStateClass | None = None
+
+
+#: Cumulative energy totals that the load-control device RECOMPUTES rather than
+#: counts, once an hour, and which therefore do not only ever increase: measured
+#: on real hardware, `energia_totale_produzione` stepped back from 38922.32 to
+#: 38919.84 kWh, always at :59, on eight occasions over 34 hours. The true meter
+#: registers on the same installation (`energia_assoluta`, `energia_parziale`)
+#: took 1128 samples over the same period without a single step back.
+#:
+#: TOTAL_INCREASING would be a promise the data does not keep. Home Assistant
+#: only treats a drop as a counter reset below 90% of the previous value, so
+#: these 0.006% dips never corrupted the statistics - but they did log a warning
+#: after every restart, asking the user to report a bug for correct behaviour.
+#: TOTAL produces identical statistics metadata (`types={'sum'}`), so the switch
+#: costs no history.
+RECOMPUTED_ENERGY_PREFIX = "energia_totale_"
 
 
 #: Name parts marking a field that is a flag, a counter reset or a category -
@@ -186,9 +207,13 @@ class VimarSensor(VimarEntity, SensorEntity):
     # set entity_id, object_id manually due to possible duplicates
     # entity_id = "sensor." + "unset"
 
-    _measurement_name = None
-    _measurement_display_name = None
-    _class_and_units = None
+    # Both assigned unconditionally in __init__. Declared without a class-level
+    # None for the same reason as VimarEntity's attributes: a default nobody
+    # relies on makes every reader look like it might be handling an absence.
+    _measurement_name: str
+    _measurement_display_name: str
+    #: Cached result of class_and_units(); None until first computed.
+    _class_and_units: SensorSpec | None = None
     # _parent = None
     # _state_value = None
 
@@ -227,8 +252,14 @@ class VimarSensor(VimarEntity, SensorEntity):
 
     @property
     def state_class(self) -> SensorStateClass | None:
-        """Return the state class of this entity."""
-        return state_class_for(self.class_and_units().device_class)
+        """Return the state class of this entity.
+
+        Derived from the device class unless the field declares its own: see
+        RECOMPUTED_ENERGY_PREFIX for the one case where the data contradicts
+        what the device class would imply.
+        """
+        spec = self.class_and_units()
+        return spec.state_class or state_class_for(spec.device_class)
 
     def class_and_units(self) -> SensorSpec:
         """Return the unit and device class for this measurement.
@@ -253,6 +284,12 @@ class VimarSensor(VimarEntity, SensorEntity):
             return SensorSpec(None, None)
 
         if object_type in ENERGY_METER_OBJECT_TYPES:
+            if name.startswith(RECOMPUTED_ENERGY_PREFIX):
+                return SensorSpec(
+                    UnitOfEnergy.KILO_WATT_HOUR,
+                    SensorDeviceClass.ENERGY,
+                    SensorStateClass.TOTAL,
+                )
             if "energia" in name:
                 return SensorSpec(UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY)
             if "potenza_attiva" in name:
