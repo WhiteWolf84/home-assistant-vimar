@@ -187,9 +187,9 @@ class VimarDeviceCustomizer:
         except Exception as err:
             _LOGGER.error(
                 "Error occurred in match_name. name: '"
-                + name
+                + str(name)
                 + "', searchRegex: '"
-                + search_regex
+                + str(search_regex)
                 + "' - %s",
                 str(err),
             )
@@ -294,7 +294,10 @@ class VimarDeviceCustomizer:
         filters = device_override.get(DEVICE_OVERRIDE_FILTER)
         if isinstance(filters, str) and filters == "*":
             matchcnt += 1
-        elif filters is not None:
+        # `elif filters is not None` sent any OTHER string down this branch and
+        # called .items() on it, so a filter written as a plain string rather
+        # than "*" raised AttributeError instead of simply not matching.
+        elif isinstance(filters, dict):
             for key, value in filters.items():
                 if self.match_name(device, key, value, None) is False:
                     return False
@@ -302,7 +305,7 @@ class VimarDeviceCustomizer:
         filters = device_override.get(DEVICE_OVERRIDE_FILTER_RE)
         if isinstance(filters, str) and filters == "*":
             matchcnt += 1
-        elif filters is not None:
+        elif isinstance(filters, dict):
             for key, value in filters.items():
                 if self.match_name(device, key, None, value) is False:
                     return False

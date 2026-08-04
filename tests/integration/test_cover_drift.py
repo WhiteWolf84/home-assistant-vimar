@@ -152,6 +152,7 @@ def test_stop_fires_with_overshoot_margin():
 
 # --- end-stop regression (the "stuck at 1%" bug) --------------------------
 
+
 async def test_full_close_reaches_zero_not_one():
     """A full close must reach exactly 0%, not stop a margin short at 1%."""
     cover = _make_cover(travel_down=35, position=50)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,6 +15,9 @@ class VimarDevice(TypedDict):
     room_ids: list[int]
     room_names: list[str]
     room_name: str
+    #: Added at runtime by VimarDeviceCustomizer, not by the SQL query, so a
+    #: device built straight from the query does not carry it yet.
+    room_friendly_name: NotRequired[str]
     object_name: str
     object_type: str
     status: dict[str, dict[str, str]]

@@ -1,6 +1,7 @@
 """Vimar base entity implementation."""
 
 import logging
+from typing import cast
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -66,7 +67,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
 
     ICON = "mdi:checkbox-marked"
 
-    def __init__(self, coordinator: VimarDataUpdateCoordinator, device_id: int):
+    def __init__(self, coordinator: VimarDataUpdateCoordinator, device_id: int | str):
         """Initialize the base entity."""
         super().__init__(coordinator)
         self._coordinator = coordinator
@@ -338,18 +339,24 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         if self._device is MISSING_DEVICE:
             return None
 
-        room_name = None
-        if self._device.get("room_friendly_name") and self._device["room_friendly_name"] != "":
-            room_name = self._device["room_friendly_name"]
+        # Read once: the key is added at runtime by VimarDeviceCustomizer, so a
+        # device that has not been through it does not carry one. "" means the
+        # customizer found no room, which is the same as having none.
+        room_name = self._device.get("room_friendly_name") or None
+
+        # Three elements, where Home Assistant's own type says two. It is the
+        # entry prefix in the middle that makes two web servers exporting the
+        # same device id distinct devices. Changing the shape now would change
+        # every device's identity, so Home Assistant would register new ones
+        # and users would lose the areas, names and settings attached to the
+        # old ones - a migration, not a type fix.
+        identifiers = cast(
+            "set[tuple[str, str]]",
+            {(DOMAIN, self._coordinator.entity_unique_id_prefix or "", self._device_id)},
+        )
 
         device: DeviceInfo = {
-            "identifiers": {
-                (
-                    DOMAIN,
-                    self._coordinator.entity_unique_id_prefix or "",
-                    self._device_id,
-                )
-            },  # type: ignore[arg-type]
+            "identifiers": identifiers,
             "name": self.device_name,
             "model": self._device.get("object_type"),
             "manufacturer": "Vimar",

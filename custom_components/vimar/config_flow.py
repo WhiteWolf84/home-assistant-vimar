@@ -328,7 +328,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         user_options = [
             SelectOptionDict(
                 value=u.id,
-                label=u.name + (" — PIN impostato" if u.id in user_pins else ""),
+                label=(u.name or "") + (" — PIN impostato" if u.id in user_pins else ""),
             )
             for u in selectable
         ]
@@ -371,7 +371,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=schema,
             description_placeholders={
                 "count": str(len(user_pins)),
-                "users": ", ".join(u.name for u in selectable if u.id in user_pins) or "—",
+                "users": ", ".join(u.name or "" for u in selectable if u.id in user_pins) or "—",
             },
         )
 

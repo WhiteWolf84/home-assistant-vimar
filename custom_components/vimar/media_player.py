@@ -126,9 +126,9 @@ class VimarMediaplayer(VimarEntity, MediaPlayerEntity):
         play = "Playing"
         # if self.has_state('source'):
         if self.has_state("channel"):
-            play += " source: " + self.get_state("channel")
+            play += " source: " + (self.get_state("channel") or "")
         if self.has_state("source"):
-            play += " channel: " + self.get_state("source")
+            play += " channel: " + (self.get_state("source") or "")
         return play
 
     @property

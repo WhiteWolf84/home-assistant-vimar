@@ -23,13 +23,13 @@
     "reportOptionalIterable": "error",
     "reportOptionalContextManager": "error",
     "reportOptionalOperand": "error",
+    "reportCallIssue": "error",
+    "reportAssignmentType": "error",
+    "reportGeneralTypeIssues": "error",
+    "reportAttributeAccessIssue": "error",
+    "reportOperatorIssue": "error",
 
     "reportIncompatibleVariableOverride": "none",
     "reportPrivateImportUsage": "none",
-    "reportArgumentType": "none",
-    "reportAssignmentType": "none",
-    "reportCallIssue": "none",
-    "reportOperatorIssue": "none",
-    "reportAttributeAccessIssue": "none",
-    "reportGeneralTypeIssues": "none"
+    "reportArgumentType": "none"
 }
