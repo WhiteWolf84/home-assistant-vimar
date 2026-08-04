@@ -12,8 +12,9 @@ pytest-xdist==3.8.0
 requests-mock==1.12.1
 
 # Code Quality (following HA 2026 standards)
+# ruff is both linter and formatter here; black was removed because the two
+# disagree on `assert` layout, which left tests/ checked by neither.
 ruff>=0.11.13
-black>=26.3.1
 pyright>=1.1.409
 mypy>=1.10.0
 

@@ -14,6 +14,23 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.1b2] - 2026-08-04
+
+> **Beta.** Includes everything in `2026.8.1b1`, which it replaces. One fix you
+> could hit in practice, plus the quality checks that found it. **No manual
+> action needed.**
+
+### Fixed
+
+- A device override written with a plain text filter no longer causes an error. The setting accepts either `*` — meaning "match everything" — or a list of conditions. Anything else written as plain text fell through to the branch that expects a list and raised, so instead of simply not matching, it broke the override.
+
+### Changed
+
+- Internal: five more categories of type check are now enforced, and three are documented as deliberately left off with the reason. The check that runs automatically on every change was also validating the integration against a **six-month-old** version of Home Assistant, and one the integration does not even claim to support — so it had been checking a different set of rules from the ones the code actually runs against. It now uses the same version everything else does.
+- Internal: the test suite is now checked by the formatter and linter as well. It was covered by neither, because the project ran two formatters that disagree with each other on how to lay out one kind of statement — so running either produced changes the other would undo. There is now one.
+
+---
+
 ## [2026.8.1b1] - 2026-08-04
 
 > **Beta.** Includes everything in `2026.8.1b0`, which it replaces, and stops

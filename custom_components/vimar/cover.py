@@ -500,9 +500,9 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         #    (il webserver Vimar non distingue la sorgente del comando:
         #    DPADD_OBJECT espone solo CURRENT_VALUE senza metadati di origine)
         grace = self._grace_seconds()
+        stop_time = self._tb_ha_stop_time
         in_grace_period = (
-            self._tb_ha_stop_time is not None
-            and (dt_util.utcnow() - self._tb_ha_stop_time).total_seconds() < grace
+            stop_time is not None and (dt_util.utcnow() - stop_time).total_seconds() < grace
         )
 
         if current_updown != self._tb_last_updown and not self._tb_ha_command_active:
@@ -512,7 +512,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                     self.name,
                     self._tb_last_updown,
                     current_updown,
-                    grace - (dt_util.utcnow() - self._tb_ha_stop_time).total_seconds(),
+                    grace - (dt_util.utcnow() - stop_time).total_seconds() if stop_time else grace,
                 )
             elif current_updown == "0":
                 self._tb_position = 100
@@ -704,11 +704,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         percentage = (elapsed_effective / travel_time) * 100
 
         if self._tb_operation == "opening":
-            self._tb_position = min(100, self._tb_start_position + percentage)
+            position = min(100.0, self._tb_start_position + percentage)
         else:
-            self._tb_position = max(0, self._tb_start_position - percentage)
+            position = max(0.0, self._tb_start_position - percentage)
 
-        self._tb_position = round(self._tb_position)
+        # _tb_position holds whole percent: compute in float, store rounded.
+        self._tb_position = round(position)
 
     @property
     def entity_platform(self):

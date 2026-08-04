@@ -2,6 +2,7 @@
 
 This is critical - vimarlink should work standalone.
 """
+
 import os
 import sys
 
@@ -15,9 +16,7 @@ def test_vimarlink_imports_without_ha():
     # Add path
     sys.path.insert(
         0,
-        os.path.join(
-            os.path.dirname(__file__), "..", "..", "custom_components", "vimar"
-        ),
+        os.path.join(os.path.dirname(__file__), "..", "..", "custom_components", "vimar"),
     )
 
     # This should NOT raise ImportError
@@ -32,9 +31,7 @@ def test_vimarlink_can_be_instantiated():
     """Test that VimarLink can be created without HA."""
     sys.path.insert(
         0,
-        os.path.join(
-            os.path.dirname(__file__), "..", "..", "custom_components", "vimar"
-        ),
+        os.path.join(os.path.dirname(__file__), "..", "..", "custom_components", "vimar"),
     )
 
     from vimarlink.vimarlink import VimarLink

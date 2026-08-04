@@ -8,9 +8,11 @@ import os
 import re
 import threading
 import xml.etree.ElementTree as xmlTree
+from typing import Literal
 from urllib.parse import quote
 
 import requests
+import requests.adapters
 import urllib3
 from requests.exceptions import HTTPError
 
@@ -293,9 +295,13 @@ class VimarConnection:
         url: str,
         post: str | None = None,
         headers: dict | None = None,
-        check_ssl: bool = False,
+        # requests' `verify`: True/False, or a path to a CA bundle.
+        check_ssl: bool | str = False,
         params: dict | None = None,
-    ) -> str | bool | None:
+        # Never True: the body returns the response text, False on a failed
+        # request, or None. Declaring plain `bool` made every caller look like
+        # it had to cope with True as well.
+    ) -> str | Literal[False] | None:
         """Execute HTTP request.
 
         `params` is passed to requests so query values are properly encoded;

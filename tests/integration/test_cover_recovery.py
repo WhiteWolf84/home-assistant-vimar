@@ -70,6 +70,7 @@ def _old_state(direction="opening", target=50, age_s=30, with_ts=True):
 
 # --- detection -------------------------------------------------------------
 
+
 def test_detect_fresh_flag_arms_recovery():
     cover = _make_cover()
     cover._detect_pending_recovery(_old_state("opening", 45, age_s=20))
@@ -104,6 +105,7 @@ def test_detect_invalid_direction_ignored():
 
 # --- persistence in attributes --------------------------------------------
 
+
 def test_attributes_persist_only_while_moving():
     cover = _make_cover()
     # idle -> no recovery attrs
@@ -120,6 +122,7 @@ def test_attributes_persist_only_while_moving():
 
 
 # --- one-shot start --------------------------------------------------------
+
 
 def test_maybe_start_recovery_one_shot_when_available():
     cover = _make_cover()
@@ -144,11 +147,14 @@ def test_maybe_start_recovery_waits_until_available():
 
 # --- recovery sequence -----------------------------------------------------
 
+
 def _arm_recover_mocks(cover, reach_position):
     """Mock the drive so it lands on `reach_position`, and idle waits succeed."""
+
     async def _drive(**_):
         cover._tb_position = reach_position
         cover._tb_operation = None
+
     cover.async_open_cover = AsyncMock(side_effect=_drive)
     cover.async_close_cover = AsyncMock(side_effect=_drive)
     cover._tb_wait_idle = AsyncMock(return_value=True)
@@ -186,7 +192,9 @@ async def test_recover_interference_skips_resume():
     cover = _make_cover()
     _arm_recover_mocks(cover, reach_position=100)
     # Simulate something stopping the drive away from the end-stop.
-    cover._tb_wait_idle = AsyncMock(side_effect=lambda timeout: setattr(cover, "_tb_position", 72) or True)
+    cover._tb_wait_idle = AsyncMock(
+        side_effect=lambda timeout: setattr(cover, "_tb_position", 72) or True
+    )
     await cover._async_recover("opening", 50)
     cover.async_set_cover_position.assert_not_awaited()
 

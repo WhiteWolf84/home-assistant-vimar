@@ -85,9 +85,7 @@ def test_change_state_batches_into_single_ordered_job():
     """Multiple values -> one enqueued batch, writes kept in the given order."""
     climate, _ = _make_climate(_manual_fancoil_status())
 
-    climate.change_state(
-        "funzionamento", FUNZ_MANUAL, "regolazione", "1", "setpoint", "21.5"
-    )
+    climate.change_state("funzionamento", FUNZ_MANUAL, "regolazione", "1", "setpoint", "21.5")
 
     assert _scheduled_writes(climate) == [
         ("F", FUNZ_MANUAL, "NO-OPTIONALS"),
