@@ -1,6 +1,8 @@
 """Config flow for the Vimar Security System component."""
 
 import re
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -15,7 +17,7 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_VERIFY_SSL,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -63,6 +65,28 @@ from .vimar_coordinator import VimarDataUpdateCoordinator
 from .vimarlink.exceptions import VimarConfigError, VimarConnectionError
 
 
+@asynccontextmanager
+async def validation_coordinator(
+    hass: HomeAssistant,
+    vimarconfig: dict,
+    entry: config_entries.ConfigEntry | None = None,
+) -> AsyncGenerator[VimarDataUpdateCoordinator]:
+    """Yield a throwaway coordinator and always release its HTTP session.
+
+    Validating credentials logs into the web server, which opens a keep-alive
+    HTTPS session (one per executor thread, see VimarConnection.close). These
+    coordinators live only for the duration of a flow step and are then
+    dropped, and nothing else will ever close them: every submitted form -
+    including every failed attempt, every reauth and twice per options save -
+    used to leave a socket open against a small embedded web server.
+    """
+    coordinator = VimarDataUpdateCoordinator(hass, entry=entry, vimarconfig=vimarconfig)
+    try:
+        yield coordinator
+    finally:
+        await coordinator.async_close_connection()
+
+
 class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Vimar."""
 
@@ -91,10 +115,8 @@ class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             )
             unique_id = slugify(title)
             try:
-                coordinator = VimarDataUpdateCoordinator(
-                    self.hass, entry=None, vimarconfig=user_input
-                )
-                await coordinator.validate_vimar_credentials()
+                async with validation_coordinator(self.hass, user_input) as coordinator:
+                    await coordinator.validate_vimar_credentials()
             except Exception as ex:
                 set_errors_from_ex(ex, errors)
 
@@ -131,10 +153,8 @@ class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             new_config = {**self.reauth_entry.data, **user_input}
 
             try:
-                coordinator = VimarDataUpdateCoordinator(
-                    self.hass, entry=None, vimarconfig=new_config
-                )
-                await coordinator.validate_vimar_credentials()
+                async with validation_coordinator(self.hass, new_config) as coordinator:
+                    await coordinator.validate_vimar_credentials()
             except Exception as ex:
                 set_errors_from_ex(ex, errors)
 
@@ -256,10 +276,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._init_schema(user_input, get_schema_options_init(user_input or self.options))
         if user_input is not None:
             try:
-                coordinator = VimarDataUpdateCoordinator(
-                    self.hass, entry=self.config_entry, vimarconfig=self.options_with_user_input
-                )
-                await coordinator.validate_vimar_credentials()
+                async with validation_coordinator(
+                    self.hass, self.options_with_user_input, entry=self.config_entry
+                ) as coordinator:
+                    await coordinator.validate_vimar_credentials()
             except Exception as ex:
                 set_errors_from_ex(ex, self.errors)
 
@@ -278,11 +298,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             self._validate_regex(CONF_DEVICES_BINARY_SENSOR_RE)
         if user_input is not None and not self.errors:
             try:
-                coordinator = VimarDataUpdateCoordinator(
-                    self.hass, entry=self.config_entry, vimarconfig=self.options_with_user_input
-                )
-                await coordinator.validate_vimar_credentials()
-                await self.hass.async_add_executor_job(coordinator.vimarproject.update, True)
+                async with validation_coordinator(
+                    self.hass, self.options_with_user_input, entry=self.config_entry
+                ) as coordinator:
+                    await coordinator.validate_vimar_credentials()
+                    await self.hass.async_add_executor_job(coordinator.vimarproject.update, True)
             except Exception as ex:
                 set_errors_from_ex(ex, self.errors)
 

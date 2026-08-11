@@ -82,7 +82,6 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     _timeout: float = DEFAULT_TIMEOUT
     # Separate, generous budget for login + full discovery (see __init__).
     _setup_timeout: float = 30.0
-    webserver_id = ""
     entity_unique_id_prefix = ""
     _first_update_data_executed = False
     _platforms_registered = False
@@ -201,6 +200,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=uptade_interval),
             config_entry=entry,
         )
+
+        # Makes vimarconnection/vimarproject an invariant rather than something
+        # every call site has to guard for (see the class-level declarations).
+        # The config flow constructs a coordinator and calls
+        # validate_vimar_credentials() straight away, without going through
+        # init_vimarproject(), so building here is what keeps that path working.
+        self._build_vimar_objects()
 
     # --- serialized device writes ---------------------------------------
 
@@ -859,8 +865,40 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
             raise err
 
+    @property
+    def webserver_identifiers(self) -> tuple[str, str, str]:
+        """Identifiers of the "Vimar WebServer" device, the hub of this entry.
+
+        Three elements, like every other device this integration registers: the
+        entry prefix in the middle is what keeps two web servers apart (see
+        VimarEntity.device_info). Anything wanting to hang off the hub - a
+        `via_device` - has to use this exact tuple, because Home Assistant
+        resolves via_device by looking up that identifier verbatim.
+        """
+        return (DOMAIN, self.entity_unique_id_prefix or "", "status")
+
+    def _async_register_webserver_device(self) -> None:
+        """Register the hub device before any platform is forwarded.
+
+        The device itself comes from the connection binary_sensor's
+        device_info, but that only lands when the entity is added - and the
+        alarm platform, which points its own device at this one, is forwarded
+        FIRST (see PLATFORMS). Registering it here means the via_device always
+        resolves, instead of resolving only from the second start onwards.
+        """
+        if self.entry is None:
+            return
+        dr.async_get(self.hass).async_get_or_create(
+            config_entry_id=self.entry.entry_id,
+            identifiers={self.webserver_identifiers},  # pyright: ignore[reportArgumentType]
+            name="Vimar WebServer",
+            model="Vimar WebServer",
+            manufacturer="Vimar",
+        )
+
     async def async_register_devices_platforms(self):
         """Execute async_forward_entry_setup for each platform."""
+        self._async_register_webserver_device()
         self.devices_for_platform = {}
         ignored_platforms = self.vimarconfig.get(CONF_IGNORE_PLATFORM) or []
         platforms = [

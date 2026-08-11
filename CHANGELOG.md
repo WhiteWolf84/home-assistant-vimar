@@ -14,6 +14,26 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.1b3] - 2026-08-12
+
+> **Beta.** Includes everything in `2026.8.1b2`, which it replaces, and repairs
+> it: on `2026.8.1b2` the configuration screens could not be used at all.
+> **Install this one if you are on `2026.8.1b2`.** No manual action needed.
+
+### Fixed
+
+- **Adding the integration, or saving its options, failed with a generic "unknown error" whatever you typed.** A regression introduced in `2026.8.1b2`: the screen that checks your credentials never got the object it uses to talk to the web server, so it failed before the login was even attempted, and the failure was reported as "unknown" rather than as what it was. Anyone on `2026.8.1b2` who tried to set up a new web server, re-enter a password, or change any option was stuck. Already-configured systems kept working, because they take a different path at startup.
+- Checking your credentials no longer leaves a connection open on the web server. Every attempt — including every failed one, every password re-entry and twice per options save — logged in and then abandoned the connection, which stayed open against a small embedded device until it timed out on its own.
+- The **SAI Alarm** device now appears under your **Vimar WebServer** device, where it was always meant to be. The code that linked the two read a value nothing ever set, so it never ran — and would not have worked if it had, because it built the web server's address in a different shape from the one the device is registered with. Both now come from a single definition, and the web server device is registered before the alarm asks for it, so the link holds from the first start rather than from the second.
+
+### Changed
+
+- Internal: the flow that adds and configures the integration is now covered by tests, from the first screen to the third. It had none, which is why the failure above was found in use rather than in CI.
+- Internal: one more type check is enforced, the one that describes the defect above — an attribute a class promises to have but never sets. Its blind spot is documented in `docs/PYRIGHT.md`: the checker skips this test entirely for classes built on a `Protocol`, which is exactly the case for the coordinator, so tests remain the only guard there.
+- Internal: `pyproject.toml` carried a second, stale type-checker configuration that the checker never reads. It has been removed, so the settings that apply are the only ones written down.
+
+---
+
 ## [2026.8.1b2] - 2026-08-04
 
 > **Beta.** Includes everything in `2026.8.1b1`, which it replaces. One fix you

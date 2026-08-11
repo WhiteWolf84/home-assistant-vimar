@@ -28,6 +28,7 @@
     "reportGeneralTypeIssues": "error",
     "reportAttributeAccessIssue": "error",
     "reportOperatorIssue": "error",
+    "reportUninitializedInstanceVariable": "error",
 
     "reportIncompatibleVariableOverride": "none",
     "reportPrivateImportUsage": "none",

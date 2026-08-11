@@ -1,6 +1,6 @@
 """Service registration and platform load/unload symmetry (HA required).
 
-Two regressions are covered here.
+Three regressions are covered here.
 
 1. `vimar.exec_vimar_sql` runs arbitrary SQL against the VIMAR web server
    database. It was registered with hass.services.async_register, which makes
@@ -15,6 +15,14 @@ Two regressions are covered here.
    had been forwarded but was never unloaded, so it stayed half-loaded across
    every reload. The list of forwarded platforms is now recorded at setup and
    is the single source of truth for unloading.
+
+3. The SAI2 alarm device was meant to hang off the "Vimar WebServer" device
+   as its `via_device`, but the branch that did so read
+   `coordinator.webserver_id`, which nothing ever assigned - and would not
+   have worked anyway: it built a two-element identifier, while the hub is
+   registered with three. Home Assistant resolves a via_device by looking the
+   identifier up verbatim, so both halves have to come from one place, and the
+   hub has to exist before the alarm platform (forwarded first) asks for it.
 """
 
 import os
@@ -218,6 +226,62 @@ async def test_unload_releases_the_pooled_http_connections():
     await async_unload_entry(hass, entry)
 
     coordinator.async_close_connection.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# 3. The alarm hangs off the web server device
+# ---------------------------------------------------------------------------
+
+
+async def test_the_hub_device_is_registered_before_any_platform_is_forwarded():
+    """The alarm is forwarded first, so the device it points at must pre-exist."""
+    coordinator = _coordinator()
+    coordinator.entity_unique_id_prefix = "casa"
+    calls: list[str] = []
+    coordinator.hass.config_entries.async_forward_entry_setups = AsyncMock(
+        side_effect=lambda *a, **kw: calls.append("forward")
+    )
+
+    with patch("custom_components.vimar.vimar_coordinator.dr.async_get") as dev_reg:
+        dev_reg.return_value.async_get_or_create.side_effect = lambda **kw: calls.append("hub")
+        await coordinator.async_register_devices_platforms()
+
+    assert calls == ["hub", "forward"]
+    created = dev_reg.return_value.async_get_or_create.call_args.kwargs
+    assert created["identifiers"] == {(DOMAIN, "casa", "status")}
+    assert created["name"] == "Vimar WebServer"
+
+
+async def test_the_alarm_device_points_at_the_hub_identifier():
+    """A two-element via_device would never resolve against a three-element hub."""
+    coordinator = MagicMock()
+    coordinator.devices_for_platform = {}
+    coordinator.vimarproject.sai2_groups = {}
+    coordinator.webserver_identifiers = (DOMAIN, "casa", "status")
+
+    hass = MagicMock()
+    hass.data = {DOMAIN: {ENTRY_ID: coordinator}}
+    entry = MagicMock(entry_id=ENTRY_ID)
+    entry.data = {}
+    entry.options = {}
+
+    with patch("custom_components.vimar.alarm_control_panel.dr.async_get") as dev_reg:
+        await alarm_async_setup_entry(hass, entry, MagicMock())
+
+    registered = dev_reg.return_value.async_get_or_create.call_args.kwargs
+    assert registered["via_device"] == (DOMAIN, "casa", "status")
+
+
+def test_the_hub_identifier_has_one_definition():
+    """Hub and via_device must not be able to drift apart again."""
+    coordinator = VimarDataUpdateCoordinator.__new__(VimarDataUpdateCoordinator)
+    coordinator.entity_unique_id_prefix = "casa"
+
+    # The same tuple the connection binary_sensor puts in its device_info.
+    assert coordinator.webserver_identifiers == (DOMAIN, "casa", "status")
+    assert not hasattr(VimarDataUpdateCoordinator, "webserver_id"), (
+        "webserver_id was never assigned; reintroducing it brings the dead branch back"
+    )
 
 
 async def test_alarm_platform_without_sai2_registers_an_empty_entity_list():
