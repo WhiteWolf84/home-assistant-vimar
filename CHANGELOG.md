@@ -14,6 +14,38 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.1] - 2026-08-12
+
+> First stable release since `2026.8.0`. It contains everything from the
+> `2026.8.1b0`–`b3` pre-releases. The sections below describe the net effect of
+> upgrading from `2026.8.0`; the individual pre-release entries are kept
+> further down for reference.
+>
+> **No action is required after upgrading.** Nothing you have recorded is lost
+> or changed, no entity is renamed, and no setting needs re-entering.
+
+### Fixed
+
+- The `vimar.update_entities` service no longer risks corrupting the device list, and now refreshes what you see straight away. It used to rebuild the whole set of devices on a thread of its own, without coordinating with the regular polling that might have been reading the same data at that moment — and it then wrote the result where the integration itself would not look for it, so entities kept showing the old values until the next scheduled poll, up to a full interval later, for a service whose entire purpose is "update now".
+- A shutter can no longer lose its position timer partway through a movement, which would have left it moving with nothing tracking where it had got to.
+- Unmuting an audio device that reports no volume no longer fails, leaving the player silent with only an error in the log to explain it.
+- Home Assistant no longer logs, after every restart, that the six **total** energy counters on a load-control device "should be strictly increasing" and invites you to report a bug. They are not a bug: the VIMAR device does not count these totals, it recalculates them once an hour, and the new figure is occasionally a fraction lower — measured on real hardware, the largest step back was 3.42 kWh out of 38 900, about 0.009%. Nothing was ever wrong with your data and the statistics are unchanged; the declaration is simply now the accurate one. The two registers the meter really does count keep the stronger declaration.
+- A device override written with a plain text filter no longer causes an error. The setting accepts either `*` — meaning "match everything" — or a list of conditions; anything else raised instead of simply not matching, which broke the whole override.
+- The **SAI Alarm** device now appears under your **Vimar WebServer** device, where it was always meant to be. The code linking the two read a value nothing ever set, so it never ran — and would not have worked if it had, because it built the web server's address in a different shape from the one the device is registered with.
+- Checking your credentials no longer leaves a connection open on the web server. Every attempt — including every failed one, every password re-entry and twice per options save — logged in and then abandoned the connection, which stayed open against a small embedded device until it timed out on its own.
+
+### Changed
+
+- Internal: the integration now states which of its internal values are always present instead of leaving it to be inferred. Roughly half the code checked whether a value was missing and half did not, and the half that did not was right — but nothing could tell the two apart, and three of the defects above were hiding in that gap.
+- Internal: eight more categories of type check are enforced and three are documented as deliberately left off, with the reason (`docs/PYRIGHT.md`). The check that runs on every change had also been validating the integration against a **six-month-old** version of Home Assistant, and one the integration does not claim to support; it now uses the same version everything else does.
+- Internal: the flow that adds and configures the integration is now covered by tests, from the first screen to the third, as is the test suite by the formatter and linter. Test count 360 → 409.
+
+> If you ran the `2026.8.1b2` pre-release, note that its configuration screens
+> failed with a generic "unknown error" whatever you typed. That was introduced
+> and repaired inside the beta series and never reached a stable release.
+
+---
+
 ## [2026.8.1b3] - 2026-08-12
 
 > **Beta.** Includes everything in `2026.8.1b2`, which it replaces, and repairs
