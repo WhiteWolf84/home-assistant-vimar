@@ -159,7 +159,7 @@ class VimarStatusSensor(BinarySensorEntity):
     def device_info(self) -> DeviceInfo:
         """Return device information."""
         return DeviceInfo(
-            identifiers={(DOMAIN, self._coordinator.entity_unique_id_prefix or "", "status")},  # type: ignore[arg-type]
+            identifiers={self._coordinator.webserver_identifiers},  # type: ignore[arg-type]
             name="Vimar WebServer",
             model="Vimar WebServer",
             manufacturer="Vimar",

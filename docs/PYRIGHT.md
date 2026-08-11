@@ -1,8 +1,10 @@
 # Type checking status
 
 `pyrightconfig.json` runs in `basic` mode. Of the 15 diagnostic rules that were
-switched off wholesale, **12 are now enforced** and 3 remain off on purpose.
-JSON has no comments, so the reasoning lives here.
+switched off wholesale, **12 are now enforced** and 3 remain off on purpose;
+`reportUninitializedInstanceVariable`, which is off by default in every mode,
+was added on top after a defect it describes exactly. JSON has no comments, so
+the reasoning lives here.
 
 ## How the order was chosen
 
@@ -108,6 +110,47 @@ the shape would change every device's identity — HA would register new devices
 and users would lose the areas and names attached to the old ones. That is a
 migration, not a type fix, so the intent is recorded with a `cast`.
 
+### `reportUninitializedInstanceVariable`
+
+Added after a declaration went out of sync with the code that was supposed to
+back it. `VimarDataUpdateCoordinator` declared
+
+```python
+vimarconnection: VimarLink   # "built in __init__ and never unset"
+```
+
+but the constructor never called `_build_vimar_objects()`, so every config-flow
+step — which builds a coordinator and validates credentials without going
+through `init_vimarproject()` — died on
+`'VimarDataUpdateCoordinator' object has no attribute 'vimarconnection'`, and
+`set_errors_from_ex` could only file that under `unknown`.
+
+The rule costs nothing here (0 diagnostics) and states the same contract the
+comment does, in a form that is checked.
+
+**It has a blind spot that matters for this codebase.** Pyright skips the check
+entirely for any class that inherits, however indirectly, from a `Protocol` —
+and `DataUpdateCoordinator` inherits `BaseDataUpdateCoordinatorProtocol`, so
+**no** attribute of the coordinator is covered. Verified against pyright
+1.1.409:
+
+```python
+class OnlyProto(SomeProtocol):
+    b: str                      # not reported
+    def __init__(self) -> None: self.build()
+    def build(self) -> None: self.b = "x"
+
+class OnlyPlain:
+    c: str                      # reported
+    def __init__(self) -> None: self.build()
+    def build(self) -> None: self.c = "x"
+```
+
+So the rule guards the entities, `VimarLink` and the plain helpers, while the
+coordinator's own invariants have to be guarded by tests
+(`tests/integration/test_config_flow_errors.py`,
+`tests/integration/test_config_flow_steps.py`).
+
 ## Off, with a reason
 
 ### `reportIncompatibleVariableOverride` (136)
@@ -141,6 +184,14 @@ the base entity worth doing on its own.
 friends are the documented public API of their Home Assistant components; they
 are simply missing from those modules' `__all__`. Five suppressions for a
 Home Assistant packaging detail.
+
+## One configuration, not two
+
+`pyproject.toml` also carried a `[tool.pyright]` table: `pythonVersion 3.13`,
+`typeCheckingMode basic`, and none of the rules enabled above. `pyright` reads
+`pyrightconfig.json` in preference to it, so that table configured nothing
+while reading exactly as though it did — editing it would have changed no
+behaviour at all. It is gone; `pyrightconfig.json` is the only source.
 
 ## Formatting and CI scope
 

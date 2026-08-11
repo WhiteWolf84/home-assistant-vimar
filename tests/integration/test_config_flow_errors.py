@@ -9,6 +9,7 @@ only as a fallback for untyped/legacy exceptions.
 
 import os
 import sys
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,6 +17,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from custom_components.vimar.config_flow import set_errors_from_ex
+from custom_components.vimar.vimar_coordinator import VimarDataUpdateCoordinator
 from custom_components.vimar.vimarlink.exceptions import (
     VimarApiError,
     VimarConfigError,
@@ -71,3 +73,28 @@ def test_legacy_timeout_string_fallback():
 def test_unknown_exception_is_unknown():
     """An unrecognized exception falls through to 'unknown'."""
     assert _classify(ValueError("something unexpected")) == "unknown"
+
+
+def test_a_freshly_built_coordinator_can_be_validated_straight_away():
+    """THE regression behind "'...Coordinator' object has no attribute 'vimarconnection'".
+
+    The config flow builds a coordinator and calls validate_vimar_credentials()
+    immediately, without going through init_vimarproject(). When
+    _build_vimar_objects() was split out of init_vimarproject() but not called
+    from __init__, that raised AttributeError, which set_errors_from_ex could
+    only classify as "unknown" - so the user saw a generic failure on every
+    single connection attempt, whatever their credentials were.
+    """
+    coordinator = VimarDataUpdateCoordinator(
+        MagicMock(),
+        entry=None,
+        vimarconfig={
+            "host": "192.168.0.13",
+            "port": 443,
+            "username": "admin",
+            "password": "secret",
+        },
+    )
+
+    assert coordinator.vimarconnection is not None
+    assert coordinator.vimarproject is not None

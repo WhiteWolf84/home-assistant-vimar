@@ -151,8 +151,11 @@ async def async_setup_entry(
         "manufacturer": "Vimar",
         "model": "SAI2",
     }
-    if coordinator.webserver_id:
-        sai_device_info["via_device"] = (DOMAIN, coordinator.webserver_id)
+    # Nest the alarm under the web server it belongs to. This used to read
+    # `coordinator.webserver_id`, an attribute nothing ever assigned, so the
+    # branch never ran - and would not have worked if it had: it built a
+    # two-element identifier, while the hub is registered with three.
+    sai_device_info["via_device"] = coordinator.webserver_identifiers
     dev_reg = dr.async_get(hass)
     dev_reg.async_get_or_create(config_entry_id=entry.entry_id, **sai_device_info)
 

@@ -58,11 +58,7 @@ markers = [
     "no_ha: Tests that don't need Home Assistant installed",
 ]
 
-[tool.pyright]
-include = ["custom_components/vimar"]
-exclude = ["**/node_modules", "**/__pycache__"]
-extraPaths = ["custom_components/vimar"]
-pythonVersion = "3.13"
-pythonPlatform = "Linux"
-typeCheckingMode = "basic"
-reportDeprecated = "error"
+# pyright is configured in pyrightconfig.json, which takes precedence over a
+# [tool.pyright] table here. A second, stale copy used to live in this file
+# (pythonVersion 3.13, none of the enabled rules): it configured nothing, while
+# reading as though it did.
