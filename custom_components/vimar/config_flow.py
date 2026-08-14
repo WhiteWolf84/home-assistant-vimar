@@ -44,6 +44,7 @@ from .const import (
     CONF_GLOBAL_CHANNEL_ID,
     CONF_IGNORE_PLATFORM,
     CONF_OVERRIDE,
+    CONF_ROOM_LABELS,
     CONF_SCHEMA,
     CONF_SECURE,
     CONF_TITLE,
@@ -54,6 +55,7 @@ from .const import (
     DEFAULT_COVER_POSITION_MODE,
     DEFAULT_ENERGY_REFRESH_INTERVAL,
     DEFAULT_PORT,
+    DEFAULT_ROOM_LABELS,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SECURE,
     DEFAULT_TIMEOUT,
@@ -553,6 +555,15 @@ def get_schema_options_two(config: dict | None = None) -> dict:
         vol.Optional(
             CONF_FRIENDLY_NAME_ROOM_NAME_AT_BEGIN,
             description=get_vol_descr(config, CONF_FRIENDLY_NAME_ROOM_NAME_AT_BEGIN),
+        ): bool,
+        # Deliberately NOT in the list that forces a delete-and-reload of every
+        # entity (see async_step_two): labels are applied to devices that
+        # already exist, so turning this on or off needs no re-creation. Off
+        # leaves any label already applied in place - removing labels the user
+        # may since have taken ownership of would be worse than leaving them.
+        vol.Optional(
+            CONF_ROOM_LABELS,
+            description=get_vol_descr(config, CONF_ROOM_LABELS, DEFAULT_ROOM_LABELS),
         ): bool,
         vol.Optional(
             CONF_DEVICES_LIGHTS_RE, description=get_vol_descr(config, CONF_DEVICES_LIGHTS_RE)

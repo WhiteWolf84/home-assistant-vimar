@@ -14,6 +14,34 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.2b2] - 2026-08-14
+
+> **Beta.** Includes everything in `2026.8.2b1`. That release took the room out
+> of the device name; this one makes sure the room is not *lost* in the
+> process — it is now kept as a label on the device.
+
+### Added
+
+- **Every device is tagged with the VIMAR room it belongs to, as a Home Assistant label.** The area answers "where do I want this device", and you can reorganise it freely. The label answers "which room does VIMAR say this is", which is the web server's own answer and now stays usable: you can target a label directly in an automation, a script or a service call, so `label_id: bagnetto` reaches every Vimar device in that room without listing any of them. You can also filter by it on the devices page.
+- A new setting, **Tag devices with their Vimar room**, in the second options screen. It is on by default. Turning it off stops the integration touching labels; labels already applied are left where they are, since by then you may have started using them.
+
+### How it treats labels you created yourself
+
+Labels belong to you, so the integration keeps to a narrow lane:
+
+- it only ever touches labels named after a room of *this* web server, and only on devices it owns — the web server hub and the SAI alarm belong to no room and are never labelled;
+- every other label on a device is carried across untouched;
+- a device that changes room in VIMAR loses its previous room label and gains the new one, instead of collecting every room it has ever been in;
+- nothing is written when nothing changed, so a restart does not churn the registry.
+
+The one thing it cannot do is take no for an answer on a single device: delete a room label and it comes back on the next reload. Turn the setting off if you do not want them.
+
+### Changed
+
+- Internal: the rule and its wiring are covered by tests, including that it runs *after* the devices exist — too early and it would silently do nothing. Test count 442 → 452.
+
+---
+
 ## [2026.8.2b1] - 2026-08-14
 
 > **Beta.** Includes everything in `2026.8.2b0` and finishes the job it started:

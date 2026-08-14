@@ -104,6 +104,17 @@ CONF_ENTITY_PREFIX = "entity_prefix"
 
 CONF_USE_VIMAR_NAMING = "use_vimar_naming"
 CONF_FRIENDLY_NAME_ROOM_NAME_AT_BEGIN = "friendly_name_room_name_at_begin"
+
+# Tag each device with the VIMAR room it belongs to, as a Home Assistant label.
+# The room is no longer part of the device NAME (see
+# VimarProject.device_name_from_object_name), because Home Assistant already
+# prefixes a device with its area; the label keeps the information addressable
+# - labels can be targeted directly by automations and scripts - without
+# putting it back into every name and entity id.
+# On by default: the room is data the web server gives us, and dropping it
+# from the name should not mean losing it.
+CONF_ROOM_LABELS = "room_labels"
+DEFAULT_ROOM_LABELS = True
 CONF_DEVICES_LIGHTS_RE = "devices_as_lights_re"
 CONF_DEVICES_BINARY_SENSOR_RE = "devices_as_binary_sensor_re"
 CONF_DELETE_AND_RELOAD_ALL_ENTITIES = "delete_and_reload_all_entities"

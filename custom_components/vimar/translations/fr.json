@@ -82,6 +82,7 @@
           "cover_position_mode": "Mode de position des volets",
           "use_vimar_naming": "Utiliser les noms de dispositifs Vimar",
           "friendly_name_room_name_at_begin": "Préfixer les noms de dispositifs avec le nom de la pièce",
+          "room_labels": "Étiqueter les dispositifs avec leur pièce Vimar",
           "devices_lights_re": "Filtre de dispositifs lumineux (regex)",
           "devices_binary_sensor_re": "Filtre de capteurs binaires (regex)"
         }

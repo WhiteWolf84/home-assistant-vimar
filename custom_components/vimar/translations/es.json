@@ -82,6 +82,7 @@
           "cover_position_mode": "Modo de posición de persianas",
           "use_vimar_naming": "Usar nombres de dispositivos Vimar",
           "friendly_name_room_name_at_begin": "Anteponer nombre de habitación a nombres de dispositivos",
+          "room_labels": "Etiquetar dispositivos con su habitación Vimar",
           "devices_lights_re": "Filtro de dispositivos de luz (regex)",
           "devices_binary_sensor_re": "Filtro de sensores binarios (regex)"
         }

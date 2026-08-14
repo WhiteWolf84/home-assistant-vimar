@@ -82,6 +82,7 @@
           "cover_position_mode": "Modo de posição de cobertura",
           "use_vimar_naming": "Usar nomes de dispositivos Vimar",
           "friendly_name_room_name_at_begin": "Antepor nome do cômodo aos nomes dos dispositivos",
+          "room_labels": "Etiquetar dispositivos com o seu cômodo Vimar",
           "devices_lights_re": "Filtro de dispositivos de luz (regex)",
           "devices_binary_sensor_re": "Filtro de sensores binários (regex)"
         }

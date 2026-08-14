@@ -142,6 +142,13 @@ def _coordinator(vimarconfig=None):
     coordinator.entry = MagicMock(entry_id=ENTRY_ID)
     coordinator.hass = MagicMock()
     coordinator.hass.config_entries.async_forward_entry_setups = AsyncMock()
+    # Built in __init__ and never unset (see the class docstring), so a
+    # coordinator without it is not one the code has to cope with. Empty here
+    # because these tests are about which platforms get forwarded; the room
+    # labels applied at the end of the same method are covered in
+    # test_room_labels.py.
+    coordinator.vimarproject = MagicMock()
+    coordinator.vimarproject.devices = {}
     return coordinator
 
 

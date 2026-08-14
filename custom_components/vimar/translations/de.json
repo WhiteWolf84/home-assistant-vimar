@@ -82,6 +82,7 @@
           "cover_position_mode": "Rollladenpositionsmodus",
           "use_vimar_naming": "Vimar-Gerätenamen verwenden",
           "friendly_name_room_name_at_begin": "Raumname vor Gerätenamen stellen",
+          "room_labels": "Geräte mit ihrem Vimar-Raum kennzeichnen (Label)",
           "devices_lights_re": "Lichtgerätefilter (Regex)",
           "devices_binary_sensor_re": "Binärsensorfilter (Regex)"
         }
