@@ -14,6 +14,48 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.2b0] - 2026-08-14
+
+> **Beta.** Changes how entities are named internally, so that Home Assistant
+> can build sensible entity IDs for them. **Nothing is renamed and nothing is
+> lost when you install it** — one entity changes the name it displays, and
+> that is the whole of the immediate effect. The useful part is what it lets
+> you do afterwards, deliberately, if you want to; see *After installing* below.
+
+### Fixed
+
+- **Entity IDs no longer repeat the same word twice.** Home Assistant builds the ID of a new entity from the area, the device and the entity's own name, and offers a *Recreate entity IDs* button that rebuilds them. That only works if an entity names its own function and lets Home Assistant supply the rest. This integration did the opposite: every entity's name was the *same string* it already published as its device name, so the device word was counted twice and you would get `cover.bagnetto_tapparella_tapparella` or `climate.cameretta_termostato_termostato`. Entities now name only what they are: a shutter, a thermostat, a switch or a scene names nothing at all — it *is* its device — and a sensor names only the quantity it measures.
+- **Energy and load-control sensors no longer depend on a lucky guess.** The sensors on a `CH_Misuratore`, `CH_Carichi_3F` or `CH_Carichi_Custom` device were named by pasting the room in front of the measurement (`Bagno Padronale Dynamic Mode`). Many of them looked correct in the entity list only because Home Assistant quietly removes the device name when a name happens to start with it — an assumption that stops holding the moment you rename the device, and which was already not holding for every meter. They now publish just the measurement (`Dynamic Mode`, `Forzatura`, `Autoconsumo Totale`) and let Home Assistant do the prefixing. **What you see does not change.**
+
+### Changed
+
+- The web server connection sensor is now called **Vimar WebServer Connection** instead of `Vimar Connection to 192.168.x.x:443`. This is the only name that changes on installing this release. The address and port it used to carry in its name have been available as attributes on the sensor all along, and still are.
+- The alarm entities (`SAI Alarm` areas and zones) are unchanged: they already named themselves correctly and were the model the rest of the integration has now been brought in line with.
+- Internal: the naming contract is pinned by tests, including the specific trap that caused this — a `name` property anywhere in the entity hierarchy silently overrides the new declaration, with no error to warn you. Test count 409 → 421.
+
+### After installing
+
+Nothing here is required. Your entity IDs, your history and your statistics are
+untouched by the upgrade itself, and stay untouched until you choose otherwise.
+
+If you *want* to take up the clean entity IDs this release makes possible, the
+order matters:
+
+1. Back up `.storage/core.entity_registry` and `.storage/core.device_registry`.
+2. Install this release and restart. Check that your entities read as you expect. Everything up to this point is reversible.
+3. If you have renamed entities by hand to work around the old naming, clear those names now — not before step 2, or those entities will briefly display both names at once. Home Assistant will fall back to the device name, which is what you were writing out manually.
+4. Only then, and only if you want it: **Settings → Devices → Entities → Recreate entity IDs**. Read the preview before confirming. This step *does* change entity IDs, so any automation, script or dashboard referring to them by name has to be updated. Recorded history and long-term statistics follow the rename automatically; references in your own configuration do not.
+
+### Known limitation
+
+On a fresh installation, where devices still carry the names the integration
+gives them, the device itself is named after its room — so an area and a device
+can still contribute the same word (`cover.bagnetto_bagnetto`). If you have
+renamed your devices, you will not see this. Naming devices after their function
+rather than their room is a separate change and is not in this release.
+
+---
+
 ## [2026.8.1] - 2026-08-12
 
 > First stable release since `2026.8.0`. It contains everything from the

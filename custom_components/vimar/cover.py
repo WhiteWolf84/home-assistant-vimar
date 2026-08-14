@@ -203,7 +203,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
         _LOGGER.info(
             "%s: Travel times updated - up: %ds, down: %ds",
-            self.name,
+            self.device_name,
             travel_time_up,
             travel_time_down,
         )
@@ -212,9 +212,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         """Restore state when added to hass."""
         await super().async_added_to_hass()
 
-        _LOGGER.debug("%s: === async_added_to_hass START ===", self.name)
-        _LOGGER.debug("%s: Position mode: %s", self.name, self._get_position_mode())
-        _LOGGER.debug("%s: Use time-based tracking: %s", self.name, self._use_time_based_tracking())
+        _LOGGER.debug("%s: === async_added_to_hass START ===", self.device_name)
+        _LOGGER.debug("%s: Position mode: %s", self.device_name, self._get_position_mode())
+        _LOGGER.debug(
+            "%s: Use time-based tracking: %s", self.device_name, self._use_time_based_tracking()
+        )
 
         # Carica travel times dalle entity options
         if hasattr(self, "registry_entry") and self.registry_entry:
@@ -234,7 +236,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             ):
                 _LOGGER.info(
                     "%s: Custom travel times loaded - up: %ds, down: %ds",
-                    self.name,
+                    self.device_name,
                     self._travel_time_up,
                     self._travel_time_down,
                 )
@@ -243,19 +245,19 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if self._use_time_based_tracking():
             old_state = await self.async_get_last_state()
 
-            _LOGGER.debug("%s: old_state exists = %s", self.name, old_state is not None)
+            _LOGGER.debug("%s: old_state exists = %s", self.device_name, old_state is not None)
 
             if old_state:
-                _LOGGER.debug("%s: old_state.state = '%s'", self.name, old_state.state)
+                _LOGGER.debug("%s: old_state.state = '%s'", self.device_name, old_state.state)
                 position_attr = old_state.attributes.get("current_position")
-                _LOGGER.debug("%s: current_position value = %s", self.name, position_attr)
+                _LOGGER.debug("%s: current_position value = %s", self.device_name, position_attr)
 
             if old_state and old_state.attributes.get("current_position") is not None:
                 self._tb_position = old_state.attributes["current_position"]
-                _LOGGER.info("%s: Position restored: %s%%", self.name, self._tb_position)
+                _LOGGER.info("%s: Position restored: %s%%", self.device_name, self._tb_position)
             else:
                 self._tb_position = 0
-                _LOGGER.info("%s: New cover, default position: 0%% (closed)", self.name)
+                _LOGGER.info("%s: New cover, default position: 0%% (closed)", self.device_name)
 
             # Se il riavvio ha interrotto un movimento, programma il recupero.
             if old_state is not None:
@@ -264,13 +266,13 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         else:
             mode = self._get_position_mode()
             if mode == COVER_POSITION_MODE_LEGACY:
-                _LOGGER.debug("%s: LEGACY mode - no time-based tracking", self.name)
+                _LOGGER.debug("%s: LEGACY mode - no time-based tracking", self.device_name)
             else:
-                _LOGGER.debug("%s: Using native position from webserver", self.name)
+                _LOGGER.debug("%s: Using native position from webserver", self.device_name)
 
         self._tb_last_updown = self.get_state("up/down")
         self._tb_last_reported_position = self._tb_position
-        _LOGGER.debug("%s: === async_added_to_hass END ===", self.name)
+        _LOGGER.debug("%s: === async_added_to_hass END ===", self.device_name)
 
     def _create_tracked_task(self, coro, name: str) -> None:
         """Crea un background task tracciato dal core e auto-rimosso a fine vita.
@@ -334,17 +336,19 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if not ts_raw:
             # Senza timestamp non possiamo valutare la freschezza: troppo
             # rischioso, non recuperiamo.
-            _LOGGER.debug("%s: recovery flag senza timestamp, ignorato", self.name)
+            _LOGGER.debug("%s: recovery flag senza timestamp, ignorato", self.device_name)
             return
         try:
             age = (dt_util.utcnow() - datetime.fromisoformat(ts_raw)).total_seconds()
         except (ValueError, TypeError):
-            _LOGGER.debug("%s: recovery timestamp non valido (%s), ignorato", self.name, ts_raw)
+            _LOGGER.debug(
+                "%s: recovery timestamp non valido (%s), ignorato", self.device_name, ts_raw
+            )
             return
         if age < 0 or age > RECOVERY_MAX_AGE_SECONDS:
             _LOGGER.info(
                 "%s: recovery flag scartato (eta' %.0fs fuori range 0..%ds)",
-                self.name,
+                self.device_name,
                 age,
                 RECOVERY_MAX_AGE_SECONDS,
             )
@@ -362,7 +366,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         _LOGGER.warning(
             "%s: movimento interrotto dal riavvio rilevato (%s, target=%s, eta' %.0fs) "
             "-> recupero programmato",
-            self.name,
+            self.device_name,
             direction,
             target,
             age,
@@ -417,7 +421,9 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # subito dopo l'avvio), non interferire: chi ha preso il controllo vince.
         if self._tb_operation is not None:
             _LOGGER.info(
-                "%s: recovery saltato, movimento gia' in corso (%s)", self.name, self._tb_operation
+                "%s: recovery saltato, movimento gia' in corso (%s)",
+                self.device_name,
+                self._tb_operation,
             )
             return
         opening = direction == "opening"
@@ -426,7 +432,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
         _LOGGER.warning(
             "%s: recovery -> guido al fondo-corsa %s%% (direzione %s), poi riprendo verso target=%s",
-            self.name,
+            self.device_name,
             end_stop,
             direction,
             target,
@@ -443,7 +449,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Attendi il completamento reale (fine-corsa), non uno sleep fisso.
         if not await self._tb_wait_idle(timeout=travel + RELAY_DELAY + 5):
             _LOGGER.warning(
-                "%s: recovery scaduto in attesa del fondo-corsa, resume annullato", self.name
+                "%s: recovery scaduto in attesa del fondo-corsa, resume annullato", self.device_name
             )
             return
 
@@ -451,7 +457,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if self._tb_operation is not None or self._tb_position != end_stop:
             _LOGGER.info(
                 "%s: recovery interrotto da un comando esterno (op=%s, pos=%s) - niente resume",
-                self.name,
+                self.device_name,
                 self._tb_operation,
                 self._tb_position,
             )
@@ -460,10 +466,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Riprendi verso il target interrotto solo se intermedio e diverso dal
         # fondo-corsa gia' raggiunto (se il target era 0/100 abbiamo finito).
         if target is not None and 0 < target < 100 and target != end_stop:
-            _LOGGER.info("%s: recovery completato, riprendo verso target %s%%", self.name, target)
+            _LOGGER.info(
+                "%s: recovery completato, riprendo verso target %s%%", self.device_name, target
+            )
             await self.async_set_cover_position(**{ATTR_POSITION: target})
         else:
-            _LOGGER.info("%s: recovery completato al fondo-corsa %s%%", self.name, end_stop)
+            _LOGGER.info("%s: recovery completato al fondo-corsa %s%%", self.device_name, end_stop)
 
     def _tb_check_vimar_state(self) -> None:
         """Controlla stato Vimar e gestisci movimenti fisici."""
@@ -477,7 +485,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             if current_updown != expected_updown:
                 _LOGGER.info(
                     "%s: Physical STOP detected during HA tracking! up/down=%s (was %s)",
-                    self.name,
+                    self.device_name,
                     current_updown,
                     self._tb_operation,
                 )
@@ -509,20 +517,20 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             if in_grace_period:
                 _LOGGER.debug(
                     "%s: Ignoring up/down change (%s->%s) - in grace period (%.1fs remaining)",
-                    self.name,
+                    self.device_name,
                     self._tb_last_updown,
                     current_updown,
                     grace - (dt_util.utcnow() - stop_time).total_seconds() if stop_time else grace,
                 )
             elif current_updown == "0":
                 self._tb_position = 100
-                _LOGGER.info("%s: Physical button OPEN -> Position set to 100%%", self.name)
+                _LOGGER.info("%s: Physical button OPEN -> Position set to 100%%", self.device_name)
                 self._tb_last_reported_position = 100
                 self.async_write_ha_state()
 
             elif current_updown == "1":
                 self._tb_position = 0
-                _LOGGER.info("%s: Physical button CLOSE -> Position set to 0%%", self.name)
+                _LOGGER.info("%s: Physical button CLOSE -> Position set to 0%%", self.device_name)
                 self._tb_last_reported_position = 0
                 self.async_write_ha_state()
 
@@ -564,7 +572,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
         _LOGGER.debug(
             "%s: Tracking %s from %s%% to %s%%",
-            self.name,
+            self.device_name,
             operation,
             self._tb_position,
             self._tb_target,
@@ -586,7 +594,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         elif self._tb_start_time:
             self._tb_calculate_position()
 
-        _LOGGER.info("%s: Stopped at %s%%", self.name, self._tb_position)
+        _LOGGER.info("%s: Stopped at %s%%", self.device_name, self._tb_position)
 
         self._tb_operation = None
         self._tb_start_time = None
@@ -667,14 +675,16 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             # ricalcolarla (vedi _tb_planned_stop).
             self._tb_planned_stop = True
             if send_stop_command:
-                _LOGGER.info("%s: Reached target %s%%, sending STOP", self.name, self._tb_position)
+                _LOGGER.info(
+                    "%s: Reached target %s%%, sending STOP", self.device_name, self._tb_position
+                )
                 # FIX: async_stop_cover chiama già _tb_stop_tracking internamente,
                 # non schedulare un task separato per evitare doppia esecuzione
                 self._create_tracked_task(self.async_stop_cover(), name="vimar_cover_stop")
             else:
                 _LOGGER.info(
                     "%s: Reached end-stop %s%%, mechanical stop (no STOP command)",
-                    self.name,
+                    self.device_name,
                     self._tb_position,
                 )
                 self._create_tracked_task(
@@ -865,7 +875,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             _LOGGER.debug(
                 "%s: set_cover_position called before position was initialized, "
                 "defaulting to 0 (closed)",
-                self.name,
+                self.device_name,
             )
             self._tb_position = 0
 
@@ -883,7 +893,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if delta <= self._overshoot_pct(opening):
             _LOGGER.debug(
                 "%s: set_position %s%% ignorato (delta %s%% <= coda relè %.1f%%, non posizionabile)",
-                self.name,
+                self.device_name,
                 target,
                 delta,
                 self._overshoot_pct(opening),

@@ -48,6 +48,26 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
 
     _logger = _LOGGER
     _logger_is_debug = False
+    # Naming secondo la convenzione HA: l'entity dichiara SOLO la propria
+    # funzione, area e device li antepone Home Assistant. Prima di questo
+    # cambio la property `name` restituiva device_name, cioe' esattamente la
+    # stessa stringa gia' usata come nome del device in device_info: con
+    # has_entity_name=False quella stringa diventa l'ultimo pezzo
+    # dell'entity_id e il token compare due volte
+    # (cover.bagnetto_tapparella_tapparella).
+    #
+    # _attr_name = None significa "questa entity E' il dispositivo": il
+    # friendly name diventa il nome del device. Le sottoclassi che
+    # rappresentano una grandezza (VimarSensor) sovrascrivono _attr_name con la
+    # sola grandezza - mai con la stanza, mai con il nome del device.
+    #
+    # Attenzione: _attr_name viene letto da Entity._name_internal(), che e'
+    # raggiungibile solo attraverso Entity.name. Finche' questa classe definisce
+    # una property `name`, quella vince e _attr_name viene ignorato: per questo
+    # la property e' stata rimossa e non affiancata. device_name resta, la usano
+    # device_info e i messaggi di log.
+    _attr_has_entity_name = True
+    _attr_name: str | None = None
     # Never None. __init__ substitutes MISSING_DEVICE when the lookup fails,
     # so the "device could not be found" case is a value the code can carry
     # rather than an absence every reader has to remember to check for. Half
@@ -155,11 +175,6 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         return name
 
     @property
-    def name(self):
-        """Return the name of the device."""
-        return self.device_name
-
-    @property
     def extra_state_attributes(self):
         """Return device specific state attributes.
 
@@ -226,7 +241,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             self._logger.warning(
                 "Could not find state %s in device %s - %s - could not change value to: %s",
                 state,
-                self.name,
+                self.device_name,
                 self._device_id,
                 value,
             )
@@ -283,7 +298,7 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             self._logger.warning(
                 "Could not find state %s in device %s - %s - could not get value",
                 state,
-                self.name,
+                self.device_name,
                 self._device_id,
             )
         return None

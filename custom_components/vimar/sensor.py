@@ -225,6 +225,14 @@ class VimarSensor(VimarEntity, SensorEntity):
 
         self._measurement_name = measurement_name
         self._measurement_display_name = self._measurement_name.title().strip().replace("_", " ")
+        # Solo la grandezza: "Dynamic Mode", "Forzatura", "Autoconsumo Totale".
+        # Stanza e nome del device li antepone HA (has_entity_name=True). La
+        # versione precedente concatenava device_friendly_name davanti alla
+        # grandezza; il registro delle entity sembrava a posto solo perche' HA
+        # sfilava il prefisso quando combaciava col nome del device
+        # (_unprefix_original_name), euristica che smette di reggere appena il
+        # device viene rinominato.
+        self._attr_name = self._measurement_display_name
         VimarEntity.__init__(self, coordinator, device_id)
         self._class_and_units = self.class_and_units()
         # this will override the name for all
@@ -239,11 +247,6 @@ class VimarSensor(VimarEntity, SensorEntity):
     def entity_platform(self):
         """Return the platform of this entity."""
         return CURR_PLATFORM
-
-    @property
-    def name(self):
-        """Return the name of the device."""
-        return super().name + " " + self._measurement_display_name
 
     @property
     def device_class(self) -> SensorDeviceClass | None:
@@ -430,7 +433,7 @@ class VimarSensor(VimarEntity, SensorEntity):
         except (TypeError, ValueError):
             _LOGGER.debug(
                 "%s: non-numeric value %r for %s, reporting unknown",
-                self.name,
+                self.device_name,
                 value,
                 self._measurement_name,
             )
@@ -474,6 +477,9 @@ class VimarClimateTempSensor(VimarEntity, SensorEntity):
     """
 
     _status_key: str
+    # Convive sul device del termostato con VimarClimate, che ha _attr_name None
+    # ("l'entity e' il dispositivo"): i due nomi non collidono.
+    _attr_name = "Temperatura"
 
     def __init__(self, coordinator, device_id: int, status_key: str):
         """Initialize the companion temperature sensor."""
@@ -484,11 +490,6 @@ class VimarClimateTempSensor(VimarEntity, SensorEntity):
     def entity_platform(self):
         """Return the platform of this entity."""
         return CURR_PLATFORM
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return super().name + " Temperatura"
 
     @property
     def unique_id(self):
