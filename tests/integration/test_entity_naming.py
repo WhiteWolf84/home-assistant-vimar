@@ -45,14 +45,18 @@ pytestmark = pytest.mark.integration  # Home Assistant required
 
 
 def _device(object_type, status):
-    """A device named after its ROOM, which is what format_name() produces."""
+    """A device named after its FUNCTION, sitting in a room of its own name.
+
+    This is what device_name_from_object_name() now produces for
+    "TAPPARELLA BAGNETTO" in Bagnetto, and it is the shape that makes the
+    entity-side contract below testable: if an entity re-published the device
+    name, area + device + entity would read "Bagnetto Tapparella Tapparella".
+    """
     return {
         "object_id": "721",
         "object_type": object_type,
         "object_name": "TAPPARELLA BAGNETTO",
-        # The room, not the function: this is exactly the string that used to be
-        # published as the entity name as well.
-        "device_friendly_name": "Bagnetto",
+        "device_friendly_name": "Tapparella",
         "room_friendly_name": "Bagnetto",
         "device_class": None,
         "icon": "",
@@ -104,7 +108,7 @@ def test_primary_entities_never_repeat_the_device_name(cls, object_type, status)
     """The regression itself: entity name must not be the device name again."""
     entity = _entity(cls, object_type, status)
 
-    assert entity.device_info["name"] == "Bagnetto"
+    assert entity.device_info["name"] == "Tapparella"
     assert entity.name != entity.device_info["name"]
 
 
@@ -114,7 +118,7 @@ def test_sensor_names_only_the_quantity():
 
     assert sensor.has_entity_name is True
     assert sensor.name == "Dynamic Mode"
-    assert "Bagnetto" not in sensor.name
+    assert "Bagnetto" not in sensor.name  # the room is the area's job
 
 
 def test_companion_temperature_sensor_names_only_the_quantity():
@@ -143,4 +147,4 @@ def test_device_name_is_still_available_for_logging():
     """The property the log lines moved to when `name` was removed."""
     cover = _entity(VimarCover, "CH_ShutterWithoutPosition_Automation", SHUTTER)
 
-    assert cover.device_name == "Bagnetto"
+    assert cover.device_name == "Tapparella"

@@ -14,6 +14,39 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.2b1] - 2026-08-14
+
+> **Beta.** Includes everything in `2026.8.2b0` and finishes the job it started:
+> `2026.8.2b0` stopped entities from repeating their device, this one stops
+> devices from repeating their room. **If you have renamed your devices in Home
+> Assistant, nothing changes for you** — your names win, as they always have.
+
+### Fixed
+
+- **Devices are now named after what they are, not after the room they are in.** A shutter on the bus called `TAPPARELLA BAGNETTO` was registered as the device **Bagnetto** — the word naming the function was deleted and the room was kept. Home Assistant already prefixes a device with its area, so that device read as "Bagnetto Bagnetto", and the previous beta could not reach it: the repetition was between the *area* and the *device*, not inside the entity. It is now registered as **Tapparella**, in the area **Bagnetto**. The room is subtracted using the rooms the web server itself assigns to the object, so a floor modelled as a second room goes too: `LUCE 11 CUCINA PIANO TERRA` in Cucina/Piano Terra becomes **Luce 11**.
+- Names that made no sense are fixed as a side effect. The old rule assumed every bus name was written as *type – number – room – floor* and reordered it accordingly, which turned `CONTROLLO CARICHI GLOBALE` into "Carichi Globale Controllo". Nothing is reordered any more.
+
+### Changed
+
+- **Objects the web server places in no room keep exactly the name they had.** There is no area for them to collide with, so the old behaviour is left untouched — including where it produces an awkward name.
+- An object named after its room and nothing else (`BAGNETTO`, in Bagnetto) also keeps its old name: subtracting the room would leave it with none.
+- The two naming options in the integration's settings are unchanged and still do what they say — but be aware that both put the room back into the device name, and therefore back into the entity ID. **Use Vimar device names** takes the bus name verbatim, room included. **Prepend room name to device names** adds it deliberately. Neither is on by default. Note also that changing either one is what tells the integration to delete and re-create every entity on the next restart, so do not toggle them to "have a look".
+- If you filter devices into the light or binary sensor platforms with a regular expression, check it still matches. Those expressions are tested against the device name, and that name no longer contains the room — a filter written as `Cucina` will stop matching.
+- Internal: the rule and its wiring are covered by tests, including the cases where it deliberately changes nothing. Test count 421 → 442.
+
+### After installing
+
+The same as `2026.8.2b0`, and for the same reason: nothing is renamed against
+your wishes, and no entity ID moves until you ask for it.
+
+Devices you have renamed in Home Assistant keep your name — the integration has
+never been able to override that. Devices still carrying the name the
+integration gave them will be renamed in place, keeping their identity, their
+area, their entities and their history. If you would rather keep an old name,
+rename that device by hand and it will stick.
+
+---
+
 ## [2026.8.2b0] - 2026-08-14
 
 > **Beta.** Changes how entities are named internally, so that Home Assistant

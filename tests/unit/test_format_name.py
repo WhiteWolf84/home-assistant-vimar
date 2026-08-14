@@ -1,14 +1,22 @@
 """Friendly-name formatting (NO Home Assistant required).
 
 VimarProject.format_name turns the VIMAR bus name ("LUCE 11 CUCINA PIANO
-TERRA") into the name shown in Home Assistant. It splits the name into
+TERRA") into a name for Home Assistant. It splits the name into
 type / number / room / level, drops the redundant type word and reorders the
-rest. It is user-visible on every single entity and had no test coverage,
-despite already having produced one bug (FIX #21: the LUCE/LICHT guard).
+rest. It had no test coverage, despite already having produced one bug
+(FIX #21: the LUCE/LICHT guard).
 
-These tests pin the current output. They are not a claim that the heuristic is
-right for every installation - they make any change to it deliberate and
-visible, because changing a friendly name renames entities for existing users.
+It is no longer the main path: putting the location first and deleting the
+function word is the wrong shape for a DEVICE name, which Home Assistant
+already prefixes with the area - see device_name_from_object_name and
+tests/unit/test_device_name.py. format_name now runs only for objects the web
+server places in no room at all, where there is no area to collide with, and
+as that function's fallback.
+
+These tests pin its output where it still applies. They are not a claim that
+the heuristic is right for every installation - they make any change to it
+deliberate and visible, because changing this string renames devices for
+existing users.
 """
 
 import os
