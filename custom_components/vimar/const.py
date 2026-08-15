@@ -100,6 +100,16 @@ CLIMATE_POST_WRITE_REFRESH_DELAY = 16.0  # seconds
 # Device overrides
 CONF_OVERRIDE = "device_override"
 
+# Records that the one-shot move of `device_override` out of configuration.yaml
+# and into the config entry has already happened for this entry.
+#
+# The obvious condition - "import from YAML when the entry has no overrides" -
+# looks equivalent and is not: it re-imports the YAML the first time the user
+# deletes their last rule in the UI, so a rule they removed on purpose comes
+# back at the next restart. The flag records that the migration WINDOW has
+# closed, which is a fact about the entry, not about its current contents.
+CONF_OVERRIDE_IMPORTED = "device_override_imported"
+
 CONF_ENTITY_PREFIX = "entity_prefix"
 
 CONF_USE_VIMAR_NAMING = "use_vimar_naming"

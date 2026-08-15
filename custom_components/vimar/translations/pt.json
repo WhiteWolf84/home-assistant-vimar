@@ -93,6 +93,28 @@
         "data": {
           "delete_and_reload_all_entities": "Forçar recarregamento de todas as entidades (próxima reinicialização)"
         }
+      },
+      "overrides": {
+        "title": "Device overrides",
+        "description": "Rules that change how VIMAR devices are exposed: their platform, device class, icon or name.\n\nCurrent rules ({count}):\n{rules}\n\nPick one to edit or delete, choose \"+ …\" to add one, or leave empty to continue. Rules apply in order: a later rule overwrites what an earlier one set.",
+        "data": {
+          "rule": "Rule"
+        }
+      },
+      "override_edit": {
+        "title": "Device override {position}",
+        "description": "Currently: {current}\n\nMatch a device, then set what should change. Leave a field empty to leave that attribute alone.",
+        "data": {
+          "filter_field": "Match on",
+          "match_mode": "How to match",
+          "match_value": "Value to match",
+          "device_type": "Force platform",
+          "device_class": "Force device class",
+          "icon_on": "Icon (on state)",
+          "icon_off": "Icon (off state)",
+          "use_vimar_name": "Use the raw VIMAR name",
+          "delete": "Delete this rule"
+        }
       }
     },
     "error": {
@@ -100,7 +122,9 @@
       "cannot_connect": "Falha na conexão",
       "invalid_cert": "Erro SSL",
       "regex_not_valid": "Expressão regular inválida",
-      "unknown": "Ocorreu um erro desconhecido"
+      "unknown": "Ocorreu um erro desconhecido",
+      "match_value_required": "Enter a value to match, or choose \"all\".",
+      "icon_on_required": "Set the on icon too: an off icon on its own would be shown for the on state."
     }
   },
   "exceptions": {

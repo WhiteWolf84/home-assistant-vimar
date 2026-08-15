@@ -44,6 +44,7 @@ from .const import (
     CONF_GLOBAL_CHANNEL_ID,
     CONF_IGNORE_PLATFORM,
     CONF_OVERRIDE,
+    CONF_OVERRIDE_IMPORTED,
     CONF_ROOM_LABELS,
     CONF_SCHEMA,
     CONF_SECURE,
@@ -63,8 +64,30 @@ from .const import (
     DOMAIN,
     PLATFORMS,
 )
+from .override_editor import (
+    FILTER_FIELDS,
+    FORM_DEVICE_CLASS,
+    FORM_DEVICE_TYPE,
+    FORM_FILTER_FIELD,
+    FORM_ICON_OFF,
+    FORM_ICON_ON,
+    FORM_MATCH_MODE,
+    FORM_MATCH_VALUE,
+    FORM_USE_VIMAR_NAME,
+    MATCH_MODES,
+    UNSET,
+    describe_rule,
+    form_to_rule,
+    rule_to_form,
+    validate_form,
+)
 from .vimar_coordinator import VimarDataUpdateCoordinator
+from .vimarlink.device_types import DEVICE_TYPE_FANS, DEVICE_TYPE_OTHERS
 from .vimarlink.exceptions import VimarConfigError, VimarConnectionError
+
+#: Sentinel for "add a new rule" in the override picker. Not a valid list
+#: index, so it can never collide with one.
+OVERRIDE_NEW = "new"
 
 
 @asynccontextmanager
@@ -197,7 +220,14 @@ class VimarFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             or user_input.get(CONF_HOST)
             or user_input.get(CONF_USERNAME)
         )
-        user_input.pop(CONF_OVERRIDE, "")  # remove override non gestito da config_flow
+        # device_override used to be dropped here ("non gestito da config_flow"),
+        # which was true and self-fulfilling: the entry could not hold overrides,
+        # so YAML had to keep them, so the flow had no reason to import them. The
+        # entry owns them now, so they come across with everything else - and the
+        # entry is marked as migrated, since this IS the migration for a config
+        # imported from YAML.
+        user_input[CONF_OVERRIDE] = user_input.get(CONF_OVERRIDE) or []
+        user_input[CONF_OVERRIDE_IMPORTED] = True
         schema = user_input.pop(CONF_SCHEMA, "https")
         user_input[CONF_SECURE] = schema == "https"
         if schema == "https" and user_input.get(CONF_CERTIFICATE, "") != "":
@@ -219,6 +249,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self.errors: dict[str, str] = {}
         self.user_input: dict = {}
         self.options_with_user_input: dict = {}
+        #: Which device override the edit step is working on: its position in
+        #: the list, or None for one being added. Order is meaningful - a later
+        #: rule overwrites what an earlier one set - so rules are edited in
+        #: place and appended, never re-sorted.
+        self._override_index: int | None = None
 
     def _ensure_options_initialized(self):
         """Initialize options from config_entry if not already done."""
@@ -329,9 +364,147 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
         if user_input is not None and not self.errors:
             self._options_update()
-            return await self.async_step_pins()
+            return await self.async_step_overrides()
 
         return self._async_show_form_step("three")
+
+    # ------------------------------------------------------------------
+    # Device overrides
+    #
+    # Two steps rather than one: a form cannot re-render itself with the
+    # values of a rule the user has just picked, so choosing and editing have
+    # to be separate submissions. The list step loops - edit, delete or add,
+    # and you land back on it - until the picker is left empty, which is what
+    # moves the flow on.
+    #
+    # These steps bypass the _init_schema/_options_update machinery the other
+    # steps share: that copies every field of the form straight into the saved
+    # options, and none of these fields is a setting. What gets saved is the
+    # rule list they build, under CONF_OVERRIDE.
+    # ------------------------------------------------------------------
+
+    def _overrides(self) -> list[dict]:
+        """The rules as they stand in this flow, as a list we may modify."""
+        return list(self.options.get(CONF_OVERRIDE) or [])
+
+    async def async_step_overrides(self, user_input=None):
+        """Pick a device override to edit, add one, or move on."""
+        self._ensure_options_initialized()
+        rules = self._overrides()
+
+        if user_input is not None:
+            selected = user_input.get("rule")
+            if not selected:
+                return await self.async_step_pins()
+            self._override_index = None if selected == OVERRIDE_NEW else int(selected)
+            return await self.async_step_override_edit()
+
+        options = [
+            SelectOptionDict(value=str(index), label=f"{index + 1}. {describe_rule(rule)}")
+            for index, rule in enumerate(rules)
+        ]
+        options.append(SelectOptionDict(value=OVERRIDE_NEW, label="+ …"))
+
+        return self.async_show_form(
+            step_id="overrides",
+            data_schema=vol.Schema(
+                {vol.Optional("rule"): SelectSelector(SelectSelectorConfig(options=options))}
+            ),
+            description_placeholders={
+                "count": str(len(rules)),
+                "rules": "\n".join(option["label"] for option in options[:-1]) or "—",
+            },
+        )
+
+    async def async_step_override_edit(self, user_input=None):
+        """Add, change or delete one device override."""
+        rules = self._overrides()
+
+        # Which rule is being edited, if any. An index that no longer resolves
+        # is treated as "adding", not as an error: that is what a stale flow
+        # looks like after the list changed underneath it, and appending a rule
+        # is recoverable where overwriting an unrelated one is not.
+        index = self._override_index
+        if index is None or index >= len(rules):
+            index = None
+            original = None
+        else:
+            original = rules[index]
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if user_input.get("delete"):
+                if index is not None:
+                    rules.pop(index)
+                    self.options[CONF_OVERRIDE] = rules
+                return await self.async_step_overrides()
+
+            errors = validate_form(user_input)
+            if not errors:
+                rule = form_to_rule(user_input, original)
+                if index is None:
+                    rules.append(rule)
+                else:
+                    rules[index] = rule
+                self.options[CONF_OVERRIDE] = rules
+                return await self.async_step_overrides()
+
+        # Re-showing after an error must keep what the user typed, not reset to
+        # the stored rule; on first entry there is no input and the stored rule
+        # is exactly what should appear.
+        values = user_input if user_input is not None else rule_to_form(original)
+
+        # A rule written by hand can filter on a field this form has no entry
+        # for. Offering it alongside the usual ones keeps that rule editable
+        # instead of silently rewriting what it matches on.
+        filter_fields = list(FILTER_FIELDS)
+        current_field = values.get(FORM_FILTER_FIELD)
+        if current_field and current_field not in filter_fields:
+            filter_fields.append(current_field)
+
+        schema = vol.Schema(
+            {
+                vol.Required(FORM_FILTER_FIELD, default=values.get(FORM_FILTER_FIELD)): vol.In(
+                    filter_fields
+                ),
+                vol.Required(FORM_MATCH_MODE, default=values.get(FORM_MATCH_MODE)): vol.In(
+                    MATCH_MODES
+                ),
+                vol.Optional(
+                    FORM_MATCH_VALUE,
+                    description={"suggested_value": values.get(FORM_MATCH_VALUE)},
+                ): str,
+                vol.Optional(
+                    FORM_DEVICE_TYPE, default=values.get(FORM_DEVICE_TYPE) or UNSET
+                ): vol.In([UNSET, *PLATFORMS, DEVICE_TYPE_FANS, DEVICE_TYPE_OTHERS]),
+                vol.Optional(
+                    FORM_DEVICE_CLASS,
+                    description={"suggested_value": values.get(FORM_DEVICE_CLASS)},
+                ): str,
+                vol.Optional(
+                    FORM_ICON_ON,
+                    description={"suggested_value": values.get(FORM_ICON_ON)},
+                ): str,
+                vol.Optional(
+                    FORM_ICON_OFF,
+                    description={"suggested_value": values.get(FORM_ICON_OFF)},
+                ): str,
+                vol.Optional(
+                    FORM_USE_VIMAR_NAME, default=bool(values.get(FORM_USE_VIMAR_NAME))
+                ): bool,
+                vol.Optional("delete", default=False): bool,
+            }
+        )
+
+        return self.async_show_form(
+            step_id="override_edit",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "position": "—" if index is None else str(index + 1),
+                "current": describe_rule(original) if original else "—",
+            },
+        )
 
     async def async_step_pins(self, user_input=None):
         """Associate an HA user with their SAI2 alarm PIN.

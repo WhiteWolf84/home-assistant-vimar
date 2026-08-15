@@ -14,7 +14,28 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
-## [2026.8.2b2] - 2026-08-14
+## [2026.8.2b3] - 2026-08-15
+
+> **Beta.** Includes everything in `2026.8.2b2`. Device overrides move out of
+> `configuration.yaml` and into the integration's own settings, and your
+> existing rules are brought across for you on the first restart — there is
+> nothing to retype.
+
+### Added
+
+- **Device overrides can be managed from the integration's options.** These are the rules that change how a VIMAR device is exposed — forcing it onto a different platform, giving it a device class, setting its icon, or using the raw VIMAR name. Until now they could only be written by hand in `configuration.yaml`. There is now a screen listing your rules, and a form to add, change or delete one. Rules still apply in order, and a later rule still overwrites what an earlier one set, so the list is shown and edited in that order.
+- Rules are checked before they are saved: an empty value to match, or a regular expression that cannot compile, is reported on the field instead of being accepted. A regular expression that does not compile used to be written to a log line and then quietly never match anything.
+
+### Fixed
+
+- **Device overrides written in `configuration.yaml` are now imported into the integration.** They had to live in YAML: whatever the config entry held was overwritten from YAML on every single start, so YAML was not merely the default place for them, it was the only place they could work. On the first start after this release your rules are copied across and a line in the log tells you the `device_override:` block can be removed. The import happens once and once only — deleting every rule in the UI afterwards does not bring the YAML ones back.
+- A device override no longer accumulates a duplicate copy of its own actions on every reload of the integration. The rules were being handed to the parser as-is, and the parser rewrites what it is given, so each reload re-parsed rules it had already parsed. Nothing behaved differently as a result — applying the same change twice looks like applying it once — but the list grew for as long as Home Assistant stayed up.
+
+### Changed
+
+- If you keep both a `device_override:` block in YAML and rules in the options, only the options are read from now on. This is the point of the change: one place, editable, that does not need a restart to try something.
+- The options form covers the rules people actually write, not the whole override language. A rule using a regular expression substitution, or filtering on a field with no control on the form, stays listed and editable — the parts the form does not know about are carried across untouched rather than dropped — but those parts can still only be written in YAML.
+- Internal: the rule/form conversion lives in its own module and is covered on its own, including that every rule in a real installation survives being opened and saved unchanged. Test count 452 → 504.
 
 > **Beta.** Includes everything in `2026.8.2b1`. That release took the room out
 > of the device name; this one makes sure the room is not *lost* in the

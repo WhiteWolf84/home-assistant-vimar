@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import time
+from copy import deepcopy
 from datetime import timedelta
 from typing import cast
 
@@ -820,7 +821,15 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             certificate = vimarconfig.get(CONF_CERTIFICATE, DEFAULT_CERTIFICATE)
         timeout = vimarconfig.get(CONF_TIMEOUT)
         global_channel_id = vimarconfig.get(CONF_GLOBAL_CHANNEL_ID)
-        device_overrides = vimarconfig.get(CONF_OVERRIDE) or []
+        # Deep copy, not the caller's list. VimarDeviceCustomizer rewrites the
+        # dicts it is handed: device_override_check() turns each `filter_*` key
+        # into entries under `filter`/`filter_re` and appends to `actions`, in
+        # place. Handing it the config's own dicts meant a reload parsed
+        # already-parsed rules - `actions` is only initialised when absent, so a
+        # second pass appended a duplicate of every action instead of resetting
+        # them - and, now that overrides live in the config entry rather than in
+        # a YAML dict, would rewrite entry.data with the parser's internals.
+        device_overrides = deepcopy(vimarconfig.get(CONF_OVERRIDE) or [])
 
         vimarconnection = VimarLink(schema, host, port, username, password, certificate, timeout)
         device_customizer = VimarDeviceCustomizer(vimarconfig, device_overrides)
