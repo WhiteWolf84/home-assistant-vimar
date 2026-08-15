@@ -7,7 +7,7 @@
 
 # VIMAR By-Me / By-Web Integration for Home Assistant
 
-> **Current Version:** 2026.7.1 · **Requires:** Home Assistant 2026.5.0+ · **Python:** 3.14.2+ (imposed by Home Assistant 2026.3+; the standalone `vimarlink` library still runs on 3.13)
+> **Current Version:** 2026.8.2b3 (pre-release) · **Requires:** Home Assistant 2026.5.0+ · **Python:** 3.14.2+ (imposed by Home Assistant 2026.3+; the standalone `vimarlink` library still runs on 3.13)
 
 A comprehensive Home Assistant custom integration for the VIMAR By-me / By-web bus system. Controls lights, covers, climate, switches, sensors, media players, scenes, and the **SAI2 alarm system** through the VIMAR web server.
 
@@ -56,11 +56,42 @@ Configuration is fully managed via the Home Assistant UI.
 
 ### Options Flow
 
-After initial setup, click **Configure** on the integration to adjust:
+After initial setup, click **Configure** on the integration. The options are
+split across five screens.
 
-- **Cover Position Mode:** `auto` (default), `native`, `time_based`, or `legacy`
-- **Alarm PIN per user:** map each Home Assistant user to their SAI2 PIN, plus an optional fallback PIN for automations (see the [SAI2 Alarm System](#-sai2-alarm-system) section)
-- **Ignored Platforms:** Exclude specific platforms from discovery
+#### Connection
+
+Host, port, credentials and SSL — the same fields as the initial setup.
+
+#### Integration settings
+
+- **Polling interval:** how often device states are read (default 8 s)
+- **Energy refresh interval:** how often energy meters are explicitly refreshed. `0` disables it, and the meters then freeze on a stale value
+- **Ignored platforms:** exclude platforms from discovery
+- **Cover position mode:** `auto` (default), `native`, `time_based` or `legacy`
+- **Use Vimar device names:** take the bus name verbatim instead of deriving one. ⚠️ Puts the room back into the device name — see [Naming](#-naming)
+- **Prepend room name to device names:** ⚠️ same caveat
+- **Tag devices with their Vimar room:** applies the room as a label, on by default — see [Naming](#-naming)
+- **Light / binary sensor filters:** regular expressions reclassifying `CH_Main_Automation` devices
+
+#### Advanced options
+
+*Force reload all entities*, which deletes and re-creates every entity on the
+next restart.
+
+#### Device overrides
+
+See [Device overrides](#-device-overrides).
+
+#### Alarm PIN per user
+
+Maps each Home Assistant user to their SAI2 PIN, plus a fallback for
+automations; see [SAI2 Alarm System](#-sai2-alarm-system).
+
+> ⚠️ Changing **Use Vimar device names**, **Prepend room name**, or either
+> regex filter sets the *force reload* flag: every entity is deleted and
+> re-created on the next restart, which loses entity IDs, area assignments and
+> manual renames. Don't toggle them just to look.
 
 ## 🎯 Supported Devices
 
@@ -75,6 +106,84 @@ After initial setup, click **Configure** on the integration to adjust:
 | **Scene** | Vimar scenes | ✅ Full Support |
 | **Alarm Control Panel** | SAI2 alarm areas — arm/disarm, multi-area, per-user PIN | ✅ Full Support |
 | **Binary Sensor** | SAI2 alarm zone sensors (door contacts, motion, tamper) + connection status | ✅ Full Support |
+
+## 🔤 Naming
+
+Home Assistant builds what you read — and the entity ID it generates — from
+three parts: **area + device + entity**. The integration therefore names each
+part once and lets Home Assistant put them together.
+
+- **Entities name their function only.** A shutter, a thermostat, a switch or a scene names nothing at all: it *is* its device, so the device name is what you see. A sensor names just the quantity it measures (`Dynamic Mode`, `Forzatura`, `Autoconsumo Totale`).
+- **Devices are named after what they are, not where they are.** A bus object called `TAPPARELLA BAGNETTO` becomes the device **Tapparella** in the area **Bagnetto**. The room is subtracted using the rooms the web server itself assigns to the object, so a floor modelled as a second room goes too: `LUCE 11 CUCINA PIANO TERRA` in *Cucina / Piano Terra* becomes **Luce 11**.
+- **The room is kept as a label.** The area is where *you* want a device and you can reorganise it freely; the label is what VIMAR says the room is. Labels can be targeted directly, so `label_id: bagnetto` reaches every Vimar device in that room without listing any of them. Turn it off with **Tag devices with their Vimar room**.
+
+Objects the web server places in no room, and objects named after their room
+and nothing else, keep the name they have always had.
+
+**Renaming a device in Home Assistant always wins** — the integration has never
+been able to override that.
+
+### Recreating entity IDs
+
+Existing entity IDs never change on their own. To take up the naming above on
+entities that already exist, use **Settings → Devices & Services → Entities →
+Recreate entity IDs**, and read the preview before confirming.
+
+Do it in this order:
+
+1. Back up `.storage/core.entity_registry` and `.storage/core.device_registry`.
+2. Upgrade and restart. Check the entities read as you expect. Everything to here is reversible.
+3. If you renamed entities by hand to work around the old naming, clear those names now — not before step 2, or they will briefly show both names at once.
+4. Only then, *Recreate entity IDs*. Recorded history and long-term statistics follow the rename automatically; references in your automations, scripts and dashboards do not.
+
+## 🧩 Device overrides
+
+Overrides are rules that change how a VIMAR device is exposed: forcing it onto
+a different platform, giving it a device class, setting its icon, or using the
+raw VIMAR name. Manage them under **Configure → Device overrides**.
+
+Each rule matches a device and then sets what should change:
+
+| Field | Meaning |
+|---|---|
+| **Match on** | `vimar_name` (the bus object name), `vimar_object_type` (e.g. `CH_Main_Automation`), `friendly_name` or `device_type` |
+| **How to match** | `exact`, `regex`, or `all` (every device) |
+| **Value to match** | The name or pattern; ignored for `all` |
+| **Force platform** | `switch`, `light`, `cover`, `climate`, `sensor`, `binary_sensor`, `scene`, `media_player`, … |
+| **Force device class** | e.g. `garage`, `outlet`, `shutter` |
+| **Icon (on / off)** | Two icons give a state-dependent pair; one icon is used for both |
+| **Use the raw VIMAR name** | Names the device exactly as the bus does |
+
+Rules apply **in order**: a later rule overwrites what an earlier one set. New
+rules are appended, so the newest wins.
+
+### Migrating from `configuration.yaml`
+
+Overrides used to be written by hand in YAML. On the first start after
+upgrading, any `device_override:` block is **imported into the integration
+automatically** and a line in the log tells you it can be removed:
+
+```yaml
+# No longer read once imported — the options own these now
+vimar:
+  device_override:
+    - filter_vimar_name: '*'
+      object_name_as_vimar: true
+    - filter_vimar_name: 'Garage'
+      device_type: switches
+      device_class: garage
+      icon: mdi:garage-open,mdi:garage
+```
+
+The import happens **once**. Deleting every rule in the UI afterwards does not
+bring the YAML ones back, and a `device_override:` block added to YAML later is
+not picked up.
+
+> **Beyond the form.** The override language also supports regex substitutions
+> (`*_regexsub_pattern` / `_repl`), filters on arbitrary device fields and a few
+> per-rule flags with no control on the form. Such a rule stays listed and
+> editable — the parts the form does not know about are carried across
+> untouched — but those parts can still only be written in YAML.
 
 ## 🚨 SAI2 Alarm System
 
@@ -176,6 +285,7 @@ custom_components/vimar/
 ├── cover.py                     # Covers with time-based tracking
 ├── light.py                     # Lights / dimmers / RGB
 ├── media_player.py              # Audio zones
+├── override_editor.py           # Override rule <-> options form
 ├── scene.py                     # Scenes
 ├── sensor.py                    # Power / energy / temperature
 ├── switch.py                    # Switches / outlets
@@ -191,6 +301,8 @@ custom_components/vimar/
 - **Modular `vimarlink`:** Core library has zero HA dependencies, usable standalone
 - **Re-authentication flow:** `ConfigEntryAuthFailed` triggers automatic reauth dialog
 - **Entity availability:** Reports `unavailable` when web server is offline, auth fails, or device is removed
+- **`has_entity_name` naming:** every entity names its own function and lets Home Assistant prepend area and device, so no part of the name is said twice
+- **The config entry owns every setting:** device overrides were the last thing readable only from YAML; they are migrated into the entry once, and YAML is not consulted again
 
 ## 🐛 Troubleshooting
 
@@ -240,6 +352,34 @@ logger:
 1. Recalibrate travel times with precise measurements
 2. Perform full open/close cycle to auto-calibrate end-stops
 3. Switch to `native` mode if hardware sensors are available
+
+#### A Device Changed Name After Upgrading
+
+**Problem:** devices are now called `Tapparella` or `Luce 11` instead of
+`Bagnetto` or `Piano Terra Cucina 11`.
+
+**Explanation:** this is the [naming change](#-naming) — the device is named
+after what it is, and the room it sits in comes from its area. Entity IDs, unique
+IDs, history and statistics are unaffected.
+
+**Solutions:**
+
+1. Rename the device in Home Assistant if you prefer another name; your name always wins and survives every future upgrade
+2. Turn on **Use Vimar device names** to take the bus name verbatim instead — but note it puts the room back into the name, and that toggling it forces a full entity reload
+
+#### My `device_override` Rules Stopped Working
+
+**Problem:** rules in `configuration.yaml` no longer seem to apply.
+
+**Explanation:** they were imported into the integration on the first start
+after upgrading, and YAML is not read any more. Look for the `Imported N
+device_override rule(s)` line in the log.
+
+**Solutions:**
+
+1. Open **Configure → Device overrides** — your rules should be listed there, in the same order
+2. Edit them there from now on; a `device_override:` block added to YAML afterwards is not picked up
+3. Once you have confirmed they are present, remove the block from `configuration.yaml`
 
 #### SAI2 Alarm Not Responding
 
