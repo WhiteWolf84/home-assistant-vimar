@@ -205,10 +205,21 @@ class VimarConnection:
         login_url = (
             f"{self._schema}://{self._host}:{self._port}/vimarbyweb/modules/system/user_login.php"
         )
-        # Credentials go through the query-parameter encoder instead of an
-        # f-string: a password containing '&', '#', '+', '%' or a space used to
-        # be spliced raw into the URL, silently truncating or corrupting it, so
-        # a perfectly valid password was reported back as "invalid credentials".
+        # Sent as a form BODY, not as query parameters. The web server reads
+        # them either way - user_login.php goes through PHP's $_REQUEST, which
+        # merges GET and POST, confirmed against real hardware (01945): a POST
+        # carrying nothing in the URL returns the same <result>0</result> and a
+        # valid session id.
+        #
+        # In the query string they ended up in every log line that echoes a URL,
+        # and not only in ours: urllib3 logs its own retry warning before the
+        # exception ever reaches this module, so redact() could not reach it.
+        # One read timeout during login was enough to write the plaintext
+        # password into home-assistant.log - a file users attach to issues.
+        #
+        # requests form-encodes the dict, so a password containing '&', '#',
+        # '+', '%' or a space still arrives byte-for-byte; building this by hand
+        # used to truncate such a password and report valid credentials as wrong.
         login_params = {
             "sessionid": "",
             "username": self._username,
@@ -222,14 +233,14 @@ class VimarConnection:
         if self._schema == "https" and use_cert and not os.path.isfile(self._certificate):
             self.install_certificate()
 
-        result = self._request(login_url, params=login_params)
+        result = self._request(login_url, post=login_params)
 
         if result is False and use_cert:
             curr_ex_str = str(self.request_last_exception)
             if "SSLError" in curr_ex_str or "TLS CA" in curr_ex_str:
                 try:
                     if self.install_certificate():
-                        result = self._request(login_url, params=login_params)
+                        result = self._request(login_url, post=login_params)
                 except Exception:
                     pass
 
@@ -293,7 +304,10 @@ class VimarConnection:
     def _request(
         self,
         url: str,
-        post: str | None = None,
+        # A str is a ready-made body (the SOAP envelopes); a dict is form data,
+        # which requests encodes - that is how login() keeps the credentials
+        # out of the URL.
+        post: str | dict[str, str] | None = None,
         headers: dict | None = None,
         # requests' `verify`: True/False, or a path to a CA bundle.
         check_ssl: bool | str = False,

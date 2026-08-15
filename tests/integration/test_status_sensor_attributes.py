@@ -77,7 +77,21 @@ def test_the_useful_diagnostics_are_kept():
 
 
 def test_the_name_still_identifies_the_web_server():
-    assert _sensor().name == "Vimar Connection to 192.168.0.13:443"
+    """The web server is identified by the DEVICE now, not by the entity name.
+
+    The entity used to carry the whole label ("Vimar Connection to host:port")
+    because has_entity_name was False, which made that same string the last
+    piece of the entity_id. With has_entity_name=True the entity names only its
+    own function and Home Assistant prepends the device, so what the user reads
+    is still "Vimar WebServer Connection" - and host and port, which were the
+    only information the old name added, are asserted as attributes in
+    test_the_useful_diagnostics_are_kept.
+    """
+    sensor = _sensor()
+
+    assert sensor.has_entity_name is True
+    assert sensor.name == "Connection"
+    assert sensor.device_info["name"] == "Vimar WebServer"
 
 
 def test_no_attribute_leaks_a_secret_looking_value():

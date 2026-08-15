@@ -41,13 +41,13 @@ class VimarScene(VimarEntity, Scene):
                 self._last_activated = dt_util.parse_datetime(last_state.state)
                 _LOGGER.debug(
                     "Scene %s: restored last activation: %s",
-                    self.name,
+                    self.device_name,
                     self._last_activated,
                 )
             except (ValueError, TypeError):
                 _LOGGER.debug(
                     "Scene %s: could not parse restored state '%s'",
-                    self.name,
+                    self.device_name,
                     last_state.state,
                 )
 

@@ -1034,7 +1034,9 @@ class VimarProject:
         else:
             _LOGGER.debug("Unknown: %s / %s", obj_type, device["object_name"])
 
-        friendly_name = self.format_name(device["object_name"])
+        friendly_name = self.device_name_from_object_name(
+            device["object_name"], device.get("room_names")
+        )
         device["device_type"] = device_type
         device["device_class"] = device_class
         device["device_friendly_name"] = friendly_name
@@ -1046,8 +1048,55 @@ class VimarProject:
         device_type = device["device_type"]
         self._platforms_exists[device_type] = self._platforms_exists.get(device_type, 0) + 1
 
+    def device_name_from_object_name(self, name, room_names):
+        """Name a device after what it IS, with the room it sits in removed.
+
+        Home Assistant composes what the user reads from area + device +
+        entity, so a device carrying its own room in its name says it twice:
+        area "Bagnetto" plus device "Bagnetto" gives cover.bagnetto_bagnetto,
+        and no amount of fixing the ENTITY name can help - the duplicate is
+        between the area and the device.
+
+        format_name(), which used to produce this string, made that certain
+        rather than likely. It reordered the bus name to put the location
+        first and DELETED the word naming the function ("TAPPARELLA BAGNETTO"
+        -> "Bagnetto"), because back when this string was also the entity's
+        whole friendly name the domain already said "cover" and the room was
+        the only thing distinguishing one shutter from another. Under the
+        has_entity_name model both halves of that reasoning invert: the room
+        is the area's job, and the function is precisely what a device should
+        be called.
+
+        The room is subtracted using the rooms the web server itself assigns
+        to the object, never guessed from where the words sit in the string:
+        the VIMAR bus name has no structure that holds across installations,
+        which is what made the positional parsing produce "Carichi Globale
+        Controllo" out of "CONTROLLO CARICHI GLOBALE". Every whole word
+        belonging to any of the object's rooms is dropped, so a floor modelled
+        as a second room goes too: "LUCE 11 CUCINA PIANO TERRA" in
+        Cucina/Piano Terra becomes "Luce 11", which Home Assistant then shows
+        as "Cucina Luce 11".
+
+        Falls back to format_name() when the object has no room, where there
+        is no duplication to fix and the old output is left exactly as it was,
+        and when subtracting the room leaves nothing at all - an object named
+        after its room and nothing else ("BAGNETTO" in Bagnetto) still has to
+        be called something.
+        """
+        words = name.split()
+        if words and room_names:
+            room_words = {word.casefold() for room_name in room_names for word in room_name.split()}
+            kept = [word for word in words if word.casefold() not in room_words]
+            if kept:
+                return " ".join(kept).title().strip()
+        return self.format_name(name)
+
     def format_name(self, name):
         """Format device name to remove unused terms.
+
+        Only reached now for objects the web server places in no room at all,
+        and as the fallback of device_name_from_object_name(); see there for
+        why putting the location first is the wrong shape for a device name.
 
         FIX #21: la logica precedente con loop replace() e continue per
         LUCE/LICHT era sbagliata: il continue saltava solo l'iterazione LUCE

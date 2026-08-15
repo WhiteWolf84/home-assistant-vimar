@@ -83,6 +83,7 @@
           "cover_position_mode": "Modalità posizione cover",
           "use_vimar_naming": "Usa nomi dispositivi Vimar",
           "friendly_name_room_name_at_begin": "Anteponi nome stanza ai nomi dispositivi",
+          "room_labels": "Etichetta i dispositivi con la stanza Vimar",
           "devices_lights_re": "Filtro dispositivi luci (regex)",
           "devices_binary_sensor_re": "Filtro sensori binari (regex)"
         }
@@ -92,6 +93,28 @@
         "description": "Opzioni di configurazione avanzate.",
         "data": {
           "delete_and_reload_all_entities": "Forza ricaricamento di tutte le entità (prossimo riavvio)"
+        }
+      },
+      "overrides": {
+        "title": "Override dispositivi",
+        "description": "Regole che cambiano come i dispositivi VIMAR vengono esposti: piattaforma, classe, icona o nome.\n\nRegole attuali ({count}):\n{rules}\n\nSelezionane una per modificarla o eliminarla, scegli \"+ …\" per aggiungerne una, oppure lascia vuoto per continuare. Le regole si applicano in ordine: una regola successiva sovrascrive quanto impostato da una precedente.",
+        "data": {
+          "rule": "Regola"
+        }
+      },
+      "override_edit": {
+        "title": "Override dispositivo {position}",
+        "description": "Attualmente: {current}\n\nSeleziona un dispositivo, poi imposta cosa cambiare. Lascia vuoto un campo per non toccare quell'attributo.",
+        "data": {
+          "filter_field": "Filtra su",
+          "match_mode": "Modo di confronto",
+          "match_value": "Valore da confrontare",
+          "device_type": "Forza piattaforma",
+          "device_class": "Forza classe dispositivo",
+          "icon_on": "Icona (stato acceso)",
+          "icon_off": "Icona (stato spento)",
+          "use_vimar_name": "Usa il nome VIMAR grezzo",
+          "delete": "Elimina questa regola"
         }
       },
       "pins": {
@@ -110,7 +133,9 @@
       "cannot_connect": "Connessione fallita",
       "invalid_cert": "Errore SSL",
       "regex_not_valid": "Espressione regolare non valida",
-      "unknown": "Si è verificato un errore sconosciuto"
+      "unknown": "Si è verificato un errore sconosciuto",
+      "match_value_required": "Inserisci un valore da confrontare, oppure scegli \"all\".",
+      "icon_on_required": "Imposta anche l'icona accesa: un'icona spenta da sola verrebbe mostrata per lo stato acceso."
     }
   },
   "exceptions": {

@@ -122,6 +122,7 @@ class VimarStatusSensor(BinarySensorEntity):
 
     _coordinator: VimarDataUpdateCoordinator
     _attr_should_poll = True
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator: VimarDataUpdateCoordinator):
         """Initialize the sensor.
@@ -135,7 +136,9 @@ class VimarStatusSensor(BinarySensorEntity):
         self._coordinator = coordinator
         vimarconfig = coordinator.vimarconfig
         conn = coordinator.vimarconnection.connection
-        self._attr_name = f"Vimar Connection to {conn.host}:{conn.port}"
+        # Solo la funzione: HA antepone il device ("Vimar WebServer Connection").
+        # Host e porta erano nel nome ma sono gia' negli attributi qui sotto.
+        self._attr_name = "Connection"
         self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
         self._attr_extra_state_attributes = {
             "Host": conn.host,

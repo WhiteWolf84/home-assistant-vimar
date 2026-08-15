@@ -1,5 +1,7 @@
 """Vimar Platform integration."""
 
+from copy import deepcopy
+
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant import config_entries
@@ -24,6 +26,7 @@ from .const import (
     CONF_GLOBAL_CHANNEL_ID,
     CONF_IGNORE_PLATFORM,
     CONF_OVERRIDE,
+    CONF_OVERRIDE_IMPORTED,
     CONF_SCHEMA,
     DEFAULT_CERTIFICATE,
     DEFAULT_PORT,
@@ -92,6 +95,50 @@ async def async_setup(hass: HomeAssistant, config: ConfigType):
     return True
 
 
+def _async_migrate_yaml_overrides(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Move `device_override` out of configuration.yaml and into the entry, once.
+
+    Device overrides were the last setting reachable only from YAML, and not
+    because nobody had written a form for them: async_setup_entry re-read them
+    from `hass.data[DOMAIN_CONFIG_YAML]` on every start and overwrote whatever
+    the entry held, so YAML was not the default source, it was the only one.
+    The entry now owns them, which is what makes a UI possible - and this is
+    how the setting gets there without the user having to retype it.
+
+    The YAML import flow does not cover this case. It only runs when NO entry
+    exists yet (see async_setup), so anyone who set the integration up through
+    the UI and kept their overrides in YAML - the normal state of affairs,
+    since that was the only place they worked - would never have been migrated
+    by it.
+
+    Guarded by a flag rather than by "the entry has no overrides yet": see
+    CONF_OVERRIDE_IMPORTED for why the two are not the same thing. The flag is
+    written even when there is nothing to migrate, because what it records is
+    that the window has closed, so a `device_override:` block added to YAML
+    later is not silently adopted behind the UI's back.
+    """
+    if entry.data.get(CONF_OVERRIDE_IMPORTED):
+        return
+
+    yaml_overrides = (hass.data.get(DOMAIN_CONFIG_YAML) or {}).get(CONF_OVERRIDE) or []
+    data = {**entry.data, CONF_OVERRIDE_IMPORTED: True}
+
+    if yaml_overrides and not entry.data.get(CONF_OVERRIDE):
+        # Deep copy: VimarDeviceCustomizer rewrites the dicts it is handed
+        # (device_override_check turns `filter_*` keys into `filter`/`actions`
+        # entries in place), and these are about to be persisted.
+        data[CONF_OVERRIDE] = deepcopy(yaml_overrides)
+        log.warning(
+            "Imported %d device_override rule(s) from configuration.yaml into the "
+            "Vimar config entry. They are now managed in the integration's options, "
+            "and the `device_override:` block can be removed from configuration.yaml - "
+            "it will no longer be read",
+            len(yaml_overrides),
+        )
+
+    hass.config_entries.async_update_entry(entry, data=data)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Vimar from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -101,19 +148,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         unique_id = slugify(entry.title)
         hass.config_entries.async_update_entry(entry, unique_id=unique_id)
 
+    # Before anything reads the config: the entry is the only source of device
+    # overrides from here on, so whatever is still in YAML has to be moved in
+    # first. Runs before the coordinator exists and before the update listener
+    # is registered (below), so the async_update_entry it may perform cannot
+    # trigger a reload underneath us.
+    _async_migrate_yaml_overrides(hass, entry)
+
     vimarconfig = (entry.options or {}).copy()
     if CONF_HOST not in vimarconfig:
         vimarconfig.update(entry.data or {})
 
-    # Copy CONF_OVERRIDE from YAML only when present and not None.
-    # FIX #5: using `yamlconf.get(cfg) or []` instead of `yamlconf.get(cfg)`
-    # avoids storing None in vimarconfig when the key is absent from YAML.
-    # dict.get() returns None both when the key is missing AND when its value
-    # is explicitly None, so the old fallback default=[] had no effect in
-    # the second case, causing VimarDeviceCustomizer to receive None and crash.
-    yamlconf = hass.data.get(DOMAIN_CONFIG_YAML, {})
-    for cfg in [CONF_OVERRIDE]:
-        vimarconfig[cfg] = yamlconf.get(cfg) or []
+    # No YAML fallback here on purpose. It used to overwrite the key
+    # unconditionally, which meant an override could ONLY ever come from
+    # configuration.yaml - the config entry had no say, and storing overrides
+    # in it would have been silently pointless. Anything still in YAML has been
+    # migrated into the entry above; consulting it again afterwards would
+    # resurrect rules the user has since deleted in the UI.
+    vimarconfig[CONF_OVERRIDE] = vimarconfig.get(CONF_OVERRIDE) or []
 
     coordinator = VimarDataUpdateCoordinator(hass, entry=entry, vimarconfig=vimarconfig)
     hass.data[DOMAIN][entry.entry_id] = coordinator

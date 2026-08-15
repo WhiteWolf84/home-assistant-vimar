@@ -14,6 +14,225 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.2] - 2026-08-15
+
+> First stable release since `2026.8.1`. It contains everything from the
+> `2026.8.2b0`–`b4` pre-releases. The sections below describe the net effect of
+> upgrading from `2026.8.1`; the individual pre-release entries are kept
+> further down for reference.
+>
+> **One thing needs your attention** — the security fix below asks you to
+> change your web server password. Everything else requires no action: no
+> entity is renamed against your wishes, no entity ID moves, and nothing you
+> have recorded is lost.
+
+### Security
+
+- **Your web server password could end up in `home-assistant.log` in plain text, and should be changed.** The login was sent with the credentials in the URL. That is how the VIMAR web server expects to be called, and the integration already stripped credentials from everything *it* writes to the log — but when a login timed out, urllib3 logged its own retry warning first, full URL included, before the failure ever reached the integration's code. A single slow response during startup was enough. The login now travels in the request body, so the URL carries nothing at all and there is nothing left in it to leak, whichever component does the logging.
+
+  **What to do:** if you have ever shared a log — a GitHub issue, a forum post, a support chat — treat the password as exposed. Change it on the web server, then update it in the integration's settings. Logs already on disk still contain it.
+
+### Changed
+
+- **Devices are named after what they are, not after the room they are in.** A shutter on the bus called `TAPPARELLA BAGNETTO` was registered as the device **Bagnetto**: the word naming the function was discarded and the room was kept. Home Assistant already puts the area in front of a device, so it read as "Bagnetto Bagnetto". It is now the device **Tapparella** in the area **Bagnetto**. **A device you have renamed yourself keeps your name** — that has always won and still does.
+- **Entities name only their own function.** A shutter, a thermostat, a switch or a scene names nothing at all — it *is* its device — and a sensor names just the quantity it measures. Previously every entity republished its device's name, which is why *Recreate entity IDs* produced things like `cover.bagnetto_tapparella_tapparella`. **Your existing entity IDs do not change**; the new naming applies to entities created from now on, and to existing ones only if you ask for it (see below).
+- **The VIMAR room is kept as a label on each device**, so it stays usable even though it is no longer part of the name: an automation or script can target `label_id: bagnetto` and reach every Vimar device in that room without listing them. It can be switched off in the options.
+- Only one name changes on the day you upgrade: the connection sensor, from `Vimar Connection to 192.168.x.x:443` to **Vimar WebServer Connection**. The address and port it used to carry in its name have always been available as attributes.
+- Names that made no sense are fixed as a side effect: the old rule assumed every bus name was written *type – number – room – floor*, which turned `CONTROLLO CARICHI GLOBALE` into "Carichi Globale Controllo". Nothing is reordered any more.
+
+### Added
+
+- **Device overrides can be managed from the integration's options**, on a screen of their own — the rules that force a device onto a different platform, give it a device class, set its icon or use the raw VIMAR name. They used to be writable only by hand in `configuration.yaml`.
+- **Rules already in `configuration.yaml` are imported for you** on the first start, once, with a line in the log confirming it. The `device_override:` block can then be removed. It had to live in YAML before: whatever the config entry held was overwritten from YAML on every start, so YAML was not the default place for overrides, it was the only place they worked.
+
+### Fixed
+
+- A device override no longer accumulates a duplicate copy of its own actions on every reload of the integration.
+- Overrides are validated before they are saved: an empty value to match, or a regular expression that cannot compile, is reported on the field. An uncompilable expression used to be written to a log line and then quietly never match anything.
+
+### After upgrading
+
+Nothing here is required, and everything up to step 2 is reversible.
+
+1. Change the web server password (see **Security** above).
+2. Restart and check your entities read as you expect. Entity IDs, history and long-term statistics are untouched.
+3. If you renamed entities by hand to work around the old naming, you can clear those names now — Home Assistant will fall back to the device name, which is what you were writing out manually. Do this *after* step 2, not before, or those entities will briefly show both names at once.
+4. Only if you want the cleaner entity IDs: **Settings → Devices → Entities → Recreate entity IDs**, reading the preview before confirming. This is the one step that does change entity IDs, so anything referring to them by name — automations, scripts, dashboards — has to be updated. Recorded history and statistics follow the rename on their own.
+
+### Known limitation
+
+On a fresh installation, where devices still carry the names the integration
+gives them, the device itself is named after its room — so an area and a device
+can still contribute the same word (`cover.bagnetto_bagnetto`). If you have
+renamed your devices, you will not see this. Naming devices after their function
+rather than their room is a separate change and is not in this release.
+
+Every request after the login still carries the session id in its URL, and that
+is a credential too for as long as it lasts. It is stripped from everything the
+integration logs, but the same urllib3 gap applies to it. Shorter-lived and
+harder to abuse than the password, and being looked at separately.
+
+---
+
+## [2026.8.2b4] - 2026-08-15
+
+> **Beta.** Includes everything in `2026.8.2b3`. One security fix: your web
+> server password is no longer written to `home-assistant.log` when the login
+> times out. **If you have ever attached a log to an issue, or shared one,
+> change your VIMAR web server password.**
+
+### Security
+
+- **The web server password could end up in `home-assistant.log` in plain text.** The login was sent as a `GET` with the credentials in the query string, which is how `user_login.php` is normally called. When the login timed out, urllib3 logged its own retry warning — including the full URL, password and all:
+
+  ```text
+  WARNING [urllib3.connectionpool] Retrying ... after connection broken by
+  'ReadTimeoutError(...)': /vimarbyweb/modules/system/user_login.php?sessionid=
+  &username=HomeAssistant&password=<your password here>&remember=0&op=login
+  ```
+
+  The integration already stripped credentials from everything *it* logs, but that warning comes from urllib3's own logger, before the failure ever reaches the integration's code, so nothing on this side could catch it. A single slow response during startup was enough — and `home-assistant.log` is a file people routinely attach to bug reports.
+
+  The login is now sent as a `POST` with the credentials in the request body, so the URL carries nothing at all and there is no longer anything in it to leak, whichever component does the logging. Confirmed against real hardware (01945): the web server reads the parameters either way and returns the same session.
+
+  **What to do:** if you have shared a log — a GitHub issue, a forum post, a support chat — treat the password as exposed and change it on the web server, then update it in the integration's settings. Existing logs on disk still contain it.
+
+### Changed
+
+- Internal: nothing about how you configure or use the integration changes. Test count 504 → 505, and what the tests assert is now stronger — that the login URL is empty, rather than that its query string is correctly encoded.
+
+> **Still in the URL:** every request after the login carries the session id as
+> a query parameter, and that is a credential too for as long as it lasts. It
+> is stripped from everything the integration logs, but the same urllib3 gap
+> applies to it. Shorter-lived and harder to abuse than the password, and being
+> looked at separately.
+
+---
+
+## [2026.8.2b3] - 2026-08-15
+
+> **Beta.** Includes everything in `2026.8.2b2`. Device overrides move out of
+> `configuration.yaml` and into the integration's own settings, and your
+> existing rules are brought across for you on the first restart — there is
+> nothing to retype.
+
+### Added
+
+- **Device overrides can be managed from the integration's options.** These are the rules that change how a VIMAR device is exposed — forcing it onto a different platform, giving it a device class, setting its icon, or using the raw VIMAR name. Until now they could only be written by hand in `configuration.yaml`. There is now a screen listing your rules, and a form to add, change or delete one. Rules still apply in order, and a later rule still overwrites what an earlier one set, so the list is shown and edited in that order.
+- Rules are checked before they are saved: an empty value to match, or a regular expression that cannot compile, is reported on the field instead of being accepted. A regular expression that does not compile used to be written to a log line and then quietly never match anything.
+
+### Fixed
+
+- **Device overrides written in `configuration.yaml` are now imported into the integration.** They had to live in YAML: whatever the config entry held was overwritten from YAML on every single start, so YAML was not merely the default place for them, it was the only place they could work. On the first start after this release your rules are copied across and a line in the log tells you the `device_override:` block can be removed. The import happens once and once only — deleting every rule in the UI afterwards does not bring the YAML ones back.
+- A device override no longer accumulates a duplicate copy of its own actions on every reload of the integration. The rules were being handed to the parser as-is, and the parser rewrites what it is given, so each reload re-parsed rules it had already parsed. Nothing behaved differently as a result — applying the same change twice looks like applying it once — but the list grew for as long as Home Assistant stayed up.
+
+### Changed
+
+- If you keep both a `device_override:` block in YAML and rules in the options, only the options are read from now on. This is the point of the change: one place, editable, that does not need a restart to try something.
+- The options form covers the rules people actually write, not the whole override language. A rule using a regular expression substitution, or filtering on a field with no control on the form, stays listed and editable — the parts the form does not know about are carried across untouched rather than dropped — but those parts can still only be written in YAML.
+- Internal: the rule/form conversion lives in its own module and is covered on its own, including that every rule in a real installation survives being opened and saved unchanged. Test count 452 → 504.
+
+> **Beta.** Includes everything in `2026.8.2b1`. That release took the room out
+> of the device name; this one makes sure the room is not *lost* in the
+> process — it is now kept as a label on the device.
+
+### Added
+
+- **Every device is tagged with the VIMAR room it belongs to, as a Home Assistant label.** The area answers "where do I want this device", and you can reorganise it freely. The label answers "which room does VIMAR say this is", which is the web server's own answer and now stays usable: you can target a label directly in an automation, a script or a service call, so `label_id: bagnetto` reaches every Vimar device in that room without listing any of them. You can also filter by it on the devices page.
+- A new setting, **Tag devices with their Vimar room**, in the second options screen. It is on by default. Turning it off stops the integration touching labels; labels already applied are left where they are, since by then you may have started using them.
+
+### How it treats labels you created yourself
+
+Labels belong to you, so the integration keeps to a narrow lane:
+
+- it only ever touches labels named after a room of *this* web server, and only on devices it owns — the web server hub and the SAI alarm belong to no room and are never labelled;
+- every other label on a device is carried across untouched;
+- a device that changes room in VIMAR loses its previous room label and gains the new one, instead of collecting every room it has ever been in;
+- nothing is written when nothing changed, so a restart does not churn the registry.
+
+The one thing it cannot do is take no for an answer on a single device: delete a room label and it comes back on the next reload. Turn the setting off if you do not want them.
+
+### Changed
+
+- Internal: the rule and its wiring are covered by tests, including that it runs *after* the devices exist — too early and it would silently do nothing. Test count 442 → 452.
+
+---
+
+## [2026.8.2b1] - 2026-08-14
+
+> **Beta.** Includes everything in `2026.8.2b0` and finishes the job it started:
+> `2026.8.2b0` stopped entities from repeating their device, this one stops
+> devices from repeating their room. **If you have renamed your devices in Home
+> Assistant, nothing changes for you** — your names win, as they always have.
+
+### Fixed
+
+- **Devices are now named after what they are, not after the room they are in.** A shutter on the bus called `TAPPARELLA BAGNETTO` was registered as the device **Bagnetto** — the word naming the function was deleted and the room was kept. Home Assistant already prefixes a device with its area, so that device read as "Bagnetto Bagnetto", and the previous beta could not reach it: the repetition was between the *area* and the *device*, not inside the entity. It is now registered as **Tapparella**, in the area **Bagnetto**. The room is subtracted using the rooms the web server itself assigns to the object, so a floor modelled as a second room goes too: `LUCE 11 CUCINA PIANO TERRA` in Cucina/Piano Terra becomes **Luce 11**.
+- Names that made no sense are fixed as a side effect. The old rule assumed every bus name was written as *type – number – room – floor* and reordered it accordingly, which turned `CONTROLLO CARICHI GLOBALE` into "Carichi Globale Controllo". Nothing is reordered any more.
+
+### Changed
+
+- **Objects the web server places in no room keep exactly the name they had.** There is no area for them to collide with, so the old behaviour is left untouched — including where it produces an awkward name.
+- An object named after its room and nothing else (`BAGNETTO`, in Bagnetto) also keeps its old name: subtracting the room would leave it with none.
+- The two naming options in the integration's settings are unchanged and still do what they say — but be aware that both put the room back into the device name, and therefore back into the entity ID. **Use Vimar device names** takes the bus name verbatim, room included. **Prepend room name to device names** adds it deliberately. Neither is on by default. Note also that changing either one is what tells the integration to delete and re-create every entity on the next restart, so do not toggle them to "have a look".
+- If you filter devices into the light or binary sensor platforms with a regular expression, check it still matches. Those expressions are tested against the device name, and that name no longer contains the room — a filter written as `Cucina` will stop matching.
+- Internal: the rule and its wiring are covered by tests, including the cases where it deliberately changes nothing. Test count 421 → 442.
+
+### After installing
+
+The same as `2026.8.2b0`, and for the same reason: nothing is renamed against
+your wishes, and no entity ID moves until you ask for it.
+
+Devices you have renamed in Home Assistant keep your name — the integration has
+never been able to override that. Devices still carrying the name the
+integration gave them will be renamed in place, keeping their identity, their
+area, their entities and their history. If you would rather keep an old name,
+rename that device by hand and it will stick.
+
+---
+
+## [2026.8.2b0] - 2026-08-14
+
+> **Beta.** Changes how entities are named internally, so that Home Assistant
+> can build sensible entity IDs for them. **Nothing is renamed and nothing is
+> lost when you install it** — one entity changes the name it displays, and
+> that is the whole of the immediate effect. The useful part is what it lets
+> you do afterwards, deliberately, if you want to; see *After installing* below.
+
+### Fixed
+
+- **Entity IDs no longer repeat the same word twice.** Home Assistant builds the ID of a new entity from the area, the device and the entity's own name, and offers a *Recreate entity IDs* button that rebuilds them. That only works if an entity names its own function and lets Home Assistant supply the rest. This integration did the opposite: every entity's name was the *same string* it already published as its device name, so the device word was counted twice and you would get `cover.bagnetto_tapparella_tapparella` or `climate.cameretta_termostato_termostato`. Entities now name only what they are: a shutter, a thermostat, a switch or a scene names nothing at all — it *is* its device — and a sensor names only the quantity it measures.
+- **Energy and load-control sensors no longer depend on a lucky guess.** The sensors on a `CH_Misuratore`, `CH_Carichi_3F` or `CH_Carichi_Custom` device were named by pasting the room in front of the measurement (`Bagno Padronale Dynamic Mode`). Many of them looked correct in the entity list only because Home Assistant quietly removes the device name when a name happens to start with it — an assumption that stops holding the moment you rename the device, and which was already not holding for every meter. They now publish just the measurement (`Dynamic Mode`, `Forzatura`, `Autoconsumo Totale`) and let Home Assistant do the prefixing. **What you see does not change.**
+
+### Changed
+
+- The web server connection sensor is now called **Vimar WebServer Connection** instead of `Vimar Connection to 192.168.x.x:443`. This is the only name that changes on installing this release. The address and port it used to carry in its name have been available as attributes on the sensor all along, and still are.
+- The alarm entities (`SAI Alarm` areas and zones) are unchanged: they already named themselves correctly and were the model the rest of the integration has now been brought in line with.
+- Internal: the naming contract is pinned by tests, including the specific trap that caused this — a `name` property anywhere in the entity hierarchy silently overrides the new declaration, with no error to warn you. Test count 409 → 421.
+
+### After installing
+
+Nothing here is required. Your entity IDs, your history and your statistics are
+untouched by the upgrade itself, and stay untouched until you choose otherwise.
+
+If you *want* to take up the clean entity IDs this release makes possible, the
+order matters:
+
+1. Back up `.storage/core.entity_registry` and `.storage/core.device_registry`.
+2. Install this release and restart. Check that your entities read as you expect. Everything up to this point is reversible.
+3. If you have renamed entities by hand to work around the old naming, clear those names now — not before step 2, or those entities will briefly display both names at once. Home Assistant will fall back to the device name, which is what you were writing out manually.
+4. Only then, and only if you want it: **Settings → Devices → Entities → Recreate entity IDs**. Read the preview before confirming. This step *does* change entity IDs, so any automation, script or dashboard referring to them by name has to be updated. Recorded history and long-term statistics follow the rename automatically; references in your own configuration do not.
+
+### Known limitation
+
+On a fresh installation, where devices still carry the names the integration
+gives them, the device itself is named after its room — so an area and a device
+can still contribute the same word (`cover.bagnetto_bagnetto`). If you have
+renamed your devices, you will not see this. Naming devices after their function
+rather than their room is a separate change and is not in this release.
+
+---
+
 ## [2026.8.1] - 2026-08-12
 
 > First stable release since `2026.8.0`. It contains everything from the

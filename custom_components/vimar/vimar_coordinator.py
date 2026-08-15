@@ -8,7 +8,9 @@ import hashlib
 import json
 import logging
 import time
+from copy import deepcopy
 from datetime import timedelta
+from typing import cast
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -25,6 +27,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -36,10 +39,12 @@ from .const import (
     CONF_GLOBAL_CHANNEL_ID,
     CONF_IGNORE_PLATFORM,
     CONF_OVERRIDE,
+    CONF_ROOM_LABELS,
     CONF_SECURE,
     DEFAULT_CERTIFICATE,
     DEFAULT_CLIMATE_REFRESH_INTERVAL,
     DEFAULT_ENERGY_REFRESH_INTERVAL,
+    DEFAULT_ROOM_LABELS,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_TIMEOUT,
     DEVICE_TYPE_BINARY_SENSOR,
@@ -816,7 +821,15 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             certificate = vimarconfig.get(CONF_CERTIFICATE, DEFAULT_CERTIFICATE)
         timeout = vimarconfig.get(CONF_TIMEOUT)
         global_channel_id = vimarconfig.get(CONF_GLOBAL_CHANNEL_ID)
-        device_overrides = vimarconfig.get(CONF_OVERRIDE) or []
+        # Deep copy, not the caller's list. VimarDeviceCustomizer rewrites the
+        # dicts it is handed: device_override_check() turns each `filter_*` key
+        # into entries under `filter`/`filter_re` and appends to `actions`, in
+        # place. Handing it the config's own dicts meant a reload parsed
+        # already-parsed rules - `actions` is only initialised when absent, so a
+        # second pass appended a duplicate of every action instead of resetting
+        # them - and, now that overrides live in the config entry rather than in
+        # a YAML dict, would rewrite entry.data with the parser's internals.
+        device_overrides = deepcopy(vimarconfig.get(CONF_OVERRIDE) or [])
 
         vimarconnection = VimarLink(schema, host, port, username, password, certificate, timeout)
         device_customizer = VimarDeviceCustomizer(vimarconfig, device_overrides)
@@ -912,6 +925,76 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._platforms_registered = True
         if len(self.devices_for_platform) > 0:
             await self.async_remove_old_devices()
+        self._async_apply_room_labels()
+
+    def _async_apply_room_labels(self) -> None:
+        """Tag every device with the VIMAR room it sits in, as an HA label.
+
+        The room used to BE the device name: "TAPPARELLA BAGNETTO" was
+        registered as the device "Bagnetto". It no longer is, because Home
+        Assistant already prefixes a device with its area and the name said it
+        twice - but the room is data the web server hands us, and dropping it
+        from the name should not mean throwing it away.
+
+        A label is where it belongs. The area answers "where does this device
+        live", which the user may reorganise freely; the label answers "which
+        room does VIMAR say this is", which is the web server's own answer and
+        stays addressable: automations, scripts and service calls can target a
+        label directly, so `label_id: bagnetto` reaches every Vimar device in
+        that room without listing them.
+
+        Only labels named after a room of THIS web server are ever touched, and
+        only on the devices this integration owns. A device that moved room in
+        VIMAR loses its previous room label and gains the new one; every other
+        label on it - the user's own - is carried across untouched. Nothing is
+        written when nothing changed, so a restart is a no-op.
+
+        The one thing this cannot do is stay out of the way if the user deletes
+        the label: it will be recreated on the next reload. That is what the
+        `room_labels` option is for.
+        """
+        if not self.vimarconfig.get(CONF_ROOM_LABELS, DEFAULT_ROOM_LABELS):
+            return
+        if not self.vimarproject.devices:
+            return
+
+        rooms_by_device: dict[str, str] = {}
+        for device_id, device in self.vimarproject.devices.items():
+            room = (device.get("room_friendly_name") or "").strip()
+            if room:
+                rooms_by_device[device_id] = room
+        if not rooms_by_device:
+            return
+
+        label_registry = lr.async_get(self.hass)
+        label_ids: dict[str, str] = {}
+        for room in set(rooms_by_device.values()):
+            label = label_registry.async_get_label_by_name(room)
+            if label is None:
+                label = label_registry.async_create(room)
+            label_ids[room] = label.label_id
+        # The labels this integration considers its own. Subtracting the whole
+        # set before adding the right one is what lets a device change room
+        # without accumulating every room it has ever been in.
+        managed_label_ids = set(label_ids.values())
+
+        device_registry = dr.async_get(self.hass)
+        prefix = self.entity_unique_id_prefix or ""
+        relabelled = 0
+        for device_id, room in rooms_by_device.items():
+            # Three elements where Home Assistant's own type says two, matching
+            # how VimarEntity.device_info registers them.
+            identifiers = cast("set[tuple[str, str]]", {(DOMAIN, prefix, device_id)})
+            device_entry = device_registry.async_get_device(identifiers=identifiers)
+            if device_entry is None:
+                continue
+            labels = (device_entry.labels - managed_label_ids) | {label_ids[room]}
+            if labels != device_entry.labels:
+                device_registry.async_update_device(device_entry.id, labels=labels)
+                relabelled += 1
+
+        if relabelled:
+            log.info("Applied VIMAR room labels to %d devices", relabelled)
 
     def _reload_entry_if_devices_changed(self):
         if self.vimarproject:

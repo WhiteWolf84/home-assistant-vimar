@@ -60,8 +60,13 @@ def test_the_same_session_is_reused_across_requests():
     conn = _connection()
 
     with requests_mock.Mocker() as mock:
-        mock.get(requests_mock.ANY, text=LOGIN_OK_XML)
-        mock.post(requests_mock.ANY, text="<xml><result>ok</result></xml>")
+        # Both are POSTs now - login moved off the query string to keep the
+        # credentials out of every URL - so they are matched by path, not verb.
+        mock.post(
+            "https://192.168.0.13:443/vimarbyweb/modules/system/user_login.php",
+            text=LOGIN_OK_XML,
+        )
+        mock.post("https://192.168.0.13:443/cgi-bin/dpadws", text="<xml><result>ok</result></xml>")
         for _ in range(5):
             conn.login()
             conn._request("https://192.168.0.13:443/cgi-bin/dpadws", post="<soap/>")
