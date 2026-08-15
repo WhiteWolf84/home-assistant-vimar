@@ -14,6 +14,66 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.2] - 2026-08-15
+
+> First stable release since `2026.8.1`. It contains everything from the
+> `2026.8.2b0`–`b4` pre-releases. The sections below describe the net effect of
+> upgrading from `2026.8.1`; the individual pre-release entries are kept
+> further down for reference.
+>
+> **One thing needs your attention** — the security fix below asks you to
+> change your web server password. Everything else requires no action: no
+> entity is renamed against your wishes, no entity ID moves, and nothing you
+> have recorded is lost.
+
+### Security
+
+- **Your web server password could end up in `home-assistant.log` in plain text, and should be changed.** The login was sent with the credentials in the URL. That is how the VIMAR web server expects to be called, and the integration already stripped credentials from everything *it* writes to the log — but when a login timed out, urllib3 logged its own retry warning first, full URL included, before the failure ever reached the integration's code. A single slow response during startup was enough. The login now travels in the request body, so the URL carries nothing at all and there is nothing left in it to leak, whichever component does the logging.
+
+  **What to do:** if you have ever shared a log — a GitHub issue, a forum post, a support chat — treat the password as exposed. Change it on the web server, then update it in the integration's settings. Logs already on disk still contain it.
+
+### Changed
+
+- **Devices are named after what they are, not after the room they are in.** A shutter on the bus called `TAPPARELLA BAGNETTO` was registered as the device **Bagnetto**: the word naming the function was discarded and the room was kept. Home Assistant already puts the area in front of a device, so it read as "Bagnetto Bagnetto". It is now the device **Tapparella** in the area **Bagnetto**. **A device you have renamed yourself keeps your name** — that has always won and still does.
+- **Entities name only their own function.** A shutter, a thermostat, a switch or a scene names nothing at all — it *is* its device — and a sensor names just the quantity it measures. Previously every entity republished its device's name, which is why *Recreate entity IDs* produced things like `cover.bagnetto_tapparella_tapparella`. **Your existing entity IDs do not change**; the new naming applies to entities created from now on, and to existing ones only if you ask for it (see below).
+- **The VIMAR room is kept as a label on each device**, so it stays usable even though it is no longer part of the name: an automation or script can target `label_id: bagnetto` and reach every Vimar device in that room without listing them. It can be switched off in the options.
+- Only one name changes on the day you upgrade: the connection sensor, from `Vimar Connection to 192.168.x.x:443` to **Vimar WebServer Connection**. The address and port it used to carry in its name have always been available as attributes.
+- Names that made no sense are fixed as a side effect: the old rule assumed every bus name was written *type – number – room – floor*, which turned `CONTROLLO CARICHI GLOBALE` into "Carichi Globale Controllo". Nothing is reordered any more.
+
+### Added
+
+- **Device overrides can be managed from the integration's options**, on a screen of their own — the rules that force a device onto a different platform, give it a device class, set its icon or use the raw VIMAR name. They used to be writable only by hand in `configuration.yaml`.
+- **Rules already in `configuration.yaml` are imported for you** on the first start, once, with a line in the log confirming it. The `device_override:` block can then be removed. It had to live in YAML before: whatever the config entry held was overwritten from YAML on every start, so YAML was not the default place for overrides, it was the only place they worked.
+
+### Fixed
+
+- A device override no longer accumulates a duplicate copy of its own actions on every reload of the integration.
+- Overrides are validated before they are saved: an empty value to match, or a regular expression that cannot compile, is reported on the field. An uncompilable expression used to be written to a log line and then quietly never match anything.
+
+### After upgrading
+
+Nothing here is required, and everything up to step 2 is reversible.
+
+1. Change the web server password (see **Security** above).
+2. Restart and check your entities read as you expect. Entity IDs, history and long-term statistics are untouched.
+3. If you renamed entities by hand to work around the old naming, you can clear those names now — Home Assistant will fall back to the device name, which is what you were writing out manually. Do this *after* step 2, not before, or those entities will briefly show both names at once.
+4. Only if you want the cleaner entity IDs: **Settings → Devices → Entities → Recreate entity IDs**, reading the preview before confirming. This is the one step that does change entity IDs, so anything referring to them by name — automations, scripts, dashboards — has to be updated. Recorded history and statistics follow the rename on their own.
+
+### Known limitation
+
+On a fresh installation, where devices still carry the names the integration
+gives them, the device itself is named after its room — so an area and a device
+can still contribute the same word (`cover.bagnetto_bagnetto`). If you have
+renamed your devices, you will not see this. Naming devices after their function
+rather than their room is a separate change and is not in this release.
+
+Every request after the login still carries the session id in its URL, and that
+is a credential too for as long as it lasts. It is stripped from everything the
+integration logs, but the same urllib3 gap applies to it. Shorter-lived and
+harder to abuse than the password, and being looked at separately.
+
+---
+
 ## [2026.8.2b4] - 2026-08-15
 
 > **Beta.** Includes everything in `2026.8.2b3`. One security fix: your web
