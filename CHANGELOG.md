@@ -14,6 +14,41 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.8.2b4] - 2026-08-15
+
+> **Beta.** Includes everything in `2026.8.2b3`. One security fix: your web
+> server password is no longer written to `home-assistant.log` when the login
+> times out. **If you have ever attached a log to an issue, or shared one,
+> change your VIMAR web server password.**
+
+### Security
+
+- **The web server password could end up in `home-assistant.log` in plain text.** The login was sent as a `GET` with the credentials in the query string, which is how `user_login.php` is normally called. When the login timed out, urllib3 logged its own retry warning — including the full URL, password and all:
+
+  ```text
+  WARNING [urllib3.connectionpool] Retrying ... after connection broken by
+  'ReadTimeoutError(...)': /vimarbyweb/modules/system/user_login.php?sessionid=
+  &username=HomeAssistant&password=<your password here>&remember=0&op=login
+  ```
+
+  The integration already stripped credentials from everything *it* logs, but that warning comes from urllib3's own logger, before the failure ever reaches the integration's code, so nothing on this side could catch it. A single slow response during startup was enough — and `home-assistant.log` is a file people routinely attach to bug reports.
+
+  The login is now sent as a `POST` with the credentials in the request body, so the URL carries nothing at all and there is no longer anything in it to leak, whichever component does the logging. Confirmed against real hardware (01945): the web server reads the parameters either way and returns the same session.
+
+  **What to do:** if you have shared a log — a GitHub issue, a forum post, a support chat — treat the password as exposed and change it on the web server, then update it in the integration's settings. Existing logs on disk still contain it.
+
+### Changed
+
+- Internal: nothing about how you configure or use the integration changes. Test count 504 → 505, and what the tests assert is now stronger — that the login URL is empty, rather than that its query string is correctly encoded.
+
+> **Still in the URL:** every request after the login carries the session id as
+> a query parameter, and that is a credential too for as long as it lasts. It
+> is stripped from everything the integration logs, but the same urllib3 gap
+> applies to it. Shorter-lived and harder to abuse than the password, and being
+> looked at separately.
+
+---
+
 ## [2026.8.2b3] - 2026-08-15
 
 > **Beta.** Includes everything in `2026.8.2b2`. Device overrides move out of
