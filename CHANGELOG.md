@@ -14,6 +14,27 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0b5] - 2026-10-05
+
+> **Beta.** Replaces `2026.10.0b4`, which **did not start**: on a real
+> installation setup failed with `Error communicating with API: 'GID'` and
+> the whole integration stayed down. Includes everything announced for
+> `2026.10.0b4` (stable SAI2 unique_ids, area number from the control unit,
+> zone attribute `excluded`, zone naming convention): read its notes.
+> b4 never got as far as migrating the registry, so the migration runs on the
+> first start of b5.
+>
+> **Before upgrading, make a backup** of Home Assistant. **After upgrading,
+> check that the entity_ids of the SAI2 areas and zones are unchanged**
+> (Settings → Entities, filter "SAI"), and that no new `_2` entity appeared.
+
+### Fixed
+
+- **2026.10.0b4 did not start (`'GID'`).** The new SAI2 queries that read the area/zone numbers selected table-qualified columns without an alias (`G.GID`), and the web server returned them under another name, so reading `GID` failed. Every column now has an explicit alias, as in every other query of the integration, and the SAI2 rows are read even if a column comes back with a table qualifier.
+- **A SAI2 error no longer stops the whole integration.** Loading the alarm areas and zones is isolated from the rest of the setup and of the poll: on an error it is logged (`ERROR`, with the cause), the areas and zones are unavailable, and lights, covers, climate and the rest start normally. The SAI2 entities and the "SAI Alarm" device stay in the entity registry with their settings, and come back at the next successful load.
+
+---
+
 ## [2026.10.0b4] - 2026-10-05
 
 > **Beta.** Includes everything in `2026.10.0b3`. SAI2 areas and zones get
