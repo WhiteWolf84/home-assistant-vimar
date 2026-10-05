@@ -12,16 +12,37 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+---
+
+## [2026.10.0b4] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b3`. SAI2 areas and zones get
+> **stable unique_ids**, so reprogramming the control unit no longer creates
+> `_2` entities, and commands target the area number from the control unit.
+> **Breaking:** the zone attribute `memory` is now `excluded`.
+>
+> **Before upgrading, make a backup** of Home Assistant: the first start
+> migrates the SAI2 entries of the entity registry. **After upgrading, check
+> that the entity_ids of the SAI2 areas and zones are unchanged** (Settings →
+> Entities, filter "SAI"), and that no new `_2` entity appeared.
+
+### Breaking change
+
+- **Zone attribute `memory` renamed to `excluded`.** Bit 2 of a zone value is the zone's exclusion from the armed mode, not an alarm memory: with the areas armed INT, the volumetric detectors excluded in INT reported it on every detection while no area was ever triggered. The web server only refreshes a zone's value on an event of that zone, so the attribute turns on at the zone's first event after arming. Automations or templates reading `memory` must use `excluded`.
+
 ### Fixed
 
 - **SAI2 commands could arm or disarm the wrong area after the control unit was reprogrammed.** The area a command targets was found by counting the areas in web server ID order. A reprogramming recreates the areas under new IDs, which need not sort the same way (on 2026-10-05 all three areas were renumbered and happened to keep their order). The area number now comes from the control unit itself (the object's `MSP`), shown in the `area_index` attribute.
 - **SAI2 areas and zones no longer turn into new `_2` entities when the control unit is reprogrammed.** Their unique_ids now use the area/zone number on the control unit instead of the web server ID: `vimar_<entry>_sai2_area_<n>` and `vimar_<entry>_sai2_zone_<n>`. Existing entities are migrated at startup and keep their entity_id. An entity already replaced by a `_2` copy gets its original entity_id back, with the name, icon, device class, area, labels and aliases it had, where the copy has not set them itself.
-- **Zone attribute `memory` renamed to `excluded`.** Bit 2 of a zone value is the zone's exclusion from the armed mode, not an alarm memory: with the areas armed INT, the volumetric detectors excluded in INT reported it on every detection while no area was ever triggered. The web server only refreshes a zone's value on an event of that zone, so the attribute turns on at the zone's first event after arming. Automations or templates reading `memory` must use `excluded`.
 - **Zone device class:** a zone named `vol.` is always `motion`, so `vol. garage` is no longer a garage door. The web server does not say what kind of detector a zone is, so the class is still guessed from the name. Since the IDs are now stable, a class you set yourself in Home Assistant ("Show as") is no longer lost when the control unit is reprogrammed.
 
 ### Added
 
 - **Recommended zone naming convention.** A zone name starting with `Tenda` or `Vol` is `motion`, `Cont.` is `door` (`garage_door` if the name contains `basculante`, `garag` or `sezional`), `Manom.` is `tamper`, `Virt.` (a wired zone driven by an external system, e.g. an ESP32 controlled by Home Assistant) is `safety`, before any other rule. A prefix counts only as a whole word, followed by a space, a dot or the end of the name (`Vol sala` yes, `Voliera` no). Names without one of these prefixes keep the previous keyword rules. See the README.
+
+### Behaviour change
+
+- **Some zones may show a different device class.** `vol.` now wins over every other keyword (`vol. garage` was a garage door, now `motion`), and a known prefix decides on its own. A class you set yourself in Home Assistant ("Show as") is not affected.
 
 ---
 
