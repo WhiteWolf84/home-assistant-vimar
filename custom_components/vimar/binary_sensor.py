@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.components.binary_sensor import (
@@ -32,15 +33,22 @@ _LOGGER = logging.getLogger(__name__)
 #
 # Recommended naming convention (see the README): the zone name starts with
 # the detector type. A known prefix decides the device class on its own,
-# before any other rule. Checked case-insensitively.
-_DEVICE_CLASS_PREFIXES: list[tuple[str, BinarySensorDeviceClass]] = [
-    ("tenda", BinarySensorDeviceClass.MOTION),
-    ("vol", BinarySensorDeviceClass.MOTION),
-    ("cont.", BinarySensorDeviceClass.DOOR),  # garage_door: see _guess_device_class
-    ("manom.", BinarySensorDeviceClass.TAMPER),
-]
-# A contact on the garage door. "garag" because 16 characters often cut it.
-_GARAGE_KEYWORDS = ("basculante", "garag")
+# before any other rule. Checked case-insensitively, and only as a whole word:
+# followed by a space, a dot or the end of the name ("Vol sala", "Vol.",
+# not "Voliera").
+_DEVICE_CLASS_PREFIXES: dict[str, BinarySensorDeviceClass] = {
+    "tenda": BinarySensorDeviceClass.MOTION,
+    "vol": BinarySensorDeviceClass.MOTION,
+    "cont": BinarySensorDeviceClass.DOOR,  # garage_door: see _guess_device_class
+    "manom": BinarySensorDeviceClass.TAMPER,
+    # A wired zone driven by an external system (e.g. an ESP32 controlled by
+    # Home Assistant closing the circuit), not by a detector.
+    "virt": BinarySensorDeviceClass.SAFETY,
+}
+_PREFIX_RE = re.compile(r"(" + "|".join(_DEVICE_CLASS_PREFIXES) + r")(?=[ .]|$)")
+# A contact on the garage door: tilting ("basculante") or sectional
+# ("sezionale"). "garag" because 16 characters often cut "garage".
+_GARAGE_KEYWORDS = ("basculante", "garag", "sezional")
 
 # Fallback for names without a known prefix: keywords anywhere in the name,
 # first match wins. Volumetric detectors come first: "vol. garage" is a
@@ -61,13 +69,13 @@ _DEVICE_CLASS_HINTS: list[tuple[list[str], BinarySensorDeviceClass]] = [
 def _guess_device_class(zone_name: str) -> BinarySensorDeviceClass | None:
     """Infer the device class from the zone name: prefix first, then keywords."""
     name_lower = zone_name.strip().lower()
-    for prefix, device_class in _DEVICE_CLASS_PREFIXES:
-        if name_lower.startswith(prefix):
-            if device_class is BinarySensorDeviceClass.DOOR and any(
-                kw in name_lower for kw in _GARAGE_KEYWORDS
-            ):
-                return BinarySensorDeviceClass.GARAGE_DOOR
-            return device_class
+    if match := _PREFIX_RE.match(name_lower):
+        device_class = _DEVICE_CLASS_PREFIXES[match.group(1)]
+        if device_class is BinarySensorDeviceClass.DOOR and any(
+            kw in name_lower for kw in _GARAGE_KEYWORDS
+        ):
+            return BinarySensorDeviceClass.GARAGE_DOOR
+        return device_class
     for keywords, device_class in _DEVICE_CLASS_HINTS:
         for kw in keywords:
             if kw in name_lower:

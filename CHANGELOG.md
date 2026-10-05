@@ -21,7 +21,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ### Added
 
-- **Recommended zone naming convention.** A zone name starting with `Tenda` or `Vol` is `motion`, `Cont.` is `door` (`garage_door` if the name contains `basculante` or `garage`), `Manom.` is `tamper`, before any other rule. Names without one of these prefixes keep the previous keyword rules. See the README.
+- **Recommended zone naming convention.** A zone name starting with `Tenda` or `Vol` is `motion`, `Cont.` is `door` (`garage_door` if the name contains `basculante`, `garag` or `sezional`), `Manom.` is `tamper`, `Virt.` (a wired zone driven by an external system, e.g. an ESP32 controlled by Home Assistant) is `safety`, before any other rule. A prefix counts only as a whole word, followed by a space, a dot or the end of the name (`Vol sala` yes, `Voliera` no). Names without one of these prefixes keep the previous keyword rules. See the README.
 
 ---
 

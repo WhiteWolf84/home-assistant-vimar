@@ -324,16 +324,21 @@ def test_zone_attributes_no_longer_report_memory():
     [
         ("Tenda fin. sala", "motion"),  # "fin" would say window
         ("TENDA portafin.", "motion"),  # "porta" would say door
+        ("Tenda", "motion"),  # prefix alone: end of name
         ("Vol sala", "motion"),
+        ("Vol.sala", "motion"),
+        ("vol corridoio P1", "motion"),  # lower case
         ("vol. garage", "motion"),
-        ("Volumetrico box", "motion"),
         ("Cont. porta ingr", "door"),
-        ("Cont. finestra", "door"),  # a contact, whatever it guards
+        ("Cont finestra", "door"),  # a contact, whatever it guards
         ("cont. basculante", "garage_door"),
         ("Cont. garage", "garage_door"),
         ("Cont. basc garag", "garage_door"),  # cut at 16 characters
+        ("Cont. sezionale", "garage_door"),  # zone 15
         ("Manom. sirena", "tamper"),
         ("manom. vol sala", "tamper"),  # prefix wins over "vol" inside
+        ("Virt. sensori HA", "safety"),  # zone 16: driven by HA via an ESP32
+        ("VIRT ingresso", "safety"),  # "ingresso" would say door
         ("  Tenda cucina", "motion"),
     ],
 )
@@ -349,7 +354,12 @@ def test_naming_convention_prefix(zone_name, expected):
         ("basculante garag", "garage_door"),
         ("manomis. sirena", "tamper"),
         ("Zona 7", None),
-        ("continua sala", None),  # "cont" without the dot is not the prefix
+        ("continua sala", None),  # "cont" not followed by space/dot/end
+        ("Voliera", None),  # "vol" not followed by space/dot/end
+        ("Volumetrico box", "motion"),  # not the prefix: keyword fallback
+        ("Tendaggio sala", "motion"),  # not the prefix, but "tenda" keyword fallback
+        ("Virtuale", None),
+        ("Manomissione PIR", "motion"),  # keyword fallback: motion first
     ],
 )
 def test_names_without_prefix_use_the_old_rules(zone_name, expected):

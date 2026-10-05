@@ -216,23 +216,26 @@ Each SAI2 zone is exposed as a `binary_sensor`. The web server does not say what
 
 #### Recommended zone naming convention
 
-Zone names on the SAI2 control unit are at most 16 characters. Start each name with the detector type, then where it is. A known prefix (case-insensitive) decides the device class on its own:
+Zone names on the SAI2 control unit are at most 16 characters. Start each name with the detector type, then where it is. A known prefix decides the device class on its own. Prefixes are case-insensitive and count only as a whole word, followed by a space, a dot or the end of the name: `Vol sala` and `Vol.sala` match, `Voliera` does not.
 
-| Name starts with | Detector | Device Class |
-|------------------|----------|--------------|
+| Name starts with | Zone | Device Class |
+|------------------|------|--------------|
 | `Tenda` | curtain detector | `motion` |
 | `Vol` | volumetric detector | `motion` |
-| `Cont.` | magnetic contact | `door` — `garage_door` if the name contains `basculante` or `garag(e)` |
+| `Cont.` | magnetic contact | `door` — `garage_door` if the name contains `basculante`, `garag` or `sezional` |
 | `Manom.` | tamper line | `tamper` |
+| `Virt.` | virtual zone: wired, but driven by an external system (e.g. an ESP32 controlled by Home Assistant that closes the circuit) | `safety` |
 
 Example:
 
 ```text
 Tenda fin. sala      → motion
-Vol corrid. P1       → motion
+vol corridoio P1     → motion
 Cont. porta ingr     → door
-Cont. basculante     → garage_door
+Cont. sezionale      → garage_door
 Manom. sirena        → tamper
+Virt. sensori HA     → safety
+Voliera              → no prefix: keyword rules below
 ```
 
 Names without one of these prefixes fall back to keywords anywhere in the name, first match wins:
