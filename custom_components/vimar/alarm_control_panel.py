@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import logging
 import re
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, NoReturn
@@ -51,20 +54,21 @@ SAI2_STATE_MAP = {
     "Allarme": AlarmControlPanelState.TRIGGERED,
 }
 
-# How long an optimistic value is protected from being overwritten by a
-# poll that may still report the pre-command state.
-_OPTIMISTIC_GUARD_SECONDS = 5.0
-
 # A DPCM-0000 from the set service does not mean the control unit executed the
-# command, so a disarm is only reported as done once CURRENT_VALUE says so.
-# Observed on hardware: the new value shows up from ~2.5 s to ~15 s after the
-# command. While we wait, the optimistic value is guarded for the whole window
-# plus a margin, so a stale poll cannot flip the panel back and forth.
-_DISARM_CONFIRM_TIMEOUT_SECONDS = 20.0
-_DISARM_CONFIRM_POLL_SECONDS = 1.0
-_DISARM_GUARD_MARGIN_SECONDS = 5.0
+# command, so a command - disarm or arm - is only reported as done once
+# CURRENT_VALUE says so. Observed on hardware: the new value shows up from
+# ~2.5 s to ~15 s after the command (and was still the old one 1-2 s after an
+# arm on 2026-10-05). While we wait, the optimistic value is guarded for the
+# whole window plus a margin, so a stale poll cannot flip the panel back.
+_CONFIRM_TIMEOUT_SECONDS = 20.0
+_CONFIRM_POLL_SECONDS = 1.0
+_CONFIRM_GUARD_MARGIN_SECONDS = 5.0
 
-# Only a well-formed bitmask counts as a reading when confirming a disarm: an
+# For that long after a command the live value of the area may still be the
+# pre-command one, so it is not trusted to skip an arm (see _send_sai2_command).
+_RECENT_COMMAND_SECONDS = _CONFIRM_TIMEOUT_SECONDS
+
+# Only a well-formed bitmask counts as a reading when confirming a command: an
 # empty/NULL CURRENT_VALUE, or a malformed one, decodes as "Disinserito" in
 # _parse_sai2_area_value and would confirm a disarm nobody reported. Any
 # length, like the parser (int(value, 2) plus an all-zeros check): the
@@ -86,6 +90,59 @@ _SAI2_OK = "DPCM-0000"
 # fixes self-resolving "Wrong PIN" bursts caused by classifying every non-OK
 # result as a bad PIN.
 _SAI2_WRONG_PIN = "SAI2-3127"
+
+
+class _Sai2PinCache:
+    """Remember a PIN check for the rest of ONE service call.
+
+    A call on several areas runs them one after the other (PARALLEL_UPDATES =
+    1), so the PIN check of the 2nd area used to land right after the 1st
+    area's command, while the control unit was busy: on hardware it then took
+    2.7-4.4 s instead of ~1.3 s and once answered SAI2-3127 / UnknownUserCode
+    to a valid PIN, failing the call as "wrong PIN" with the house half armed.
+    Checking the PIN once per call avoids that, and a wrong PIN costs the
+    control unit one attempt per call instead of one per area.
+
+    Results are keyed by the Home Assistant context id - shared by every
+    entity of one service call, and by every step of one script run - so they
+    never carry over to an unrelated call. Only definitive answers are kept
+    (valid, or wrong PIN); a transient code is checked again. The PIN itself
+    is never stored: the key holds an HMAC of it under a random per-process
+    key. Entries expire after _TTL_SECONDS, long enough for a disarm of three
+    areas with their confirmations.
+    """
+
+    _TTL_SECONDS = 120.0
+
+    def __init__(self) -> None:
+        self._key = secrets.token_bytes(32)
+        self._results: dict[tuple[str, bytes], tuple[str, float]] = {}
+
+    def _digest(self, pin: str) -> bytes:
+        return hmac.new(self._key, pin.encode(), hashlib.sha256).digest()
+
+    def _prune(self) -> None:
+        now = time.monotonic()
+        for key in [k for k, (_, expiry) in self._results.items() if expiry <= now]:
+            del self._results[key]
+
+    def get(self, context_id: str | None, pin: str) -> str | None:
+        """Return the result of this call's earlier check of `pin`, if any."""
+        if context_id is None:
+            return None
+        self._prune()
+        entry = self._results.get((context_id, self._digest(pin)))
+        return entry[0] if entry else None
+
+    def put(self, context_id: str | None, pin: str, result: str | None) -> None:
+        """Remember a definitive result for the rest of this call."""
+        if context_id is None or result not in (_SAI2_OK, _SAI2_WRONG_PIN):
+            return
+        self._prune()
+        self._results[(context_id, self._digest(pin))] = (
+            result,
+            time.monotonic() + self._TTL_SECONDS,
+        )
 
 
 @dataclass(frozen=True)
@@ -198,11 +255,20 @@ async def async_setup_entry(
         entry.options.get(CONF_AUTOMATION_PIN) or entry.data.get(CONF_AUTOMATION_PIN) or ""
     )
 
+    # One per config entry, shared by its areas: see _Sai2PinCache.
+    pin_cache = _Sai2PinCache()
+
     entities: list[VimarAlarmControlPanel] = []
     for area_index, (group_id, group_data) in enumerate(vimarproject.sai2_groups.items(), start=1):
         entities.append(
             VimarAlarmControlPanel(
-                coordinator, group_id, group_data, area_index, user_pins, automation_pin
+                coordinator,
+                group_id,
+                group_data,
+                area_index,
+                user_pins,
+                automation_pin,
+                pin_cache,
             )
         )
 
@@ -251,6 +317,7 @@ class VimarAlarmControlPanel(
         area_index: int,
         user_pins: dict[str, str],
         automation_pin: str,
+        pin_cache: _Sai2PinCache,
     ) -> None:
         """Initialize the alarm control panel."""
         super().__init__(coordinator)
@@ -259,15 +326,19 @@ class VimarAlarmControlPanel(
         self._area_index = area_index
         self._user_pins = user_pins
         self._automation_pin = automation_pin
+        self._pin_cache = pin_cache
         self._attr_name = group_data["name"]
         self._attr_unique_id = f"vimar_sai2_{group_id}"
         # Serialize commands on this area so an auto-disarm + arm sequence
         # cannot interleave with another in-flight command.
         self._command_lock = asyncio.Lock()
-        # Set when a disarm could not be confirmed and no real value is known
+        # Set when a command could not be confirmed and no real value is known
         # to fall back on: the panel reports unknown - never the optimistic
-        # "disarmed" - until a poll brings a real value or a new command.
+        # target - until a poll brings a real value or a new command.
         self._state_unknown = False
+        # Monotonic time of the last command sent to this area (see
+        # _RECENT_COMMAND_SECONDS); None until the first one.
+        self._last_command_at: float | None = None
 
     @property
     def available(self) -> bool:
@@ -395,14 +466,14 @@ class VimarAlarmControlPanel(
                 child = children.get(label)
                 if child:
                     child["value"] = "1" if label == mode.label else "0"
-        self._extend_guard(project, _OPTIMISTIC_GUARD_SECONDS)
+        # The guard was already set, for the whole command, before the PIN check.
         self.async_write_ha_state()
 
     def _extend_guard(self, project: VimarProject, seconds: float) -> None:
         """Protect this area's cached value from polls for `seconds`, never less.
 
-        Only ever moves the deadline forward, so the short optimistic guard
-        cannot cut down the long one a disarm sets before it starts.
+        Only ever moves the deadline forward, so a later call can never cut
+        down a guard that is already covering a command in progress.
         """
         guard = project.sai2_optimistic_until
         guard[self._group_id] = max(guard.get(self._group_id, 0.0), time.monotonic() + seconds)
@@ -429,14 +500,20 @@ class VimarAlarmControlPanel(
         requires a disarm first; this is handled automatically and shown
         optimistically so it stays invisible to the user.
 
-        A disarm is reported as done only once the area's live CURRENT_VALUE
-        confirms it (see _confirm_disarm): the set service answers DPCM-0000
-        even when the control unit does not execute the command.
+        Every command is reported as done only once the area's live
+        CURRENT_VALUE confirms it (see _confirm_mode): the set service answers
+        DPCM-0000 even when the control unit does not execute the command.
+
+        A disarm is always sent. An arm is skipped only when a live reading
+        shows the area already in that mode AND no command went to the area in
+        the last _RECENT_COMMAND_SECONDS - right after a command the live value
+        can still be the old one, so it is then sent again (without the
+        intermediate disarm, which is only for switching between armed modes).
 
         Raises:
             ServiceValidationError: if no code was provided or the PIN is wrong.
             HomeAssistantError: if no connection/area was available, the
-                server rejected the command, or a disarm was not confirmed.
+                server rejected the command, or it was not confirmed.
         """
         # Fall back to the logged-in HA user's mapped PIN when no code was
         # typed (e.g. one-tap arming, or automations running as a user).
@@ -459,27 +536,36 @@ class VimarAlarmControlPanel(
         async with self._command_lock:
             started = time.monotonic()
             is_disarm = mode.command == _MODE_DISARM.command
-            if is_disarm:
-                # Guard the whole disarm up-front - PIN check, SOAP call and
-                # confirmation - so neither a slow authenticate nor a slow set
-                # call can let it lapse and a stale poll flip the panel back.
-                self._extend_guard(
-                    project, _DISARM_CONFIRM_TIMEOUT_SECONDS + _DISARM_GUARD_MARGIN_SECONDS
-                )
+            # Taken before our own guard below: a guard still running, or a
+            # command sent moments ago, means the live value may be stale.
+            recent_command = project.sai2_optimistic_until.get(self._group_id, 0.0) > started or (
+                self._last_command_at is not None
+                and started - self._last_command_at < _RECENT_COMMAND_SECONDS
+            )
+            # Guard the whole command up-front - PIN check, SOAP call and
+            # confirmation - so neither a slow authenticate nor a slow set call
+            # can let it lapse and a stale poll flip the panel back.
+            self._extend_guard(project, _CONFIRM_TIMEOUT_SECONDS + _CONFIRM_GUARD_MARGIN_SECONDS)
             try:
                 # Validate the PIN up-front. The set service accepts any PIN
                 # with DPCM-0000, but service-vimarsai2authenticate validates it
                 # and reports a wrong PIN immediately and unambiguously, before
-                # we touch any state.
-                auth = await self.hass.async_add_executor_job(
-                    vimarconnection.authenticate_sai2_pin, code
-                )
+                # we touch any state. Once per service call (see _Sai2PinCache).
+                context_id = self._context.id if self._context else None
+                auth = self._pin_cache.get(context_id, code)
+                verified_earlier = auth is not None
+                if auth is None:
+                    auth = await self.hass.async_add_executor_job(
+                        vimarconnection.authenticate_sai2_pin, code
+                    )
+                    self._pin_cache.put(context_id, code, auth)
                 _LOGGER.debug(
-                    "SAI2: area %d (%s) authenticate -> %s in %.2fs",
+                    "SAI2: area %d (%s) authenticate -> %s in %.2fs%s",
                     self._area_index,
                     group["name"],
                     auth,
                     time.monotonic() - started,
+                    " (checked earlier in this call)" if verified_earlier else "",
                 )
                 if auth is None:
                     await self._fail("sai2_no_response")
@@ -493,13 +579,51 @@ class VimarAlarmControlPanel(
                     await self._fail("sai2_auth_unavailable", placeholders={"code": auth})
             except Exception:
                 # Nothing was sent and the cached value is still the real one:
-                # just release the up-front disarm guard (no-op when arming).
+                # just release the up-front guard.
                 project.sai2_optimistic_until.pop(self._group_id, None)
                 raise
 
-            # Capture current state BEFORE the optimistic update.
-            was_armed = self.alarm_state not in (AlarmControlPanelState.DISARMED, None)
-            before_raw = self._current_raw()
+            # Decide from the control unit's live state rather than the last
+            # poll, which can be a scan interval old or still optimistic.
+            live = await self._read_live_raw(vimarconnection)
+            if live is not None:
+                live_label = _parse_sai2_area_value(live)[0]
+                if not is_disarm and live_label == mode.label:
+                    if not recent_command:
+                        # Already armed in the requested mode: send nothing.
+                        # Re-sending used to disarm the area first, briefly.
+                        _LOGGER.info(
+                            "SAI2: area %d (%s) is already %s, nothing to send",
+                            self._area_index,
+                            group["name"],
+                            live_label,
+                        )
+                        self._show_real_state(project, live)
+                        persistent_notification.async_dismiss(
+                            self.hass, f"vimar_sai2_{self._group_id}"
+                        )
+                        return
+                    _LOGGER.info(
+                        "SAI2: area %d (%s) reads %s but was commanded moments ago; "
+                        "sending again, without the intermediate disarm",
+                        self._area_index,
+                        group["name"],
+                        live_label,
+                    )
+                # Intermediate disarm only to switch between armed modes.
+                was_armed = live_label not in (_MODE_DISARM.label, mode.label)
+                before_raw: str | None = live
+            else:
+                # No live reading: fall back on the last poll. An area it shows
+                # in the requested mode gets the command again, but never the
+                # intermediate disarm meant for switching between armed modes.
+                state = self.alarm_state
+                was_armed = state not in (
+                    AlarmControlPanelState.DISARMED,
+                    None,
+                    SAI2_STATE_MAP[mode.label],
+                )
+                before_raw = self._current_raw()
 
             # Optimistic update first so the UI reflects the target state
             # immediately, hiding any intermediate disarm.
@@ -513,6 +637,7 @@ class VimarAlarmControlPanel(
                         self._area_index,
                         group["name"],
                     )
+                    self._last_command_at = time.monotonic()
                     disarm_result = await self.hass.async_add_executor_job(
                         vimarconnection.set_sai2_status,
                         _MODE_DISARM.command,
@@ -531,6 +656,7 @@ class VimarAlarmControlPanel(
                     group["name"],
                 )
                 sent = time.monotonic()
+                self._last_command_at = sent
                 result = await self.hass.async_add_executor_job(
                     vimarconnection.set_sai2_status,
                     mode.command,
@@ -548,8 +674,7 @@ class VimarAlarmControlPanel(
                 if result != _SAI2_OK:
                     await self._fail_command(result)
 
-                if is_disarm:
-                    await self._confirm_disarm(project, vimarconnection, group["name"], before_raw)
+                await self._confirm_mode(project, vimarconnection, group["name"], mode, before_raw)
             except Exception:
                 # Drop the optimistic guard so the next poll restores the
                 # real state quickly, then re-raise for the UI.
@@ -560,14 +685,15 @@ class VimarAlarmControlPanel(
             # Success: clear any stale failure notification for this area.
             persistent_notification.async_dismiss(self.hass, f"vimar_sai2_{self._group_id}")
 
-    async def _confirm_disarm(
+    async def _confirm_mode(
         self,
         project: VimarProject,
         vimarconnection: VimarLink,
         area_name: str,
+        mode: _Sai2Mode,
         before_raw: str | None,
     ) -> None:
-        """Wait until the area's live CURRENT_VALUE reads disarmed, or fail.
+        """Wait until the area's live CURRENT_VALUE reads `mode`, or fail.
 
         Reads the area's own DPADD_OBJECT row once per second, outside the
         coordinator poll. Only a well-formed bitmask counts: an empty/NULL
@@ -585,22 +711,15 @@ class VimarAlarmControlPanel(
         does not always run it at once.
         """
         start = time.monotonic()
-        deadline = start + _DISARM_CONFIRM_TIMEOUT_SECONDS
+        deadline = start + _CONFIRM_TIMEOUT_SECONDS
         # Re-extend from here: a slow PIN check + SOAP call may have eaten into
         # the up-front guard, which must still outlast the whole confirmation.
-        self._extend_guard(project, _DISARM_CONFIRM_TIMEOUT_SECONDS + _DISARM_GUARD_MARGIN_SECONDS)
+        self._extend_guard(project, _CONFIRM_TIMEOUT_SECONDS + _CONFIRM_GUARD_MARGIN_SECONDS)
 
         last_valid: str | None = None
         while time.monotonic() < deadline:
-            await asyncio.sleep(_DISARM_CONFIRM_POLL_SECONDS)
-            try:
-                values = await self.hass.async_add_executor_job(
-                    vimarconnection.get_sai2_area_raw_values, [self._group_id]
-                )
-            except Exception as err:  # noqa: BLE001 - one failed read is retried
-                _LOGGER.debug("SAI2: area %d confirm read failed: %s", self._area_index, err)
-                continue
-            raw = (values or {}).get(self._group_id)
+            await asyncio.sleep(_CONFIRM_POLL_SECONDS)
+            raw = await self._read_live_raw(vimarconnection)
             _LOGGER.debug(
                 "SAI2: area %d (%s) confirm raw=%r after %.1fs",
                 self._area_index,
@@ -608,20 +727,21 @@ class VimarAlarmControlPanel(
                 raw,
                 time.monotonic() - start,
             )
-            if raw is None or not _SAI2_BITMASK_RE.fullmatch(raw):
-                continue  # NULL / malformed: no reading, try again
+            if raw is None:
+                continue  # failed / NULL / malformed: no reading, try again
             last_valid = raw
-            if _parse_sai2_area_value(raw)[0] == _MODE_DISARM.label:
+            if _parse_sai2_area_value(raw)[0] == mode.label:
                 self._show_real_state(project, raw)
                 return
 
         # WARNING on purpose: it lands in system_log even without debug.
         _LOGGER.warning(
-            "SAI2: area %d (%s) not confirmed disarmed %.0fs after the command "
-            "(last valid CURRENT_VALUE %s) - the area may still be ARMED",
+            "SAI2: area %d (%s) not confirmed %s %.0fs after the command "
+            "(last valid CURRENT_VALUE %s) - the area may NOT be in that state",
             self._area_index,
             area_name,
-            _DISARM_CONFIRM_TIMEOUT_SECONDS,
+            mode.label,
+            _CONFIRM_TIMEOUT_SECONDS,
             last_valid,
         )
         real = last_valid if last_valid is not None else before_raw
@@ -630,12 +750,28 @@ class VimarAlarmControlPanel(
         else:
             self._show_unknown_state(project)
         await self._fail(
-            "sai2_disarm_not_confirmed",
+            "sai2_disarm_not_confirmed"
+            if mode.command == _MODE_DISARM.command
+            else "sai2_arm_not_confirmed",
             placeholders={
                 "area": area_name,
-                "seconds": f"{_DISARM_CONFIRM_TIMEOUT_SECONDS:.0f}",
+                "seconds": f"{_CONFIRM_TIMEOUT_SECONDS:.0f}",
             },
         )
+
+    async def _read_live_raw(self, vimarconnection: VimarLink) -> str | None:
+        """Read this area's live CURRENT_VALUE; None if failed, NULL or malformed."""
+        try:
+            values = await self.hass.async_add_executor_job(
+                vimarconnection.get_sai2_area_raw_values, [self._group_id]
+            )
+        except Exception as err:  # noqa: BLE001 - callers treat it as "no reading"
+            _LOGGER.debug("SAI2: area %d live read failed: %s", self._area_index, err)
+            return None
+        raw = (values or {}).get(self._group_id)
+        if raw is None or not _SAI2_BITMASK_RE.fullmatch(raw):
+            return None
+        return raw
 
     def _show_real_state(self, project: VimarProject, raw: str) -> None:
         """Replace the optimistic value with `raw`, drop the guard, write state."""

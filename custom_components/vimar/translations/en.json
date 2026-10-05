@@ -151,6 +151,9 @@
     "sai2_command_rejected": {
       "message": "The SAI2 control unit rejected the command (result {code})."
     },
+    "sai2_arm_not_confirmed": {
+      "message": "The control unit did not confirm the arming of {area} within {seconds} s: the area may NOT be armed."
+    },
     "sai2_disarm_not_confirmed": {
       "message": "The control unit did not confirm the disarm of {area} within {seconds} s: the area may still be ARMED."
     },

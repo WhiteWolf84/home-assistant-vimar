@@ -56,8 +56,8 @@ def _panel(monkeypatch, area_reads):
     area_reads: successive raw CURRENT_VALUE values returned by the
     confirmation reads (None = NULL); the last one repeats once exhausted.
     """
-    monkeypatch.setattr(acp, "_DISARM_CONFIRM_POLL_SECONDS", 0)
-    monkeypatch.setattr(acp, "_DISARM_CONFIRM_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(acp, "_CONFIRM_POLL_SECONDS", 0)
+    monkeypatch.setattr(acp, "_CONFIRM_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(acp, "persistent_notification", MagicMock())
 
     project = MagicMock()
@@ -99,6 +99,8 @@ def _panel(monkeypatch, area_reads):
     panel._attr_name = "Reparto Giorno"
     panel._command_lock = asyncio.Lock()
     panel._state_unknown = False
+    panel._pin_cache = acp._Sai2PinCache()
+    panel._last_command_at = None
     # Record the state the entity actually writes to HA, in order.
     panel.written = []
     panel.async_write_ha_state = MagicMock(
@@ -282,10 +284,11 @@ async def test_slow_soap_with_a_poll_in_between_does_not_flip_back(monkeypatch):
     landing after that - while the SOAP call was still in flight - put the
     stale 'armed' back on the panel.
     """
-    panel, project, connection, coordinator = _panel(monkeypatch, [DISARMED])
+    # Armed when the live pre-check reads it, disarmed once the command lands.
+    panel, project, connection, coordinator = _panel(monkeypatch, [ARMED_HOME, DISARMED])
     # The real window: the guard length derives from it. The fake clock only
     # moves where we move it, so nothing actually waits 20 s.
-    monkeypatch.setattr(acp, "_DISARM_CONFIRM_TIMEOUT_SECONDS", 20.0)
+    monkeypatch.setattr(acp, "_CONFIRM_TIMEOUT_SECONDS", 20.0)
     clock = _Clock()
     monkeypatch.setattr(acp, "time", clock)
     monkeypatch.setattr(vc, "time", clock)
@@ -373,16 +376,66 @@ async def test_a_failed_read_is_retried_not_fatal(monkeypatch):
     assert project.sai2_area_values[GROUP_ID] == DISARMED
 
 
-async def test_arming_is_not_confirmed_yet(monkeypatch):
-    """Arming keeps the old behaviour for now: confirmation is disarm-only."""
-    panel, project, connection, coordinator = _panel(monkeypatch, [DISARMED])
+# ---------------------------------------------------------------------------
+# Arming is confirmed the same way
+# ---------------------------------------------------------------------------
+
+
+async def test_arm_waits_through_stale_reads_until_confirmed(monkeypatch):
+    """The live value lagged 1-2 s after an arm on 2026-10-05 (cases B/C: 7-15 s)."""
+    panel, project, connection, coordinator = _panel(
+        monkeypatch, [DISARMED, DISARMED, DISARMED, ARMED_HOME]
+    )
     project.sai2_area_values[GROUP_ID] = DISARMED
 
     await panel.async_alarm_arm_home("1234")
 
-    connection.get_sai2_area_raw_values.assert_not_called()
-    assert project.sai2_area_values[GROUP_ID] == acp._MODE_ARM_HOME.bitmask
-    # Arming still uses the short optimistic guard only.
-    assert project.sai2_optimistic_until[GROUP_ID] - time.monotonic() <= (
-        acp._OPTIMISTIC_GUARD_SECONDS
-    )
+    assert connection.get_sai2_area_raw_values.call_count == 4  # pre-check + 3 reads
+    assert project.sai2_area_values[GROUP_ID] == ARMED_HOME
+    assert panel.alarm_state is AlarmControlPanelState.ARMED_HOME
+    assert GROUP_ID not in project.sai2_optimistic_until
+
+
+async def test_unconfirmed_arm_raises_and_already_shows_disarmed(monkeypatch):
+    """The arm was acknowledged but never took effect: say so, show the truth."""
+    panel, project, connection, coordinator = _panel(monkeypatch, [DISARMED])
+    project.sai2_area_values[GROUP_ID] = DISARMED
+
+    with pytest.raises(HomeAssistantError) as err:
+        await panel.async_alarm_arm_home("1234")
+
+    assert err.value.translation_key == "sai2_arm_not_confirmed"
+    assert err.value.translation_placeholders["area"] == "Reparto Giorno"
+    assert panel.alarm_state is AlarmControlPanelState.DISARMED
+    assert panel.written[-1] is AlarmControlPanelState.DISARMED
+    assert GROUP_ID not in project.sai2_optimistic_until
+
+
+async def test_unconfirmed_arm_with_nothing_known_reports_unknown(monkeypatch):
+    panel, project, connection, coordinator = _panel(monkeypatch, [None])
+    project.sai2_area_values = None
+
+    with pytest.raises(HomeAssistantError) as err:
+        await panel.async_alarm_arm_home("1234")
+
+    assert err.value.translation_key == "sai2_arm_not_confirmed"
+    assert panel.alarm_state is None
+    assert panel.written[-1] is None
+
+
+async def test_arm_guard_is_set_before_the_pin_check(monkeypatch):
+    """Same up-front guard as a disarm: a slow PIN check cannot let it lapse."""
+    panel, project, connection, coordinator = _panel(monkeypatch, [DISARMED, ARMED_HOME])
+    project.sai2_area_values[GROUP_ID] = DISARMED
+    guard_at_pin_check = []
+
+    def _auth(pin):
+        left = project.sai2_optimistic_until.get(GROUP_ID, 0) - time.monotonic()
+        guard_at_pin_check.append(left)
+        return acp._SAI2_OK
+
+    connection.authenticate_sai2_pin.side_effect = _auth
+
+    await panel.async_alarm_arm_home("1234")
+
+    assert guard_at_pin_check[0] > acp._CONFIRM_TIMEOUT_SECONDS

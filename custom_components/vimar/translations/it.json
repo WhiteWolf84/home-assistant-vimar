@@ -151,6 +151,9 @@
     "sai2_command_rejected": {
       "message": "La centrale SAI2 ha rifiutato il comando (esito {code})."
     },
+    "sai2_arm_not_confirmed": {
+      "message": "La centrale non ha confermato l'inserimento di {area} entro {seconds} s: l'area potrebbe NON essere inserita."
+    },
     "sai2_disarm_not_confirmed": {
       "message": "La centrale non ha confermato il disinserimento di {area} entro {seconds} s: l'area potrebbe essere ancora INSERITA."
     },

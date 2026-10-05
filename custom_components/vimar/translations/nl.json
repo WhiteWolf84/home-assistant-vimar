@@ -140,6 +140,9 @@
     "sai2_command_rejected": {
       "message": "De SAI2-centrale heeft de opdracht geweigerd (resultaat {code})."
     },
+    "sai2_arm_not_confirmed": {
+      "message": "De centrale heeft het inschakelen van {area} niet binnen {seconds} s bevestigd: het gebied is mogelijk NIET ingeschakeld."
+    },
     "sai2_disarm_not_confirmed": {
       "message": "De centrale heeft het uitschakelen van {area} niet binnen {seconds} s bevestigd: het gebied is mogelijk nog INGESCHAKELD."
     },
