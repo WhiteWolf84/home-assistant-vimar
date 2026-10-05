@@ -99,6 +99,7 @@ def _panel(monkeypatch, area_reads):
     panel._attr_name = "Reparto Giorno"
     panel._command_lock = asyncio.Lock()
     panel._state_unknown = False
+    panel._pending_mode = None
     panel._pin_cache = acp._Sai2PinCache()
     panel._last_command_at = None
     # Record the state the entity actually writes to HA, in order.
@@ -278,11 +279,12 @@ async def test_null_reading_is_retried_until_a_real_one(monkeypatch):
 
 
 async def test_slow_soap_with_a_poll_in_between_does_not_flip_back(monkeypatch):
-    """A set call slower than the 5 s optimistic guard, with a poll mid-call.
+    """A slow PIN check + SOAP call (7 s), with polls landing mid-call.
 
     The guard used to start at the optimistic write and last 5 s, so a poll
-    landing after that - while the SOAP call was still in flight - put the
-    stale 'armed' back on the panel.
+    landing after that - while the SOAP call was still in flight - put a
+    stale value back on the panel. Now the panel shows DISARMING throughout
+    and the guarded cache keeps the last real value.
     """
     # Armed when the live pre-check reads it, disarmed once the command lands.
     panel, project, connection, coordinator = _panel(monkeypatch, [ARMED_HOME, DISARMED])
@@ -293,9 +295,10 @@ async def test_slow_soap_with_a_poll_in_between_does_not_flip_back(monkeypatch):
     monkeypatch.setattr(acp, "time", clock)
     monkeypatch.setattr(vc, "time", clock)
 
-    # The coordinator's real SAI2 poll, reading the stale pre-command value.
+    # The coordinator's real SAI2 poll. It brings a value different from the
+    # cached one, so the test can tell whether the guard let it through.
     poll_connection = MagicMock()
-    poll_connection.get_sai2_area_raw_values.return_value = {GROUP_ID: ARMED_HOME}
+    poll_connection.get_sai2_area_raw_values.return_value = {GROUP_ID: "00001001"}
 
     async def _poll_executor(func, *args):
         return func(*args)
@@ -321,9 +324,13 @@ async def test_slow_soap_with_a_poll_in_between_does_not_flip_back(monkeypatch):
 
     await panel.async_alarm_disarm("1234")
 
-    assert seen_mid_call["raw"] == DISARMED  # the stale poll was ignored
-    assert seen_mid_call["state"] is AlarmControlPanelState.DISARMED
-    assert AlarmControlPanelState.ARMED_HOME not in panel.written
+    assert seen_mid_call["raw"] == ARMED_HOME  # the polls were ignored
+    assert seen_mid_call["state"] is AlarmControlPanelState.DISARMING
+    # DISARMING while waiting, DISARMED only once confirmed - nothing else.
+    assert panel.written == [
+        AlarmControlPanelState.DISARMING,
+        AlarmControlPanelState.DISARMED,
+    ]
     assert project.sai2_area_values[GROUP_ID] == DISARMED
 
 
@@ -439,3 +446,112 @@ async def test_arm_guard_is_set_before_the_pin_check(monkeypatch):
     await panel.async_alarm_arm_home("1234")
 
     assert guard_at_pin_check[0] > acp._CONFIRM_TIMEOUT_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# ARMING / DISARMING while the control unit has not confirmed yet
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "start", "reads", "transitional", "final"),
+    [
+        (
+            "async_alarm_disarm",
+            ARMED_HOME,
+            [ARMED_HOME, ARMED_HOME, ARMED_HOME, DISARMED],
+            AlarmControlPanelState.DISARMING,
+            AlarmControlPanelState.DISARMED,
+        ),
+        (
+            "async_alarm_arm_home",
+            DISARMED,
+            [DISARMED, DISARMED, DISARMED, ARMED_HOME],
+            AlarmControlPanelState.ARMING,
+            AlarmControlPanelState.ARMED_HOME,
+        ),
+    ],
+)
+async def test_transitional_state_until_confirmed(
+    monkeypatch, method, start, reads, transitional, final
+):
+    panel, project, connection, coordinator = _panel(monkeypatch, reads)
+    project.sai2_area_values[GROUP_ID] = start
+    during = []
+    real_reads = connection.get_sai2_area_raw_values.side_effect
+
+    def _record(group_ids):
+        during.append((panel.alarm_state, panel.extra_state_attributes["sai2_raw"]))
+        return real_reads(group_ids)
+
+    connection.get_sai2_area_raw_values.side_effect = _record
+
+    await getattr(panel, method)("1234")
+
+    # First read is the live pre-check (no transition yet); then every
+    # confirmation read happens while the panel shows the transitional state,
+    # with sai2_raw still on the last real value.
+    assert during[1:] == [(transitional, start)] * (len(during) - 1)
+    assert panel.written == [transitional, final]
+    assert panel.alarm_state is final
+
+
+async def test_switching_armed_mode_shows_only_arming(monkeypatch):
+    """PAR -> ON: the intermediate disarm stays hidden behind ARMING."""
+    night = "00001001"
+    panel, project, connection, coordinator = _panel(monkeypatch, [night, DISARMED, "00000011"])
+    project.sai2_area_values[GROUP_ID] = night
+
+    await panel.async_alarm_arm_away("1234")
+
+    assert [c.args[0] for c in connection.set_sai2_status.call_args_list] == [0, 1]
+    assert panel.written == [
+        AlarmControlPanelState.ARMING,
+        AlarmControlPanelState.ARMED_AWAY,
+    ]
+
+
+async def test_soap_error_goes_back_to_the_real_state(monkeypatch):
+    """No transitional state left behind when the web server rejects the call."""
+    panel, project, connection, coordinator = _panel(monkeypatch, [ARMED_HOME])
+    connection.set_sai2_status.return_value = "FSMC-007"
+
+    with pytest.raises(HomeAssistantError) as err:
+        await panel.async_alarm_disarm("1234")
+
+    assert err.value.translation_key == "sai2_command_rejected"
+    assert panel.alarm_state is AlarmControlPanelState.ARMED_HOME
+    assert panel.written == [
+        AlarmControlPanelState.DISARMING,
+        AlarmControlPanelState.ARMED_HOME,
+    ]
+
+
+async def test_cancelled_script_goes_back_to_the_real_state(monkeypatch):
+    """A script stopped mid-command must not leave the area 'arming' forever."""
+    panel, project, connection, coordinator = _panel(monkeypatch, [DISARMED])
+    project.sai2_area_values[GROUP_ID] = DISARMED
+    reads = {"n": 0}
+
+    def _cancel_on_confirmation(group_ids):
+        reads["n"] += 1
+        if reads["n"] == 2:  # first confirmation read
+            raise asyncio.CancelledError
+        return {GROUP_ID: DISARMED}
+
+    connection.get_sai2_area_raw_values.side_effect = _cancel_on_confirmation
+
+    with pytest.raises(asyncio.CancelledError):
+        await panel.async_alarm_arm_home("1234")
+
+    assert panel.alarm_state is AlarmControlPanelState.DISARMED
+    assert panel.written[-1] is AlarmControlPanelState.DISARMED
+
+
+async def test_arm_already_in_mode_never_shows_arming(monkeypatch):
+    panel, project, connection, coordinator = _panel(monkeypatch, [ARMED_HOME])
+
+    await panel.async_alarm_arm_home("1234")
+
+    connection.set_sai2_status.assert_not_called()
+    assert panel.written == [AlarmControlPanelState.ARMED_HOME]

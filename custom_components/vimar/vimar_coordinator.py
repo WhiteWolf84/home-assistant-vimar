@@ -743,8 +743,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
         DPADD_OBJECT.CURRENT_VALUE for SAI2 group IDs updates immediately
         after commands, unlike the DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN view.
-        Group values respect the per-group optimistic-update guard so
-        in-flight commands aren't overwritten by stale reads.
+        Group values respect the per-group guard set while an alarm command
+        is in flight, so a stale read cannot overwrite them.
         """
         if self.vimarproject.sai2_groups:
             group_ids = list(self.vimarproject.sai2_groups.keys())
@@ -762,14 +762,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                     if guard.get(gid, 0) > now:
                         if val != old:
                             _LOGGER.debug(
-                                "SAI2 poll: area %s raw=%s ignored "
-                                "(optimistic %s, guard %.1fs left)",
+                                "SAI2 poll: area %s raw=%s ignored (kept %s, guard %.1fs left)",
                                 gid,
                                 val,
                                 old,
                                 guard[gid] - now,
                             )
-                        continue  # optimistic value still protected
+                        continue  # a command is in flight: value protected
                     if val != old:
                         _LOGGER.debug("SAI2 poll: area %s raw %s -> %s", gid, old, val)
                     self.vimarproject.sai2_area_values[gid] = val

@@ -157,6 +157,7 @@ def _setup(monkeypatch, live):
         panel._attr_name = name
         panel._command_lock = asyncio.Lock()
         panel._state_unknown = False
+        panel._pending_mode = None
         panel._pin_cache = pin_cache
         panel._last_command_at = None
         panel._context = None

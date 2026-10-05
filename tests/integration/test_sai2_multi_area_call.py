@@ -166,6 +166,7 @@ def _setup(monkeypatch, live, busy_answers=()):
         panel._attr_name = name
         panel._command_lock = asyncio.Lock()
         panel._state_unknown = False
+        panel._pending_mode = None
         panel._pin_cache = pin_cache
         panel._last_command_at = None
         panel._context = None
@@ -334,8 +335,7 @@ async def test_disarm_3s_after_arm_with_a_stale_reading_waits_for_confirmation(m
     The stale '00000000' must neither skip the disarm command nor confirm
     anything: the disarm waits for the arm (same area), is sent, and the area
     reads disarmed only from a reading taken after the disarm took effect.
-    Between its command and that reading the panel shows the optimistic
-    'disarmed', as every command does (a 'disarming' state would replace it).
+    Between the command and that reading the panel shows DISARMING.
     """
     clock, unit, connection, panels = _setup(monkeypatch, {g: DISARMED for g in AREAS})
     giorno = panels[GIORNO]
@@ -350,16 +350,17 @@ async def test_disarm_3s_after_arm_with_a_stale_reading_waits_for_confirmation(m
     assert unit.sent() == [(1, 1), (0, 1)]  # the disarm command did go out
     (arm_at, _, _), (disarm_at, _, _) = unit.commands
     assert disarm_at >= arm_at + LAG  # ...after the arm was confirmed
-    # The stale '00000000' never reached the panel: the first 'disarmed' is the
-    # disarm's own optimistic value, written as its command goes out.
-    first_disarmed = next(
-        at for at, state in giorno.written if state is AlarmControlPanelState.DISARMED
-    )
-    assert disarm_at - SOAP - 0.01 <= first_disarmed <= disarm_at
-    # The final 'disarmed' comes from a reading after the disarm took effect.
-    confirmed_at, final_state = giorno.written[-1]
-    assert final_state is AlarmControlPanelState.DISARMED
-    assert confirmed_at >= disarm_at + LAG
+    # The panel never showed 'disarmed' before the disarm took effect: the
+    # stale '00000000' was ignored, and while waiting it read DISARMING.
+    states = [state for _, state in giorno.written]
+    assert states == [
+        AlarmControlPanelState.ARMING,
+        AlarmControlPanelState.ARMED_AWAY,
+        AlarmControlPanelState.DISARMING,
+        AlarmControlPanelState.DISARMED,
+    ]
+    confirmed_at, _ = giorno.written[-1]
+    assert confirmed_at >= disarm_at + LAG  # from a reading after it took effect
     assert unit.value(GIORNO) == DISARMED
 
 

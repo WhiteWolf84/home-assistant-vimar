@@ -58,8 +58,9 @@ SAI2_STATE_MAP = {
 # command, so a command - disarm or arm - is only reported as done once
 # CURRENT_VALUE says so. Observed on hardware: the new value shows up from
 # ~2.5 s to ~15 s after the command (and was still the old one 1-2 s after an
-# arm on 2026-10-05). While we wait, the optimistic value is guarded for the
-# whole window plus a margin, so a stale poll cannot flip the panel back.
+# arm on 2026-10-05). Meanwhile the area shows ARMING / DISARMING, and its last
+# real value is guarded for the whole window plus a margin, so a stale poll
+# cannot overwrite it.
 _CONFIRM_TIMEOUT_SECONDS = 20.0
 _CONFIRM_POLL_SECONDS = 1.0
 _CONFIRM_GUARD_MARGIN_SECONDS = 5.0
@@ -147,16 +148,16 @@ class _Sai2PinCache:
 
 @dataclass(frozen=True)
 class _Sai2Mode:
-    """A single SAI2 target mode: command code, optimistic bitmask and label.
+    """A single SAI2 target mode: command code, bitmask and label.
 
-    Keeping the command code, the optimistic CURRENT_VALUE bitmask and the
+    Keeping the command code, the CURRENT_VALUE bitmask of the mode and the
     child label together avoids the fragile label -> bitmask -> label
     round-trip the previous code relied on. The label maps back to the HA
     state via SAI2_STATE_MAP.
     """
 
     command: int  # SAI2 SOAP command: 0=OFF, 1=ON, 2=INT, 3=PAR
-    bitmask: str  # optimistic DPADD_OBJECT.CURRENT_VALUE
+    bitmask: str  # DPADD_OBJECT.CURRENT_VALUE once the mode is active
     label: str  # child label used in the children dict / logs
 
 
@@ -333,9 +334,12 @@ class VimarAlarmControlPanel(
         # cannot interleave with another in-flight command.
         self._command_lock = asyncio.Lock()
         # Set when a command could not be confirmed and no real value is known
-        # to fall back on: the panel reports unknown - never the optimistic
-        # target - until a poll brings a real value or a new command.
+        # to fall back on: the panel reports unknown - never the requested
+        # mode - until a poll brings a real value or a new command.
         self._state_unknown = False
+        # The mode a command in progress is waiting to see confirmed: the
+        # panel shows ARMING / DISARMING until then (see _begin_transition).
+        self._pending_mode: _Sai2Mode | None = None
         # Monotonic time of the last command sent to this area (see
         # _RECENT_COMMAND_SECONDS); None until the first one.
         self._last_command_at: float | None = None
@@ -370,6 +374,11 @@ class VimarAlarmControlPanel(
         project = self.coordinator.vimarproject
         if project is None or self._state_unknown:
             return None
+        if self._pending_mode is not None:
+            # A command is waiting for the control unit's confirmation.
+            if self._pending_mode.command == _MODE_DISARM.command:
+                return AlarmControlPanelState.DISARMING
+            return AlarmControlPanelState.ARMING
 
         # --- Primary: live bitmask from DPADD_OBJECT ---
         raw = self._current_raw()
@@ -377,7 +386,7 @@ class VimarAlarmControlPanel(
             label, _memory = _parse_sai2_area_value(raw)
             return SAI2_STATE_MAP.get(label, AlarmControlPanelState.DISARMED)
 
-        # --- Fallback: children dict (populated at discovery / optimistic) ---
+        # --- Fallback: children dict (populated at discovery / slim poll) ---
         if project.sai2_groups is None:
             return None
         group = project.sai2_groups.get(self._group_id)
@@ -405,9 +414,9 @@ class VimarAlarmControlPanel(
             "area_index": self._area_index,
             "area_name": self._group_data.get("name", "?"),
             "alarm_memory": alarm_memory,
-            # The bitmask alarm_state is decoded from (optimistic while a
-            # command is in flight), so the recorder keeps the raw value
-            # behind every state change.
+            # The bitmask alarm_state is decoded from (the last real reading,
+            # also while a command is in flight), so the recorder keeps the
+            # raw value behind every state change.
             "sai2_raw": raw,
         }
         if project and project.sai2_groups:
@@ -447,27 +456,25 @@ class VimarAlarmControlPanel(
         """Send arm night (PAR) command."""
         await self._send_sai2_command(_MODE_ARM_NIGHT, code)
 
-    def _apply_optimistic(self, mode: _Sai2Mode) -> None:
-        """Patch the live bitmask + children so the UI shows the target now.
+    def _begin_transition(self, mode: _Sai2Mode) -> None:
+        """Show ARMING / DISARMING until the control unit confirms `mode`.
 
-        This makes the intermediate disarm (when switching armed modes)
-        invisible to the user.
+        The requested mode is never shown before it is confirmed. The cached
+        live value is left alone - the last real reading, kept from polls by
+        the guard - so whatever ends the command early (an error, a cancelled
+        script) falls back to the real state, never to the requested one.
+        An intermediate disarm (switching between armed modes) stays hidden
+        behind ARMING.
         """
-        project = self.coordinator.vimarproject
-        if project is None or project.sai2_groups is None:
-            return
-        self._state_unknown = False  # a new command: show its target
-        if project.sai2_area_values is not None:
-            project.sai2_area_values[self._group_id] = mode.bitmask
-        group = project.sai2_groups.get(self._group_id)
-        if group is not None:
-            children = group.get("children", {})
-            for label in SAI2_STATE_MAP:
-                child = children.get(label)
-                if child:
-                    child["value"] = "1" if label == mode.label else "0"
-        # The guard was already set, for the whole command, before the PIN check.
+        self._state_unknown = False
+        self._pending_mode = mode
         self.async_write_ha_state()
+
+    def _end_transition(self) -> None:
+        """Leave ARMING / DISARMING, showing the cached (real) value."""
+        if self._pending_mode is not None:
+            self._pending_mode = None
+            self.async_write_ha_state()
 
     def _extend_guard(self, project: VimarProject, seconds: float) -> None:
         """Protect this area's cached value from polls for `seconds`, never less.
@@ -497,8 +504,8 @@ class VimarAlarmControlPanel(
 
         The HA code is forwarded to the control unit as the user PIN. When
         switching between armed modes (e.g. PAR -> ON) the SAI2 system
-        requires a disarm first; this is handled automatically and shown
-        optimistically so it stays invisible to the user.
+        requires a disarm first; this is handled automatically, behind the
+        ARMING state, so it stays invisible to the user.
 
         Every command is reported as done only once the area's live
         CURRENT_VALUE confirms it (see _confirm_mode): the set service answers
@@ -584,7 +591,7 @@ class VimarAlarmControlPanel(
                 raise
 
             # Decide from the control unit's live state rather than the last
-            # poll, which can be a scan interval old or still optimistic.
+            # poll, which can be a scan interval old.
             live = await self._read_live_raw(vimarconnection)
             if live is not None:
                 live_label = _parse_sai2_area_value(live)[0]
@@ -625,9 +632,8 @@ class VimarAlarmControlPanel(
                 )
                 before_raw = self._current_raw()
 
-            # Optimistic update first so the UI reflects the target state
-            # immediately, hiding any intermediate disarm.
-            self._apply_optimistic(mode)
+            # ARMING / DISARMING until the control unit confirms the mode.
+            self._begin_transition(mode)
 
             try:
                 # Auto-disarm when switching between armed modes.
@@ -676,11 +682,16 @@ class VimarAlarmControlPanel(
 
                 await self._confirm_mode(project, vimarconnection, group["name"], mode, before_raw)
             except Exception:
-                # Drop the optimistic guard so the next poll restores the
-                # real state quickly, then re-raise for the UI.
+                # Back to the last real value, drop the guard so the next poll
+                # can update it, then re-raise for the UI.
+                self._end_transition()
                 project.sai2_optimistic_until.pop(self._group_id, None)
                 await self.coordinator.async_request_refresh()
                 raise
+            finally:
+                # Whatever ended the command - even a cancelled script - the
+                # transitional state must not outlive it.
+                self._end_transition()
 
             # Success: clear any stale failure notification for this area.
             persistent_notification.async_dismiss(self.hass, f"vimar_sai2_{self._group_id}")
@@ -698,11 +709,11 @@ class VimarAlarmControlPanel(
         Reads the area's own DPADD_OBJECT row once per second, outside the
         coordinator poll. Only a well-formed bitmask counts: an empty/NULL
         value is a missing reading and is retried, never taken as a disarm.
-        The optimistic value stays guarded for the whole window, so the panel
-        neither flips back to armed on a stale poll nor claims success the
-        control unit never confirmed.
+        The last real value stays guarded for the whole window and the panel
+        shows ARMING / DISARMING, so it neither flips on a stale poll nor
+        claims a mode the control unit never confirmed.
 
-        On success the confirmed value replaces the optimistic one. On timeout
+        On success the confirmed value is shown. On timeout
         the entity is put back on the real state BEFORE the error is raised -
         the last valid reading, or the pre-command value if there was none,
         or unknown if neither exists - because a caller (e.g. a script) may
@@ -774,23 +785,24 @@ class VimarAlarmControlPanel(
         return raw
 
     def _show_real_state(self, project: VimarProject, raw: str) -> None:
-        """Replace the optimistic value with `raw`, drop the guard, write state."""
+        """Show the real value `raw`, end the transition, drop the guard."""
         # Created if missing, as the coordinator poll does: without it the
-        # state would come from the children dict, which still holds the
-        # optimistic "Disinserito".
+        # state would come from the children dict of the last discovery.
         if project.sai2_area_values is None:
             project.sai2_area_values = {}
         project.sai2_area_values[self._group_id] = raw
         project.sai2_optimistic_until.pop(self._group_id, None)
         self._state_unknown = False
+        self._pending_mode = None
         self.async_write_ha_state()
 
     def _show_unknown_state(self, project: VimarProject) -> None:
-        """No real value to show: report unknown, never the optimistic disarm."""
+        """No real value to show: report unknown, never the requested mode."""
         if project.sai2_area_values is not None:
             project.sai2_area_values.pop(self._group_id, None)
         project.sai2_optimistic_until.pop(self._group_id, None)
         self._state_unknown = True
+        self._pending_mode = None
         self.async_write_ha_state()
 
     async def _fail_command(self, result_code: str | None) -> NoReturn:
