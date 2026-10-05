@@ -14,6 +14,41 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0b3] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b2`. Fixes a case where Home
+> Assistant showed SAI2 areas **disarmed while the control unit had them
+> armed**. **Behaviour change:** an area whose value cannot be read is now
+> `unknown`, never `disarmed`.
+
+### Fixed
+
+- **Armed areas shown as disarmed after a web server restart.** After the web server restarted, the SAI2 area values it served read `0`, or nothing at all. The control unit carried out the arm commands. Home Assistant correctly reported them as not confirmed (`sai2_arm_not_confirmed`), then showed the three areas **disarmed**: with no valid reading after the command, it fell back on the value from before it (`0`), and the poll read `0` as disarmed.
+  - **Only an 8-character bitmask of 0 and 1 is a value**, in the poll, in the confirmation of a command and at startup. NULL/empty, a missing row, `0`, another length or other characters are not a value: the area is `unknown`.
+  - **A failing SAI2 query no longer keeps an old state for ever.** The values already read are kept for up to **60 s** from an area's last valid reading, so a single failed query changes nothing; after that the area is `unknown`, with a `WARNING`, until the first valid reading, which shows the state read then.
+  - **After a command, the state shown always comes from a reading taken after it.** If a command is not confirmed and no valid reading came back, if a rejected command cannot be re-read, or if a script is stopped while a command is in progress, the area is `unknown` until the next valid poll — never the value from before the command, which the command may have changed.
+
+### Behaviour change
+
+- **An area whose value cannot be read is `unknown`, not `disarmed`.** This includes a NULL/empty value, which was read as `disarmed` until now. A `WARNING` is logged when an area becomes unreadable, once, and an `INFO` line when a valid value comes back:
+  `SAI2 poll: area 7560 (Reparto Giorno) CURRENT_VALUE '0' is not a valid bitmask; its state is unknown until a valid value arrives`
+  or, when the query keeps failing for more than 60 s:
+  `SAI2 poll: area 7560 (Reparto Giorno) has had no valid CURRENT_VALUE for 64s (the query keeps failing); its state is unknown until a valid value arrives`
+- Automations that check `disarmed` / `armed_*` should expect `unknown` while the web server serves unreadable values. Commands can still be sent to an `unknown` area.
+- If an installation's control unit uses a bitmask that is not 8 characters long, its areas are now `unknown`, with the `WARNING` above. Every installation seen so far uses 8 characters; please open an issue if yours does not.
+
+### Debugging
+
+As in `2026.10.0b2`, the SAI2 lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+---
+
 ## [2026.10.0b2] - 2026-10-05
 
 > **Beta.** Includes everything in `2026.10.0b1`. Fixes a regression of
