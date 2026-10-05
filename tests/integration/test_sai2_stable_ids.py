@@ -312,3 +312,46 @@ def test_zone_attributes_no_longer_report_memory():
     from custom_components.vimar.binary_sensor import _parse_sai2_zone_value
 
     assert "memory" not in _parse_sai2_zone_value("00000100")
+
+
+# ---------------------------------------------------------------------------
+# Zone naming convention: the prefix decides
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("zone_name", "expected"),
+    [
+        ("Tenda fin. sala", "motion"),  # "fin" would say window
+        ("TENDA portafin.", "motion"),  # "porta" would say door
+        ("Vol sala", "motion"),
+        ("vol. garage", "motion"),
+        ("Volumetrico box", "motion"),
+        ("Cont. porta ingr", "door"),
+        ("Cont. finestra", "door"),  # a contact, whatever it guards
+        ("cont. basculante", "garage_door"),
+        ("Cont. garage", "garage_door"),
+        ("Cont. basc garag", "garage_door"),  # cut at 16 characters
+        ("Manom. sirena", "tamper"),
+        ("manom. vol sala", "tamper"),  # prefix wins over "vol" inside
+        ("  Tenda cucina", "motion"),
+    ],
+)
+def test_naming_convention_prefix(zone_name, expected):
+    assert _guess_device_class(zone_name).value == expected
+
+
+@pytest.mark.parametrize(
+    ("zone_name", "expected"),
+    [
+        ("fin. grande sala", "window"),
+        ("portafin. cucina", "door"),
+        ("basculante garag", "garage_door"),
+        ("manomis. sirena", "tamper"),
+        ("Zona 7", None),
+        ("continua sala", None),  # "cont" without the dot is not the prefix
+    ],
+)
+def test_names_without_prefix_use_the_old_rules(zone_name, expected):
+    device_class = _guess_device_class(zone_name)
+    assert (device_class.value if device_class else None) == expected

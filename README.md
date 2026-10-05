@@ -212,16 +212,40 @@ Each SAI2 area is exposed as an `alarm_control_panel` entity supporting:
 
 ### Zone Binary Sensors
 
-Each SAI2 zone is exposed as a `binary_sensor` with automatic device class detection:
+Each SAI2 zone is exposed as a `binary_sensor`. The web server does not say what kind of detector a zone is, so the device class is inferred from the zone name. You can always change it in Home Assistant (entity settings → **Show as**); the change survives a reprogramming of the control unit.
+
+#### Recommended zone naming convention
+
+Zone names on the SAI2 control unit are at most 16 characters. Start each name with the detector type, then where it is. A known prefix (case-insensitive) decides the device class on its own:
+
+| Name starts with | Detector | Device Class |
+|------------------|----------|--------------|
+| `Tenda` | curtain detector | `motion` |
+| `Vol` | volumetric detector | `motion` |
+| `Cont.` | magnetic contact | `door` — `garage_door` if the name contains `basculante` or `garag(e)` |
+| `Manom.` | tamper line | `tamper` |
+
+Example:
+
+```text
+Tenda fin. sala      → motion
+Vol corrid. P1       → motion
+Cont. porta ingr     → door
+Cont. basculante     → garage_door
+Manom. sirena        → tamper
+```
+
+Names without one of these prefixes fall back to keywords anywhere in the name, first match wins:
 
 | Zone Name Keywords | Device Class |
 |-----------|--------------|
-| porta, ingresso, basculante | `door` |
-| finestra | `window` |
-| volumetrico, PIR, motion | `motion` |
+| vol., volumetrico, PIR, motion, tenda | `motion` |
 | sirena, manomissione, tamper | `tamper` |
+| basculante, garage | `garage_door` |
+| porta, portone, ingresso | `door` |
+| fin., finestra | `window` |
 
-**Extra attributes:** `raw_value`, `excluded`, `alarm`, `tampered`, `masked`, `memory`, `area`
+**Extra attributes:** `zone_id`, `area_name`, `raw_bitmask`, `open`, `excluded`, `alarm`, `tamper`, `masked`. `excluded` is set while the zone is excluded from the armed mode (e.g. volumetric detectors in INT); the web server only refreshes it at the zone's next event.
 
 ### Setup
 

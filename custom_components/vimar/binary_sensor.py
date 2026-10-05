@@ -24,21 +24,31 @@ from .vimar_entity import VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
 
-# Keywords in zone names used to infer BinarySensorDeviceClass.
-# Checked case-insensitively, first match wins.
-#
 # The web server does not say what kind of detector a zone is: neither the
 # SAI2_ZONE rows (VALUES_TYPE, OPTIONALP and DESCRIPTION are empty, the
 # RENDERING_ID is the same for every zone) nor their children, relations or
 # the control unit's project export carry a type - only the zone number and
-# its name. So the name is all there is.
+# its name (16 characters on the control unit). So the name is all there is.
 #
-# Volumetric detectors come first: "vol. garage" is a motion detector in the
-# garage, not the garage door. A name can only say where a detector is, not
-# always what it is - "fin." may be a window contact or a curtain detector -
-# so the guess is a default the user can override ("Show as") in Home
-# Assistant; with stable unique_ids (see sai2_ids) that override now survives
-# a reprogramming of the control unit.
+# Recommended naming convention (see the README): the zone name starts with
+# the detector type. A known prefix decides the device class on its own,
+# before any other rule. Checked case-insensitively.
+_DEVICE_CLASS_PREFIXES: list[tuple[str, BinarySensorDeviceClass]] = [
+    ("tenda", BinarySensorDeviceClass.MOTION),
+    ("vol", BinarySensorDeviceClass.MOTION),
+    ("cont.", BinarySensorDeviceClass.DOOR),  # garage_door: see _guess_device_class
+    ("manom.", BinarySensorDeviceClass.TAMPER),
+]
+# A contact on the garage door. "garag" because 16 characters often cut it.
+_GARAGE_KEYWORDS = ("basculante", "garag")
+
+# Fallback for names without a known prefix: keywords anywhere in the name,
+# first match wins. Volumetric detectors come first: "vol. garage" is a
+# motion detector in the garage, not the garage door. A name can only say
+# where a detector is, not always what it is - "fin." may be a window contact
+# or a curtain detector - so the guess is a default the user can override
+# ("Show as") in Home Assistant; with stable unique_ids (see sai2_ids) that
+# override survives a reprogramming of the control unit.
 _DEVICE_CLASS_HINTS: list[tuple[list[str], BinarySensorDeviceClass]] = [
     (["vol.", "vol ", "volumetr", "pir", "motion", "tenda"], BinarySensorDeviceClass.MOTION),
     (["sirena", "manomis", "tamper"], BinarySensorDeviceClass.TAMPER),
@@ -49,8 +59,15 @@ _DEVICE_CLASS_HINTS: list[tuple[list[str], BinarySensorDeviceClass]] = [
 
 
 def _guess_device_class(zone_name: str) -> BinarySensorDeviceClass | None:
-    """Infer device class from zone name keywords."""
-    name_lower = zone_name.lower()
+    """Infer the device class from the zone name: prefix first, then keywords."""
+    name_lower = zone_name.strip().lower()
+    for prefix, device_class in _DEVICE_CLASS_PREFIXES:
+        if name_lower.startswith(prefix):
+            if device_class is BinarySensorDeviceClass.DOOR and any(
+                kw in name_lower for kw in _GARAGE_KEYWORDS
+            ):
+                return BinarySensorDeviceClass.GARAGE_DOOR
+            return device_class
     for keywords, device_class in _DEVICE_CLASS_HINTS:
         for kw in keywords:
             if kw in name_lower:
