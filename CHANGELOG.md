@@ -14,6 +14,37 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0b2] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b1`. Fixes a regression of
+> `2026.10.0b1`: when one action armed several SAI2 areas, **only the first
+> area was armed**; the others failed with `sai2_arm_not_confirmed`. The PIN is
+> now checked right before **every** command again.
+
+### Fixed
+
+- **Only the first area of a multi-area action was armed.** `2026.10.0b1` checked the PIN once per action and reused that result for the other areas. On real hardware their commands were acknowledged by the web server (`DPCM-0000`) on an idle control unit and then never carried out: a PIN check seems to authorise the command that follows it, not to validate the PIN for good.
+  - **Every command now gets its own PIN check, right before it.** An area's check starts only after the previous area's command was confirmed, so no check lands on a control unit that is still busy (the cause of the *wrong PIN* reported for a valid PIN, fixed in `2026.10.0b1`).
+  - **Switching between armed modes** (e.g. *night* → *away*) now waits for the intermediate disarm to be confirmed, then checks the PIN again before arming. If the intermediate disarm is not confirmed within 20 s, the arm is not sent and the action fails with `sai2_arm_not_confirmed`; the area keeps showing its real state. The intermediate step stays hidden behind `arming`.
+- **A wrong PIN still fails at once and costs a single attempt per action.** Only that result (`SAI2-3127`) is remembered for the other areas of the same action, in memory and as a keyed hash, never logged. A valid result is never reused.
+
+### Behaviour change
+
+- An action on several areas makes one PIN check per area (two for an area switching between armed modes) instead of one per action, each taking about 1.2 s.
+- Switching an area between armed modes takes a few seconds longer: the intermediate disarm is now confirmed before the arm is sent.
+
+### Debugging
+
+As in `2026.10.0b1`, the SAI2 lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+---
+
 ## [2026.10.0b1] - 2026-10-05
 
 > **Beta.** Includes everything in `2026.10.0b0`. Fixes two problems that
