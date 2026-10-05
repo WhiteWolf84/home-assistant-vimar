@@ -154,15 +154,15 @@ async def test_unconfirmed_disarm_raises_and_already_shows_armed(monkeypatch):
     acp.persistent_notification.async_create.assert_called_once()
 
 
-async def test_no_valid_reading_restores_the_pre_command_state(monkeypatch):
-    """Only NULLs came back: fall back to the last known real value."""
+async def test_no_valid_reading_after_the_command_is_unknown(monkeypatch):
+    """Only NULLs came back: the pre-command value may be stale - unknown."""
     panel, project, connection, coordinator = _panel(monkeypatch, [None])
 
     with pytest.raises(HomeAssistantError):
         await panel.async_alarm_disarm("1234")
 
-    assert panel.alarm_state is AlarmControlPanelState.ARMED_HOME
-    assert panel.written[-1] is AlarmControlPanelState.ARMED_HOME
+    assert panel.alarm_state is None  # never the ARMED_HOME read before
+    assert panel.written[-1] is None
 
 
 @pytest.mark.parametrize(
@@ -230,7 +230,7 @@ async def test_real_reading_is_shown_even_without_live_area_values(monkeypatch):
     "missing",
     # NULL/empty, text, a truncated value, and the int(..., 2) quirks the
     # parser would decode as 0 but that are never a real bitmask.
-    [None, "", "NULL", "0000000x", "0b0", " 0 ", "0_0", "+0"],
+    [None, "", "NULL", "0", "0000000x", "0b0", " 0 ", "0_0", "+0"],
 )
 async def test_null_or_malformed_reading_is_not_a_confirmation(monkeypatch, missing):
     """The general poll reads NULL as '00000000'; the confirmation must not."""
@@ -243,25 +243,25 @@ async def test_null_or_malformed_reading_is_not_a_confirmation(monkeypatch, miss
     assert panel.alarm_state is not AlarmControlPanelState.DISARMED
 
 
-@pytest.mark.parametrize("length", [1, 8, 16])
-async def test_bitmasks_of_any_length_are_readings(monkeypatch, length):
-    """Like the parser: other control units may not use 8 characters."""
-    armed = "0" * (length - 3) + "101" if length >= 3 else "1"
-    panel, project, connection, coordinator = _panel(monkeypatch, [armed, "0" * length])
+@pytest.mark.parametrize("length", [1, 7, 9, 16])
+async def test_only_8_character_bitmasks_are_readings(monkeypatch, length):
+    """'0' (seen after a web server restart) or any other length is no reading."""
+    panel, project, connection, coordinator = _panel(monkeypatch, [ARMED_HOME, "0" * length])
 
-    await panel.async_alarm_disarm("1234")
+    with pytest.raises(HomeAssistantError) as err:
+        await panel.async_alarm_disarm("1234")
 
-    assert project.sai2_area_values[GROUP_ID] == "0" * length
-    assert panel.alarm_state is AlarmControlPanelState.DISARMED
+    assert err.value.translation_key == "sai2_disarm_not_confirmed"
+    assert panel.alarm_state is None  # unknown, not DISARMED
 
 
-async def test_armed_reading_of_another_length_is_not_a_disarm(monkeypatch):
+async def test_armed_reading_of_another_length_is_no_reading(monkeypatch):
     panel, project, connection, coordinator = _panel(monkeypatch, ["0000000000000101"])
 
     with pytest.raises(HomeAssistantError):
         await panel.async_alarm_disarm("1234")
 
-    assert panel.alarm_state is AlarmControlPanelState.ARMED_HOME
+    assert panel.alarm_state is None
 
 
 async def test_null_reading_is_retried_until_a_real_one(monkeypatch):
@@ -307,7 +307,8 @@ async def test_slow_soap_with_a_poll_in_between_does_not_flip_back(monkeypatch):
     poller.vimarproject = project
     poller.vimarconnection = poll_connection
     poller.hass = SimpleNamespace(async_add_executor_job=_poll_executor)
-    poller._sai2_null_areas = set()
+    poller._sai2_invalid_areas = set()
+    poller._sai2_last_valid_at = {}
     seen_mid_call = {}
 
     async def _executor(func, *args):
@@ -527,8 +528,12 @@ async def test_soap_error_goes_back_to_the_real_state(monkeypatch):
     ]
 
 
-async def test_cancelled_script_goes_back_to_the_real_state(monkeypatch):
-    """A script stopped mid-command must not leave the area 'arming' forever."""
+async def test_cancelled_script_after_the_command_shows_unknown(monkeypatch):
+    """A script stopped mid-command must not leave the area 'arming' forever.
+
+    The command already went out, so the value read before it may be stale:
+    unknown until the next valid poll.
+    """
     panel, project, connection, coordinator = _panel(monkeypatch, [DISARMED])
     project.sai2_area_values[GROUP_ID] = DISARMED
     reads = {"n": 0}
@@ -544,8 +549,12 @@ async def test_cancelled_script_goes_back_to_the_real_state(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await panel.async_alarm_arm_home("1234")
 
-    assert panel.alarm_state is AlarmControlPanelState.DISARMED
-    assert panel.written[-1] is AlarmControlPanelState.DISARMED
+    assert panel.alarm_state is None
+    assert panel.written[-1] is None
+    assert GROUP_ID not in project.sai2_optimistic_until  # the next poll counts
+    project.sai2_area_values[GROUP_ID] = ARMED_HOME  # ...and brings the value
+    panel._handle_coordinator_update()
+    assert panel.alarm_state is AlarmControlPanelState.ARMED_HOME
 
 
 async def test_arm_already_in_mode_never_shows_arming(monkeypatch):

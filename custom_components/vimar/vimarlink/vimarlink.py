@@ -48,6 +48,20 @@ from .exceptions import VimarApiError
 from .sql_parser import parse_sql_payload
 
 _LOGGER = logging.getLogger(__name__)
+
+# Every SAI2 area CURRENT_VALUE seen so far is an 8-character bitmask. Anything
+# else - NULL/empty, a missing row, '0' (read on 2026-10-05 after a web server
+# restart, while the control unit had the areas armed), another length, other
+# characters - is not a reading: decoding it would report "disarmed" for an
+# area whose state nobody read.
+SAI2_BITMASK_LENGTH = 8
+
+
+def is_valid_sai2_bitmask(value: str | None) -> bool:
+    """Return True if `value` is a well-formed SAI2 area CURRENT_VALUE."""
+    return value is not None and len(value) == SAI2_BITMASK_LENGTH and set(value) <= {"0", "1"}
+
+
 MAX_ROWS_PER_REQUEST = 300
 
 
@@ -732,9 +746,9 @@ class VimarLink:
 
         Returns dict {group_id: current_value_bitmask_string} or None on error.
         e.g. {'7560': '00000000', '7615': '00000000', '7663': '00001001'}
-        An empty/NULL CURRENT_VALUE reads as '00000000' (disarmed); callers
-        that must not mistake a missing value for a disarm use
-        get_sai2_area_raw_values() instead.
+        An empty/NULL CURRENT_VALUE reads as '00000000' (disarmed). Only the
+        SAI2 zones use it now; the areas use get_sai2_area_checked_values(),
+        which never mistakes a missing or malformed value for a disarm.
         """
         raw_values = self.get_sai2_area_raw_values(group_ids)
         if raw_values is None:
@@ -744,8 +758,8 @@ class VimarLink:
     def get_sai2_area_raw_values(self, group_ids: list[str]) -> dict[str, str | None] | None:
         """Like get_sai2_area_values(), but an empty/NULL CURRENT_VALUE is None.
 
-        Used to confirm a disarm: there, a NULL turned into '00000000' would
-        report the area as disarmed when the web server said nothing at all.
+        A NULL turned into '00000000' would report the area as disarmed when
+        the web server said nothing at all.
         """
         if not group_ids:
             return {}
@@ -754,6 +768,21 @@ class VimarLink:
         if payload is None:
             return None
         return {str(row["gid"]): (str(row.get("current_value") or "") or None) for row in payload}
+
+    def get_sai2_area_checked_values(self, group_ids: list[str]) -> dict[str, str | None] | None:
+        """Every requested area's CURRENT_VALUE, or None where it is not valid.
+
+        None for an area means "not readable" (see is_valid_sai2_bitmask): a
+        NULL/empty or malformed value, or no row at all. The whole result is
+        None when the query failed.
+        """
+        raw_values = self.get_sai2_area_raw_values(group_ids)
+        if raw_values is None:
+            return None
+        return {
+            gid: value if is_valid_sai2_bitmask(value := raw_values.get(gid)) else None
+            for gid in group_ids
+        }
 
     def update_sai2_from_slim(
         self, sai2_groups: dict | None, sai2_zones: dict | None, slim_results: list[dict]
@@ -879,8 +908,10 @@ class VimarProject:
         self.sai2_zones: dict | None = None
         # Mapping: {zone_id: group_id} - which area each zone belongs to
         self.sai2_zone_to_group: dict[str, str] | None = None
-        # Live SAI2 area/zone bitmask values from DPADD_OBJECT
-        self.sai2_area_values: dict[str, str] | None = None
+        # Live SAI2 area/zone bitmask values from DPADD_OBJECT. An area whose
+        # value could not be read validly is present with None: its state is
+        # unknown, never "disarmed".
+        self.sai2_area_values: dict[str, str | None] | None = None
         self.sai2_zone_values: dict[str, str] | None = None
         # Guard: {group_id: monotonic_deadline} - prevents slim poll from
         # overwriting optimistic values while a command is being processed.
@@ -911,7 +942,7 @@ class VimarProject:
             self.sai2_zone_to_group = self._link.get_sai2_zone_to_group()
             # Fetch initial live area values
             if self.sai2_groups:
-                self.sai2_area_values = self._link.get_sai2_area_values(
+                self.sai2_area_values = self._link.get_sai2_area_checked_values(
                     list(self.sai2_groups.keys())
                 )
             # Fetch initial live zone values

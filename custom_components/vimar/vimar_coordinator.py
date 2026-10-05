@@ -56,7 +56,7 @@ from .const import (
 )
 from .vimar_device_customizer import VimarDeviceCustomizer
 from .vimarlink.exceptions import VimarApiError
-from .vimarlink.vimarlink import VimarLink, VimarProject
+from .vimarlink.vimarlink import VimarLink, VimarProject, is_valid_sai2_bitmask
 
 log = _LOGGER
 
@@ -69,6 +69,10 @@ _WRITE_GUARD_SECONDS = 15.0
 # never collide with a real value: _hash_device_state() returns an md5
 # hexdigest, which is always 32 characters.
 _HASH_INVALIDATED = ""
+
+# A failed SAI2 query keeps the area values already read, but not for ever:
+# with no valid reading of an area for this long, its state is unknown.
+_SAI2_STALE_SECONDS = 60.0
 
 
 class VimarDataUpdateCoordinator(DataUpdateCoordinator):
@@ -160,9 +164,12 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # poll that reads stale hardware state. Cleared lazily in _apply_slim_results.
         self._pending_write_guards: dict[str, float] = {}
 
-        # SAI2 areas whose CURRENT_VALUE is currently NULL/empty (diagnostics
-        # only: logged once when an area enters/leaves that condition).
-        self._sai2_null_areas: set[str] = set()
+        # SAI2 areas whose CURRENT_VALUE is currently not a valid bitmask
+        # (their state is unknown); logged once when an area enters/leaves
+        # that condition.
+        self._sai2_invalid_areas: set[str] = set()
+        # Monotonic time of each SAI2 area's last valid reading in the poll.
+        self._sai2_last_valid_at: dict[str, float] = {}
 
         refresh = vimarconfig.get(CONF_ENERGY_REFRESH_INTERVAL)
         self._energy_refresh_interval: float = (
@@ -744,20 +751,25 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         DPADD_OBJECT.CURRENT_VALUE for SAI2 group IDs updates immediately
         after commands, unlike the DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN view.
         Group values respect the per-group guard set while an alarm command
-        is in flight, so a stale read cannot overwrite them.
+        is in flight, so a stale read cannot overwrite them. A group value that
+        is not a valid bitmask is stored as None: the area's state is unknown.
         """
         if self.vimarproject.sai2_groups:
             group_ids = list(self.vimarproject.sai2_groups.keys())
             raw_values = await self.hass.async_add_executor_job(
                 self.vimarconnection.get_sai2_area_raw_values, group_ids
             )
-            fresh_values = self._sai2_values_with_null_warning(raw_values)
-            if fresh_values is not None:
-                now = time.monotonic()
+            fresh_values = self._sai2_checked_area_values(raw_values, group_ids)
+            now = time.monotonic()
+            if fresh_values is None:
+                self._sai2_expire_stale_areas(group_ids, now)
+            else:
                 guard = self.vimarproject.sai2_optimistic_until
                 if self.vimarproject.sai2_area_values is None:
                     self.vimarproject.sai2_area_values = {}
                 for gid, val in fresh_values.items():
+                    if val is not None:
+                        self._sai2_last_valid_at[gid] = now
                     old = self.vimarproject.sai2_area_values.get(gid)
                     if guard.get(gid, 0) > now:
                         if val != old:
@@ -781,33 +793,75 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             if fresh_zone_values is not None:
                 self.vimarproject.sai2_zone_values = fresh_zone_values
 
-    def _sai2_values_with_null_warning(
-        self, raw_values: dict[str, str | None] | None
-    ) -> dict[str, str] | None:
-        """Convert raw area values exactly like get_sai2_area_values().
+    def _sai2_expire_stale_areas(self, group_ids: list[str], now: float) -> None:
+        """The SAI2 query failed: areas not read validly for too long go unknown.
 
-        A NULL/empty CURRENT_VALUE still reads as '00000000' (disarmed) - no
-        behaviour change - but an area entering that condition is logged once
-        as a WARNING, and leaving it once at INFO, so a "disarmed" that the
-        web server never actually reported shows up in the log.
+        Until _SAI2_STALE_SECONDS after an area's last valid reading (or after
+        the first failed poll, when there was none) its value is kept: a
+        single failed query is not worth an unknown state. Past that, the
+        value is stored as None, with a WARNING once; the first valid reading
+        brings the area back (see _sai2_checked_area_values). An area with a
+        command in flight is left to the command's own confirmation.
+        """
+        project = self.vimarproject
+        groups = project.sai2_groups or {}
+        guard = project.sai2_optimistic_until
+        for gid in group_ids:
+            since = self._sai2_last_valid_at.setdefault(gid, now)
+            if now - since <= _SAI2_STALE_SECONDS or guard.get(gid, 0) > now:
+                continue
+            if project.sai2_area_values is None:
+                project.sai2_area_values = {}
+            project.sai2_area_values[gid] = None
+            if gid not in self._sai2_invalid_areas:
+                self._sai2_invalid_areas.add(gid)
+                _LOGGER.warning(
+                    "SAI2 poll: area %s (%s) has had no valid CURRENT_VALUE for %.0fs "
+                    "(the query keeps failing); its state is unknown until a valid "
+                    "value arrives",
+                    gid,
+                    groups.get(gid, {}).get("name", "?"),
+                    now - since,
+                )
+
+    def _sai2_checked_area_values(
+        self, raw_values: dict[str, str | None] | None, group_ids: list[str]
+    ) -> dict[str, str | None] | None:
+        """Keep the valid area values; None for any other (state unknown).
+
+        NULL/empty, a missing row, '0', another length: none of them is a
+        reading (see is_valid_sai2_bitmask), and decoding one used to show
+        "disarmed" - on 2026-10-05, for areas the control unit had armed. An
+        area entering that condition is logged once as a WARNING, and once at
+        INFO when a valid value comes back. None for the whole result means
+        the query failed: see _sai2_expire_stale_areas.
         """
         if raw_values is None:
             return None
         groups = self.vimarproject.sai2_groups or {}
-        for gid, raw in raw_values.items():
+        checked: dict[str, str | None] = {}
+        for gid in group_ids:
+            raw = raw_values.get(gid)
             name = groups.get(gid, {}).get("name", "?")
-            if raw is None and gid not in self._sai2_null_areas:
-                self._sai2_null_areas.add(gid)
+            if is_valid_sai2_bitmask(raw):
+                checked[gid] = raw
+                if gid in self._sai2_invalid_areas:
+                    self._sai2_invalid_areas.discard(gid)
+                    _LOGGER.info(
+                        "SAI2 poll: area %s (%s) CURRENT_VALUE is back: %s", gid, name, raw
+                    )
+                continue
+            checked[gid] = None
+            if gid not in self._sai2_invalid_areas:
+                self._sai2_invalid_areas.add(gid)
                 _LOGGER.warning(
-                    "SAI2 poll: area %s (%s) CURRENT_VALUE is NULL/empty; "
-                    "it reads as disarmed until a real value arrives",
+                    "SAI2 poll: area %s (%s) CURRENT_VALUE %s is not a valid bitmask; "
+                    "its state is unknown until a valid value arrives",
                     gid,
                     name,
+                    "is missing" if gid not in raw_values else f"{raw!r}",
                 )
-            elif raw is not None and gid in self._sai2_null_areas:
-                self._sai2_null_areas.discard(gid)
-                _LOGGER.info("SAI2 poll: area %s (%s) CURRENT_VALUE is back: %s", gid, name, raw)
-        return {gid: raw or "00000000" for gid, raw in raw_values.items()}
+        return checked
 
     def _apply_slim_results(self, devices: dict, slim_results: list) -> None:
         """Patch CURRENT_VALUE from slim poll into existing device tree.

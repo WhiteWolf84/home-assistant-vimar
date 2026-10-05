@@ -7,7 +7,6 @@ import contextlib
 import hashlib
 import hmac
 import logging
-import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -31,7 +30,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import CONF_AUTOMATION_PIN, CONF_USER_PINS, DOMAIN
 from .const import DEVICE_TYPE_ALARM as CURR_PLATFORM
 from .vimar_coordinator import VimarDataUpdateCoordinator
-from .vimarlink.vimarlink import VimarLink, VimarProject
+from .vimarlink.vimarlink import VimarLink, VimarProject, is_valid_sai2_bitmask
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,14 +68,11 @@ _CONFIRM_GUARD_MARGIN_SECONDS = 5.0
 # pre-command one, so it is not trusted to skip an arm (see _send_sai2_command).
 _RECENT_COMMAND_SECONDS = _CONFIRM_TIMEOUT_SECONDS
 
-# Only a well-formed bitmask counts as a reading when confirming a command: an
-# empty/NULL CURRENT_VALUE, or a malformed one, decodes as "Disinserito" in
-# _parse_sai2_area_value and would confirm a disarm nobody reported. Any
-# length, like the parser (int(value, 2) plus an all-zeros check): the
-# installations seen so far send 8 characters, other control units may not.
-# Stricter than int() on purpose - its "0b" prefix, "_" separators, sign and
-# surrounding whitespace are never part of a real bitmask.
-_SAI2_BITMASK_RE = re.compile(r"[01]+")
+# Only a valid bitmask (is_valid_sai2_bitmask: 8 characters of 0/1) counts as
+# a reading, in the confirmation as in the poll. Anything else decodes as
+# "Disinserito" in _parse_sai2_area_value and would show a disarm nobody read.
+# After a command, the state shown always comes from a reading taken after it;
+# without one the area is unknown, never the pre-command value.
 
 # Result code meaning the web server accepted the call. The same DPCM-0000 is
 # returned both by service-vimarsai2authenticate when the PIN is valid and by
@@ -385,8 +381,11 @@ class VimarAlarmControlPanel(
             return AlarmControlPanelState.ARMING
 
         # --- Primary: live bitmask from DPADD_OBJECT ---
-        raw = self._current_raw()
-        if raw is not None:
+        area_values = project.sai2_area_values
+        if area_values is not None and self._group_id in area_values:
+            raw = area_values[self._group_id]
+            if raw is None:
+                return None  # not readable: unknown, never "disarmed"
             label, _memory = _parse_sai2_area_value(raw)
             return SAI2_STATE_MAP.get(label, AlarmControlPanelState.DISARMED)
 
@@ -599,7 +598,6 @@ class VimarAlarmControlPanel(
                     )
                 # Intermediate disarm only to switch between armed modes.
                 was_armed = live_label not in (_MODE_DISARM.label, mode.label)
-                before_raw: str | None = live
             else:
                 # No live reading: fall back on the last poll. An area it shows
                 # in the requested mode gets the command again, but never the
@@ -610,10 +608,12 @@ class VimarAlarmControlPanel(
                     None,
                     SAI2_STATE_MAP[mode.label],
                 )
-                before_raw = self._current_raw()
 
             # ARMING / DISARMING until the control unit confirms the mode.
             self._begin_transition(mode)
+            # Once a command may have reached the control unit, the value read
+            # before it no longer tells the area's state.
+            sent = False
 
             try:
                 # Auto-disarm when switching between armed modes.
@@ -624,6 +624,7 @@ class VimarAlarmControlPanel(
                         group["name"],
                     )
                     self._last_command_at = time.monotonic()
+                    sent = True
                     disarm_result = await self.hass.async_add_executor_job(
                         vimarconnection.set_sai2_status,
                         _MODE_DISARM.command,
@@ -644,13 +645,7 @@ class VimarAlarmControlPanel(
                         project, vimarconnection, group["name"], _MODE_DISARM
                     )
                     if raw is None or _parse_sai2_area_value(raw)[0] != _MODE_DISARM.label:
-                        await self._not_confirmed(
-                            project, group["name"], mode, _MODE_DISARM, raw, before_raw
-                        )
-                    # The area is now really disarmed: keep that as the real
-                    # value, still behind ARMING, in case the arm fails.
-                    self._store_real_value(project, raw)
-                    before_raw = raw
+                        await self._not_confirmed(project, group["name"], mode, _MODE_DISARM, raw)
                     await self._check_pin(vimarconnection, code, group["name"])
 
                 # Send the target command.
@@ -660,8 +655,9 @@ class VimarAlarmControlPanel(
                     self._area_index,
                     group["name"],
                 )
-                sent = time.monotonic()
-                self._last_command_at = sent
+                sent_at = time.monotonic()
+                self._last_command_at = sent_at
+                sent = True
                 result = await self.hass.async_add_executor_job(
                     vimarconnection.set_sai2_status,
                     mode.command,
@@ -674,22 +670,35 @@ class VimarAlarmControlPanel(
                     group["name"],
                     mode.command,
                     result,
-                    time.monotonic() - sent,
+                    time.monotonic() - sent_at,
                 )
                 if result != _SAI2_OK:
                     await self._fail_command(result)
 
-                await self._confirm_mode(project, vimarconnection, group["name"], mode, before_raw)
+                await self._confirm_mode(project, vimarconnection, group["name"], mode)
             except Exception:
-                # Back to the last real value, drop the guard so the next poll
-                # can update it, then re-raise for the UI.
-                self._end_transition()
+                # Show the real state - unless _not_confirmed already did - drop
+                # the guard so the next poll can update it, re-raise for the UI.
+                if self._pending_mode is not None:
+                    if sent:
+                        # A rejected or failed call may still have been carried
+                        # out: only a reading taken now tells the state.
+                        raw = await self._read_live_raw(vimarconnection)
+                        if raw is not None:
+                            self._show_real_state(project, raw)
+                        else:
+                            self._show_unknown_state(project)
+                    else:
+                        self._end_transition()
                 project.sai2_optimistic_until.pop(self._group_id, None)
                 await self.coordinator.async_request_refresh()
                 raise
             finally:
                 # Whatever ended the command - even a cancelled script - the
-                # transitional state must not outlive it.
+                # transitional state must not outlive it. Cancelled after a
+                # command went out: nothing read since, so unknown.
+                if self._pending_mode is not None and sent:
+                    self._show_unknown_state(project)
                 self._end_transition()
 
             # Success: clear any stale failure notification for this area.
@@ -780,7 +789,6 @@ class VimarAlarmControlPanel(
         vimarconnection: VimarLink,
         area_name: str,
         mode: _Sai2Mode,
-        before_raw: str | None,
     ) -> None:
         """Wait until the area's live CURRENT_VALUE reads `mode`, or fail.
 
@@ -793,7 +801,7 @@ class VimarAlarmControlPanel(
         if raw is not None and _parse_sai2_area_value(raw)[0] == mode.label:
             self._show_real_state(project, raw)
             return
-        await self._not_confirmed(project, area_name, mode, mode, raw, before_raw)
+        await self._not_confirmed(project, area_name, mode, mode, raw)
 
     async def _not_confirmed(
         self,
@@ -802,17 +810,17 @@ class VimarAlarmControlPanel(
         mode: _Sai2Mode,
         step: _Sai2Mode,
         last_valid: str | None,
-        before_raw: str | None,
     ) -> NoReturn:
         """`step` of the command for `mode` was not confirmed: show and fail.
 
         `step` is `mode` itself, or the intermediate disarm of a switch
         between armed modes. The entity is put back on the real state BEFORE
-        the error is raised - the last valid reading, or the pre-command value
-        if there was none, or unknown if neither exists - because a caller
-        (e.g. a script) may check the state right after the failed action, and
-        the coordinator refresh in the caller's except block goes through a
-        debouncer that does not always run it at once.
+        the error is raised - the last valid reading taken after the command,
+        or unknown if there was none: never the pre-command value, which the
+        command may have changed - because a caller (e.g. a script) may check
+        the state right after the failed action, and the coordinator refresh
+        in the caller's except block goes through a debouncer that does not
+        always run it at once.
         """
         # WARNING on purpose: it lands in system_log even without debug.
         _LOGGER.warning(
@@ -825,9 +833,8 @@ class VimarAlarmControlPanel(
             "" if step is mode else f" (intermediate step before {mode.label})",
             last_valid,
         )
-        real = last_valid if last_valid is not None else before_raw
-        if real is not None:
-            self._show_real_state(project, real)
+        if last_valid is not None:
+            self._show_real_state(project, last_valid)
         else:
             self._show_unknown_state(project)
         await self._fail(
@@ -841,7 +848,7 @@ class VimarAlarmControlPanel(
         )
 
     async def _read_live_raw(self, vimarconnection: VimarLink) -> str | None:
-        """Read this area's live CURRENT_VALUE; None if failed, NULL or malformed."""
+        """Read this area's live CURRENT_VALUE; None if failed or not valid."""
         try:
             values = await self.hass.async_add_executor_job(
                 vimarconnection.get_sai2_area_raw_values, [self._group_id]
@@ -850,21 +857,15 @@ class VimarAlarmControlPanel(
             _LOGGER.debug("SAI2: area %d live read failed: %s", self._area_index, err)
             return None
         raw = (values or {}).get(self._group_id)
-        if raw is None or not _SAI2_BITMASK_RE.fullmatch(raw):
-            return None
-        return raw
+        return raw if is_valid_sai2_bitmask(raw) else None
 
-    def _store_real_value(self, project: VimarProject, raw: str) -> None:
-        """Keep `raw` as the area's real value, without touching the state shown."""
+    def _show_real_state(self, project: VimarProject, raw: str) -> None:
+        """Show the real value `raw`, end the transition, drop the guard."""
         # Created if missing, as the coordinator poll does: without it the
         # state would come from the children dict of the last discovery.
         if project.sai2_area_values is None:
             project.sai2_area_values = {}
         project.sai2_area_values[self._group_id] = raw
-
-    def _show_real_state(self, project: VimarProject, raw: str) -> None:
-        """Show the real value `raw`, end the transition, drop the guard."""
-        self._store_real_value(project, raw)
         project.sai2_optimistic_until.pop(self._group_id, None)
         self._state_unknown = False
         self._pending_mode = None
