@@ -205,7 +205,7 @@ def _ordered(panels):
 # ---------------------------------------------------------------------------
 
 
-async def test_1126_one_pin_check_every_area_armed_and_confirmed(monkeypatch):
+async def test_1126_every_area_checked_when_idle_armed_and_confirmed(monkeypatch):
     # A busy PIN check would answer SAI2-3127, as in the log.
     clock, unit, connection, panels = _setup(
         monkeypatch, {g: DISARMED for g in AREAS}, busy_answers=[acp._SAI2_WRONG_PIN]
@@ -213,8 +213,10 @@ async def test_1126_one_pin_check_every_area_armed_and_confirmed(monkeypatch):
 
     await _ha_call(_ordered(panels), "async_alarm_arm_away")
 
-    # One PIN check for the whole call - none lands on a busy centrale.
-    assert connection.authenticate_sai2_pin.call_count == 1
+    # One PIN check per area, each after the previous area was confirmed:
+    # none lands on a busy centrale.
+    assert connection.authenticate_sai2_pin.call_count == 3
+    assert unit.busy_answers == [acp._SAI2_WRONG_PIN]  # never asked while busy
     assert unit.sent() == [(1, 3), (1, 2), (1, 1)]
     assert all(unit.value(g) == AWAY for g in AREAS)
     assert all(p.alarm_state is AlarmControlPanelState.ARMED_AWAY for p in panels.values())
@@ -304,6 +306,10 @@ async def test_switching_armed_mode_still_disarms_first(monkeypatch):
 
     assert unit.sent() == [(0, 1), (1, 1)]
     assert panels[GIORNO].alarm_state is AlarmControlPanelState.ARMED_AWAY
+    # Each command has its own PIN check; the arm waits for the disarm.
+    assert connection.authenticate_sai2_pin.call_count == 2
+    (disarm_at, _, _), (arm_at, _, _) = unit.commands
+    assert arm_at >= disarm_at + LAG
 
 
 async def test_cached_same_mode_without_a_live_reading_sends_no_disarm(monkeypatch):

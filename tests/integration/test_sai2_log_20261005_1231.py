@@ -195,7 +195,9 @@ async def test_1231_arm_home_reaches_every_area(monkeypatch):
 
     assert unit.dropped == []  # no command reached a busy control unit
     assert unit.executed == [(2, 3), (2, 2), (2, 1)]
-    assert connection.authenticate_sai2_pin.call_count == 1  # no busy PIN check
+    # One PIN check per area, none while the centrale is busy.
+    assert connection.authenticate_sai2_pin.call_count == 3
+    assert unit.busy_checks == PIN_CHECK_BUSY
     assert all(unit.value(g) == HOME for g in AREAS)
     for panel in panels.values():
         assert panel.alarm_state is AlarmControlPanelState.ARMED_HOME
