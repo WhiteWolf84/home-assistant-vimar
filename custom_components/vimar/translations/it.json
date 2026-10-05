@@ -151,6 +151,9 @@
     "sai2_command_rejected": {
       "message": "La centrale SAI2 ha rifiutato il comando (esito {code})."
     },
+    "sai2_disarm_not_confirmed": {
+      "message": "La centrale non ha confermato il disinserimento di {area} entro {seconds} s: l'area potrebbe essere ancora INSERITA."
+    },
     "sai2_no_response": {
       "message": "La centrale SAI2 non ha risposto. Controlla la connessione al web server Vimar."
     },

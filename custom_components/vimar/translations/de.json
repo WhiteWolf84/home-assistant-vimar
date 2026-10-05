@@ -140,6 +140,9 @@
     "sai2_command_rejected": {
       "message": "Die SAI2-Zentrale hat den Befehl abgelehnt (Ergebnis {code})."
     },
+    "sai2_disarm_not_confirmed": {
+      "message": "Die Zentrale hat die Unscharfschaltung von {area} nicht innerhalb von {seconds} s bestätigt: Der Bereich ist möglicherweise noch SCHARF."
+    },
     "sai2_no_response": {
       "message": "Die SAI2-Zentrale hat nicht geantwortet. Überprüfen Sie die Verbindung zum Vimar-Webserver."
     },

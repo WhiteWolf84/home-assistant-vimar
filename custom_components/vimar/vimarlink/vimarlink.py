@@ -732,6 +732,20 @@ class VimarLink:
 
         Returns dict {group_id: current_value_bitmask_string} or None on error.
         e.g. {'7560': '00000000', '7615': '00000000', '7663': '00001001'}
+        An empty/NULL CURRENT_VALUE reads as '00000000' (disarmed); callers
+        that must not mistake a missing value for a disarm use
+        get_sai2_area_raw_values() instead.
+        """
+        raw_values = self.get_sai2_area_raw_values(group_ids)
+        if raw_values is None:
+            return None
+        return {gid: value or "00000000" for gid, value in raw_values.items()}
+
+    def get_sai2_area_raw_values(self, group_ids: list[str]) -> dict[str, str | None] | None:
+        """Like get_sai2_area_values(), but an empty/NULL CURRENT_VALUE is None.
+
+        Used to confirm a disarm: there, a NULL turned into '00000000' would
+        report the area as disarmed when the web server said nothing at all.
         """
         if not group_ids:
             return {}
@@ -739,7 +753,7 @@ class VimarLink:
         payload = self._request_vimar_sql(select)
         if payload is None:
             return None
-        return {str(row["gid"]): str(row.get("current_value") or "00000000") for row in payload}
+        return {str(row["gid"]): (str(row.get("current_value") or "") or None) for row in payload}
 
     def update_sai2_from_slim(
         self, sai2_groups: dict | None, sai2_zones: dict | None, slim_results: list[dict]

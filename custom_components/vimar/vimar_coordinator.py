@@ -160,6 +160,10 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # poll that reads stale hardware state. Cleared lazily in _apply_slim_results.
         self._pending_write_guards: dict[str, float] = {}
 
+        # SAI2 areas whose CURRENT_VALUE is currently NULL/empty (diagnostics
+        # only: logged once when an area enters/leaves that condition).
+        self._sai2_null_areas: set[str] = set()
+
         refresh = vimarconfig.get(CONF_ENERGY_REFRESH_INTERVAL)
         self._energy_refresh_interval: float = (
             float(refresh) if refresh is not None else float(DEFAULT_ENERGY_REFRESH_INTERVAL)
@@ -744,17 +748,30 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         """
         if self.vimarproject.sai2_groups:
             group_ids = list(self.vimarproject.sai2_groups.keys())
-            fresh_values = await self.hass.async_add_executor_job(
-                self.vimarconnection.get_sai2_area_values, group_ids
+            raw_values = await self.hass.async_add_executor_job(
+                self.vimarconnection.get_sai2_area_raw_values, group_ids
             )
+            fresh_values = self._sai2_values_with_null_warning(raw_values)
             if fresh_values is not None:
                 now = time.monotonic()
                 guard = self.vimarproject.sai2_optimistic_until
                 if self.vimarproject.sai2_area_values is None:
                     self.vimarproject.sai2_area_values = {}
                 for gid, val in fresh_values.items():
+                    old = self.vimarproject.sai2_area_values.get(gid)
                     if guard.get(gid, 0) > now:
+                        if val != old:
+                            _LOGGER.debug(
+                                "SAI2 poll: area %s raw=%s ignored "
+                                "(optimistic %s, guard %.1fs left)",
+                                gid,
+                                val,
+                                old,
+                                guard[gid] - now,
+                            )
                         continue  # optimistic value still protected
+                    if val != old:
+                        _LOGGER.debug("SAI2 poll: area %s raw %s -> %s", gid, old, val)
                     self.vimarproject.sai2_area_values[gid] = val
 
         if self.vimarproject.sai2_zones:
@@ -764,6 +781,34 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             )
             if fresh_zone_values is not None:
                 self.vimarproject.sai2_zone_values = fresh_zone_values
+
+    def _sai2_values_with_null_warning(
+        self, raw_values: dict[str, str | None] | None
+    ) -> dict[str, str] | None:
+        """Convert raw area values exactly like get_sai2_area_values().
+
+        A NULL/empty CURRENT_VALUE still reads as '00000000' (disarmed) - no
+        behaviour change - but an area entering that condition is logged once
+        as a WARNING, and leaving it once at INFO, so a "disarmed" that the
+        web server never actually reported shows up in the log.
+        """
+        if raw_values is None:
+            return None
+        groups = self.vimarproject.sai2_groups or {}
+        for gid, raw in raw_values.items():
+            name = groups.get(gid, {}).get("name", "?")
+            if raw is None and gid not in self._sai2_null_areas:
+                self._sai2_null_areas.add(gid)
+                _LOGGER.warning(
+                    "SAI2 poll: area %s (%s) CURRENT_VALUE is NULL/empty; "
+                    "it reads as disarmed until a real value arrives",
+                    gid,
+                    name,
+                )
+            elif raw is not None and gid in self._sai2_null_areas:
+                self._sai2_null_areas.discard(gid)
+                _LOGGER.info("SAI2 poll: area %s (%s) CURRENT_VALUE is back: %s", gid, name, raw)
+        return {gid: raw or "00000000" for gid, raw in raw_values.items()}
 
     def _apply_slim_results(self, devices: dict, slim_results: list) -> None:
         """Patch CURRENT_VALUE from slim poll into existing device tree.
