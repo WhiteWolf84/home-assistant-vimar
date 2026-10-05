@@ -14,6 +14,54 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0b1] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b0`. Fixes two problems that
+> `2026.10.0b0` showed on real hardware when one action armed several SAI2
+> areas: a **valid PIN reported as wrong**, and an **arm command lost without
+> any error**, leaving the house half armed. **Behaviour change:** arming is
+> now confirmed too, so an arm the control unit does not confirm makes the
+> action call **fail**, exactly like an unconfirmed disarm. Areas show
+> `arming` / `disarming` until the control unit confirms. Restart Home
+> Assistant fully after installing: a new error message is only loaded at
+> startup.
+
+### Fixed
+
+- **A valid PIN could be reported as wrong.** Since `2026.10.0b0` the areas of one action are handled one after the other, so the PIN check of the second area ran a few milliseconds after the first area's command, while the control unit was still busy with it. Such a check took 2.7–4.4 s instead of ~1.3 s and sometimes answered *wrong PIN* (`SAI2-3127`) to a valid one: the action failed with "Wrong PIN" and that area was left as it was.
+  - **The PIN is now checked once per action**, before the first command, and that result is used for every area of the same action. It is kept only in memory, as a keyed hash rather than the PIN itself, for at most 120 s, and is never logged.
+  - **A wrong PIN still fails at once**, and now costs the control unit a single attempt per action instead of one per area. Nothing is retried.
+- **An arm command could be lost without any error.** A command that reaches the control unit while it is still busy is acknowledged by the web server (`DPCM-0000`) and then not carried out. In the case that prompted this fix, one area out of three was never armed and nothing said so.
+  - **Arming is now confirmed like disarming**: the area's live state is read once per second, for up to **20 s**, until it shows the requested mode.
+  - Because each area waits for its confirmation, **the next area's command is only sent once the control unit has finished with the previous one** — commands no longer go out fractions of a second apart.
+  - **If an arm is not confirmed, the action fails** with the new error `sai2_arm_not_confirmed` — *"The control unit did not confirm the arming of <area> within 20 s: the area may NOT be armed."* — together with a persistent notification and a `WARNING` in the log, and the area shows its real state.
+- **Arming an area already armed in that mode disarmed it for a moment.** The integration sent a disarm, waited one second, then armed it again. An area already in the requested mode is now left alone. An area commanded in the last 20 s gets the command again (its live state may not be up to date yet), but never the intermediate disarm, which is kept only for switching between armed modes (e.g. *night* → *away*). This had been the case since the alarm was first supported.
+- **A disarm is always sent and confirmed**, even on an area that already reads disarmed.
+- When the web server rejected a command, or a script was stopped while a command was in progress, the panel kept showing the requested mode until the next poll. It now goes straight back to the real state.
+
+### Changed
+
+- **Areas show `arming` / `disarming` while a command waits for confirmation.** The requested mode (`armed_away`, `disarmed`, …) is shown only once the control unit has confirmed it; until then the area is in the transitional state. If the command fails, the area shows its real state, or `unknown` if no real value is known. When switching between armed modes, the intermediate disarm stays hidden behind `arming`.
+- The `sai2_raw` attribute now always holds the last real reading, also while a command is in progress.
+
+### Behaviour change
+
+- **An arm that is not confirmed now makes the action call fail** (`HomeAssistantError`), as an unconfirmed disarm already did in `2026.10.0b0`. With several areas in one call, every area is still attempted, then the call fails. A script or automation **stops at that step** unless it has `continue_on_error: true`; if you use that, check the state of the areas afterwards.
+- **Arming several areas takes longer**: the areas are handled one after the other, each waiting for its confirmation — usually a few seconds per area, at most about 20 s.
+- **Automations that trigger on the alarm state** now see `arming` / `disarming` first, and the final state only once it is confirmed. A trigger on `to: armed_away` fires when the area is really armed, not when the command is sent.
+
+### Debugging
+
+As in `2026.10.0b0`, the SAI2 lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+---
+
 ## [2026.10.0b0] - 2026-10-05
 
 > **Beta.** Built on `2026.8.2`. Fixes SAI2 alarm areas that could stay
