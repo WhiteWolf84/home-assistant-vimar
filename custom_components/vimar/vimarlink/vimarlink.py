@@ -57,6 +57,15 @@ _LOGGER = logging.getLogger(__name__)
 SAI2_BITMASK_LENGTH = 8
 
 
+def parse_sai2_index(value: object) -> int | None:
+    """Return a SAI2 area/zone number (the object's MSP), or None if unusable."""
+    try:
+        index = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return index if index > 0 else None
+
+
 def is_valid_sai2_bitmask(value: str | None) -> bool:
     """Return True if `value` is a well-formed SAI2 area CURRENT_VALUE."""
     return value is not None and len(value) == SAI2_BITMASK_LENGTH and set(value) <= {"0", "1"}
@@ -642,6 +651,7 @@ class VimarLink:
         {
             "7560": {
                 "name": "Reparto Giorno",
+                "index": 1,   # area number on the control unit, None if unknown
                 "children": {
                     "Disinserito": {"cid": "7561", "value": "0"},
                     "Inserito INT": {"cid": "7562", "value": "0"},
@@ -663,7 +673,11 @@ class VimarLink:
             if not gname:  # skip unnamed groups
                 continue
             if gid not in groups:
-                groups[gid] = {"name": gname, "children": {}}
+                groups[gid] = {
+                    "name": gname,
+                    "index": parse_sai2_index(row.get("GINDEX")),
+                    "children": {},
+                }
             # Extract state label from CNAME: "Reparto Giorno (Disinserito)" -> "Disinserito"
             cname = row["CNAME"]
             label = cname.split("(")[-1].rstrip(")").strip() if "(" in cname else cname
@@ -693,7 +707,11 @@ class VimarLink:
             if not zname:
                 continue
             if zid not in zones:
-                zones[zid] = {"name": zname, "children": {}}
+                zones[zid] = {
+                    "name": zname,
+                    "index": parse_sai2_index(row.get("ZINDEX")),
+                    "children": {},
+                }
             cname = row["CNAME"]
             label = cname.split("(")[-1].rstrip(")").strip() if "(" in cname else cname
             zones[zid]["children"][label] = {

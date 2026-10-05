@@ -29,6 +29,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_AUTOMATION_PIN, CONF_USER_PINS, DOMAIN
 from .const import DEVICE_TYPE_ALARM as CURR_PLATFORM
+from .sai2_ids import sai2_area_unique_ids
 from .vimar_coordinator import VimarDataUpdateCoordinator
 from .vimarlink.vimarlink import VimarLink, VimarProject, is_valid_sai2_bitmask
 
@@ -213,6 +214,28 @@ def _parse_sai2_area_value(value: str) -> tuple[str, bool]:
     return "Inserito ON", alarm_memory
 
 
+def _sai2_area_indexes(groups: dict[str, dict[str, Any]]) -> dict[str, int]:
+    """Return {group_id: area number} - the bit each area's commands target.
+
+    The number is the area's MSP on the control unit. Counting the areas in
+    web server ID order, as this used to do, only matches it until the control
+    unit is reprogrammed: the recreated areas get new IDs that need not sort
+    the same way, and every command then lands on another area. The count is
+    kept only as the fallback for a web server that does not expose MSP.
+    """
+    indexes = [group.get("index") for group in groups.values()]
+    if all(isinstance(i, int) and 1 <= i <= 8 for i in indexes) and len(set(indexes)) == len(
+        indexes
+    ):
+        return {gid: group["index"] for gid, group in groups.items()}
+    _LOGGER.warning(
+        "SAI2: area numbers not available from the web server (%s); "
+        "numbering the areas in web server ID order",
+        indexes,
+    )
+    return {gid: n for n, gid in enumerate(groups, start=1)}
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -259,17 +282,22 @@ async def async_setup_entry(
     # One per config entry, shared by its areas: see _Sai2PinCache.
     pin_cache = _Sai2PinCache()
 
+    unique_ids = sai2_area_unique_ids(
+        coordinator.entity_unique_id_prefix or "", vimarproject.sai2_groups
+    )
+    area_indexes = _sai2_area_indexes(vimarproject.sai2_groups)
     entities: list[VimarAlarmControlPanel] = []
-    for area_index, (group_id, group_data) in enumerate(vimarproject.sai2_groups.items(), start=1):
+    for group_id, group_data in vimarproject.sai2_groups.items():
         entities.append(
             VimarAlarmControlPanel(
                 coordinator,
                 group_id,
                 group_data,
-                area_index,
+                area_indexes[group_id],
                 user_pins,
                 automation_pin,
                 pin_cache,
+                unique_ids[group_id],
             )
         )
 
@@ -319,6 +347,7 @@ class VimarAlarmControlPanel(
         user_pins: dict[str, str],
         automation_pin: str,
         pin_cache: _Sai2PinCache,
+        unique_id: str,
     ) -> None:
         """Initialize the alarm control panel."""
         super().__init__(coordinator)
@@ -329,7 +358,7 @@ class VimarAlarmControlPanel(
         self._automation_pin = automation_pin
         self._pin_cache = pin_cache
         self._attr_name = group_data["name"]
-        self._attr_unique_id = f"vimar_sai2_{group_id}"
+        self._attr_unique_id = unique_id  # see sai2_ids
         # Serialize commands on this area so an auto-disarm + arm sequence
         # cannot interleave with another in-flight command.
         self._command_lock = asyncio.Lock()

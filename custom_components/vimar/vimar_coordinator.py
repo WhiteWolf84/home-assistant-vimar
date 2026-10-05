@@ -54,6 +54,7 @@ from .const import (
     ENERGY_REFRESH_STATUS_NAMES,
     PLATFORMS,
 )
+from .sai2_ids import async_migrate_sai2_unique_ids
 from .vimar_device_customizer import VimarDeviceCustomizer
 from .vimarlink.exceptions import VimarApiError
 from .vimarlink.vimarlink import VimarLink, VimarProject, is_valid_sai2_bitmask
@@ -1018,6 +1019,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # Recorded BEFORE awaiting the forward so async_unload_entry can undo
         # a setup that failed halfway through.
         self.forwarded_platforms = list(platforms)
+        # Before any SAI2 entity is created under its new unique_id, or the
+        # registry would get a second entry instead of the migrated one.
+        async_migrate_sai2_unique_ids(
+            self.hass, self.entry, self.entity_unique_id_prefix or "", self.vimarproject
+        )
         await self.hass.config_entries.async_forward_entry_setups(self.entry, platforms)
 
         self._platforms_registered = True

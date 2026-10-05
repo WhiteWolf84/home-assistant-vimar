@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEVICE_TYPE_BINARY_SENSOR as CURR_PLATFORM
 from .const import DOMAIN
+from .sai2_ids import sai2_zone_area_name, sai2_zone_entity_name, sai2_zone_unique_ids
 from .vimar_coordinator import VimarDataUpdateCoordinator
 from .vimar_entity import VimarEntity, vimar_setup_entry
 
@@ -25,13 +26,25 @@ _LOGGER = logging.getLogger(__name__)
 
 # Keywords in zone names used to infer BinarySensorDeviceClass.
 # Checked case-insensitively, first match wins.
+#
+# The web server does not say what kind of detector a zone is: neither the
+# SAI2_ZONE rows (VALUES_TYPE, OPTIONALP and DESCRIPTION are empty, the
+# RENDERING_ID is the same for every zone) nor their children, relations or
+# the control unit's project export carry a type - only the zone number and
+# its name. So the name is all there is.
+#
+# Volumetric detectors come first: "vol. garage" is a motion detector in the
+# garage, not the garage door. A name can only say where a detector is, not
+# always what it is - "fin." may be a window contact or a curtain detector -
+# so the guess is a default the user can override ("Show as") in Home
+# Assistant; with stable unique_ids (see sai2_ids) that override now survives
+# a reprogramming of the control unit.
 _DEVICE_CLASS_HINTS: list[tuple[list[str], BinarySensorDeviceClass]] = [
+    (["vol.", "vol ", "volumetr", "pir", "motion", "tenda"], BinarySensorDeviceClass.MOTION),
+    (["sirena", "manomis", "tamper"], BinarySensorDeviceClass.TAMPER),
     (["basculante", "garage", "garag"], BinarySensorDeviceClass.GARAGE_DOOR),
     (["porta", "portone", "ingresso"], BinarySensorDeviceClass.DOOR),
-    (["portafin"], BinarySensorDeviceClass.DOOR),
     (["fin", "finestra", "fines"], BinarySensorDeviceClass.WINDOW),
-    (["vol", "volumetr", "pir", "motion"], BinarySensorDeviceClass.MOTION),
-    (["sirena", "manomis", "tamper"], BinarySensorDeviceClass.TAMPER),
 ]
 
 
@@ -99,11 +112,13 @@ async def async_setup_entry(
         _LOGGER.debug("SAI2: no alarm zones found, skipping zone binary sensors")
         return
 
-    zone_to_group = vimarproject.sai2_zone_to_group or {}
-    zone_entities: list[VimarSAI2ZoneSensor] = []
-    for zone_id, zone_data in vimarproject.sai2_zones.items():
-        parent_group_id = zone_to_group.get(zone_id)
-        zone_entities.append(VimarSAI2ZoneSensor(coordinator, zone_id, zone_data, parent_group_id))
+    unique_ids = sai2_zone_unique_ids(
+        coordinator.entity_unique_id_prefix or "", vimarproject.sai2_zones
+    )
+    zone_entities: list[VimarSAI2ZoneSensor] = [
+        VimarSAI2ZoneSensor(coordinator, zone_id, zone_data, unique_ids[zone_id])
+        for zone_id, zone_data in vimarproject.sai2_zones.items()
+    ]
 
     if zone_entities:
         _LOGGER.info("Adding %d SAI2 zone binary_sensor entities", len(zone_entities))
@@ -213,31 +228,18 @@ class VimarSAI2ZoneSensor(CoordinatorEntity[VimarDataUpdateCoordinator], BinaryS
         coordinator: VimarDataUpdateCoordinator,
         zone_id: str,
         zone_data: dict[str, Any],
-        parent_group_id: str | None = None,
+        unique_id: str,
     ) -> None:
         """Initialize the SAI2 zone sensor."""
         super().__init__(coordinator)
         self._zone_id = zone_id
         self._zone_data = zone_data
-        self._parent_group_id = parent_group_id
         zone_name = zone_data.get("name", f"Zone {zone_id}")
 
-        # Resolve parent area name for labelling
-        self._area_name: str | None = None
-        if parent_group_id:
-            project = coordinator.vimarproject
-            if project and project.sai2_groups:
-                group = project.sai2_groups.get(parent_group_id)
-                if group:
-                    self._area_name = group.get("name")
-
         # Prefix entity name with area for visual grouping
-        if self._area_name:
-            self._attr_name = f"{self._area_name} - {zone_name}"
-        else:
-            self._attr_name = zone_name
-
-        self._attr_unique_id = f"vimar_sai2_zone_{zone_id}"
+        self._area_name = sai2_zone_area_name(coordinator.vimarproject, zone_id)
+        self._attr_name = sai2_zone_entity_name(zone_name, self._area_name)
+        self._attr_unique_id = unique_id  # see sai2_ids
         self._attr_device_class = _guess_device_class(zone_name)
         self._last_logged_bits: int = -1
 
