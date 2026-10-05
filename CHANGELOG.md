@@ -14,6 +14,50 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0b0] - 2026-10-05
+
+> **Beta.** Built on `2026.8.2`. Fixes SAI2 alarm areas that could stay
+> **armed** after a disarm that Home Assistant reported as successful.
+> **Behaviour change:** a disarm the control unit does not confirm now makes
+> the action call **fail** — check scripts and automations that disarm the
+> alarm (see *Behaviour change* below). Restart Home Assistant fully after
+> installing: a new error message is only loaded at startup.
+
+### Fixed
+
+- **A disarm could be lost without any error, leaving the area armed.** The web server answers `DPCM-0000` to the SAI2 command even when the control unit does not carry it out, and the integration took that answer as success: the panel showed *disarmed* at once, and a poll a few seconds later quietly put the area back to *armed*. When one action disarmed several areas, the commands were also sent at the same instant. In the case that prompted this fix, all three were acknowledged, only one area was disarmed, and the alarm went off an hour later.
+  - **Area commands now run one at a time** (`PARALLEL_UPDATES = 1`), so an action on several areas no longer fires them together.
+  - **A disarm is reported done only once the control unit confirms it**: the area's live state is read once per second, for up to **20 s**, until it reads disarmed. An empty/NULL or malformed value is not a reading and never counts as a confirmation.
+  - **If it is not confirmed, the action fails** with the new error `sai2_disarm_not_confirmed` — *"The control unit did not confirm the disarm of <area> within 20 s: the area may still be ARMED."* — together with a persistent notification and a `WARNING` in the log.
+  - **When the error is raised, the panel already shows the real state** (the last valid reading, or the state before the command), so a script that checks the area straight after the failed action sees *armed*, not *disarmed*.
+  - **If no real value is known at all, the area shows `unknown`**, never *disarmed*, until a poll brings a real value or a new command is sent.
+- The panel no longer flips *disarmed → armed → disarmed* for a few seconds after a command when the control unit is slow to update: during a disarm, polls cannot overwrite the panel until the confirmation is over.
+
+### Added
+
+- **`sai2_raw` attribute** on each alarm area: the raw state bitmask the panel state is decoded from, so the recorder keeps the value behind every state change.
+- **A `WARNING` when an area's state comes back NULL/empty** from the web server, logged once when it happens (not on every poll), with an `INFO` line when a real value returns. Such a value still reads as *disarmed*, as it always has; it is now visible in the log.
+
+### Behaviour change
+
+- **A disarm that is not confirmed now makes the action call fail** (`HomeAssistantError`). With several areas in one call, every area is still attempted, then the call fails. A script or automation **stops at that step** unless it has `continue_on_error: true`; if you use that, check the state of the areas afterwards.
+- **Disarming takes longer**: areas are handled one after the other, each waiting for its confirmation — usually a few seconds, at most about 20 s per area.
+- Arming is unchanged.
+
+### Debugging
+
+The SAI2 command, confirmation and poll lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+This enables debug for the whole integration. The `WARNING` lines above do not need it.
+
+---
+
 ## [2026.8.2] - 2026-08-15
 
 > First stable release since `2026.8.1`. It contains everything from the
