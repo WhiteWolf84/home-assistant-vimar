@@ -284,3 +284,31 @@ def test_a_one_character_zone_value_means_no_event(raw):
     from custom_components.vimar.binary_sensor import _parse_sai2_zone_value
 
     assert not any(_parse_sai2_zone_value(raw).values())
+
+
+# ---------------------------------------------------------------------------
+# Zone bit 2 is "excluded"
+# ---------------------------------------------------------------------------
+
+
+def test_volumetric_detection_while_excluded_in_int():
+    """History 2026-10-05: areas armed INT from 19:41; "vol. sala" and
+    "vol. corrid. P1" read 00000101 at 19:43, 20:49 and 21:23 and no area
+    ever went triggered. Bit 2 is the INT exclusion, not an alarm memory."""
+    from custom_components.vimar.binary_sensor import _parse_sai2_zone_value
+
+    flags = _parse_sai2_zone_value("00000101")
+
+    assert flags == {
+        "open": True,
+        "excluded": True,
+        "alarm": False,
+        "tamper": False,
+        "masked": False,
+    }
+
+
+def test_zone_attributes_no_longer_report_memory():
+    from custom_components.vimar.binary_sensor import _parse_sai2_zone_value
+
+    assert "memory" not in _parse_sai2_zone_value("00000100")

@@ -62,24 +62,33 @@ def _parse_sai2_zone_value(value: str) -> dict[str, bool]:
     """Decode SAI2 zone CURRENT_VALUE bitmask to state flags.
 
     Returns dict with boolean flags for each known state bit.
-    Bit mapping (confirmed from diagnostic logs 2026-03-04):
+    Bit mapping (bit 0 confirmed from diagnostic logs 2026-03-04, bit 2 on
+    2026-10-05):
         Bit 0: Aperta (zone physically open)  — value 1
         Bit 1: (reserved)
-        Bit 2: Memoria (memory flag)           — value 4
+        Bit 2: Esclusa (excluded)              — value 4
         Bit 3: Allarme (alarm triggered)
         Bit 4: Manomessa (tampered)
         Bit 5: Mascherata (masked)
+
+    Bit 2 used to be read as "memory". On 2026-10-05, with the areas armed
+    INT, "vol. sala" and "vol. corrid. P1" - the volumetric detectors the
+    project excludes in INT - read 00000101 on every detection for hours,
+    while no area ever went triggered: an alarm memory without an alarm is
+    not possible, an exclusion is what INT does to those zones. The web
+    server only rewrites a zone's CURRENT_VALUE on an event of that zone, so
+    the bit shows up at the zone's first event after arming, not at arming.
     """
     if not value:
-        return {"open": False, "memory": False, "alarm": False, "tamper": False, "masked": False}
+        return {"open": False, "excluded": False, "alarm": False, "tamper": False, "masked": False}
     try:
         bits = int(value, 2) if len(value) > 2 else int(value)
     except ValueError:
-        return {"open": False, "memory": False, "alarm": False, "tamper": False, "masked": False}
+        return {"open": False, "excluded": False, "alarm": False, "tamper": False, "masked": False}
 
     return {
         "open": bool(bits & (1 << 0)),
-        "memory": bool(bits & (1 << 2)),
+        "excluded": bool(bits & (1 << 2)),
         "alarm": bool(bits & (1 << 3)),
         "tamper": bool(bits & (1 << 4)),
         "masked": bool(bits & (1 << 5)),

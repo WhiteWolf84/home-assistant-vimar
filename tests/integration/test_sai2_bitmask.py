@@ -10,7 +10,7 @@ Bit mapping (confirmed on real hardware, see the module docstrings):
 
     areas: bit5 Allarme, bit4 alarm memory, bit3 PAR, bit2 INT, bit1 ON,
            bit0 armed-active flag
-    zones: bit0 open, bit2 memory, bit3 alarm, bit4 tamper, bit5 masked
+    zones: bit0 open, bit2 excluded, bit3 alarm, bit4 tamper, bit5 masked
 """
 
 import os
@@ -118,7 +118,7 @@ def test_zone_closed():
 
     assert flags == {
         "open": False,
-        "memory": False,
+        "excluded": False,
         "alarm": False,
         "tamper": False,
         "masked": False,
@@ -128,7 +128,7 @@ def test_zone_closed():
 @pytest.mark.parametrize(
     ("raw", "flag"),
     [
-        ("00000100", "memory"),
+        ("00000100", "excluded"),
         ("00001000", "alarm"),
         ("00010000", "tamper"),
         ("00100000", "masked"),
