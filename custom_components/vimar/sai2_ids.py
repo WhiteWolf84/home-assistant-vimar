@@ -42,6 +42,15 @@ _LEGACY_AREA_RE = re.compile(r"^vimar_sai2_(\d+)$")
 _LEGACY_ZONE_RE = re.compile(r"^vimar_sai2_zone_(\d+)$")
 
 
+_SAI2_UNIQUE_ID_RE = re.compile(r"^vimar_(?:.+_)?sai2_(?:area_|zone_)?\d+$")
+SAI2_DEVICE_IDENTIFIER = (DOMAIN, "sai2_alarm")
+
+
+def is_sai2_unique_id(unique_id: str | None) -> bool:
+    """Return True for the unique_id of a SAI2 area or zone, legacy or stable."""
+    return bool(unique_id) and _SAI2_UNIQUE_ID_RE.match(unique_id) is not None
+
+
 def legacy_area_unique_id(group_id: str) -> str:
     """Return the pre-2026.10 unique_id of an area (web server object ID)."""
     return f"vimar_sai2_{group_id}"

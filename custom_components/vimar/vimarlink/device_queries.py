@@ -102,8 +102,15 @@ def get_sai2_groups_query() -> str:
     unit (1-8), the same number its own project export calls the area. Unlike
     GID it survives a reprogramming of the control unit, which recreates every
     DPADD_OBJECT row under new IDs.
+
+    Every column carries an explicit alias, like every other JOIN query in
+    this module: without one, the web server returned the table-qualified
+    columns under another name and row["GID"] raised KeyError, which took the
+    whole integration down in 2026.10.0b4 (VimarLink also reads the rows
+    through sai2_row, which strips a "G." qualifier).
     """
-    return """SELECT G.GID, G.GNAME, G.CID, G.CNAME, G.CURRENT_VALUE, O.MSP AS GINDEX
+    return """SELECT G.GID AS GID, G.GNAME AS GNAME, G.CID AS CID, G.CNAME AS CNAME,
+G.CURRENT_VALUE AS CURRENT_VALUE, O.MSP AS GINDEX
 FROM DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN AS G JOIN DPADD_OBJECT AS O ON O.ID = G.GID
 ORDER BY G.GID, G.CID;"""
 
@@ -115,9 +122,11 @@ def get_sai2_zones_query() -> str:
     SAI2_ZONE -> SAI2_ZONE_CHILD via SAI2_ZONE_CHILD_RELATION.
 
     ZINDEX is the zone object's MSP: the zone number on the SAI2 control unit,
-    stable across reprogramming where ZID is not (see get_sai2_groups_query).
+    stable across reprogramming where ZID is not (see get_sai2_groups_query,
+    also for why every column has an alias).
     """
-    return """SELECT Z.ZID, Z.GNAME, Z.CID, Z.CNAME, Z.CURRENT_VALUE, O.MSP AS ZINDEX
+    return """SELECT Z.ZID AS ZID, Z.GNAME AS GNAME, Z.CID AS CID, Z.CNAME AS CNAME,
+Z.CURRENT_VALUE AS CURRENT_VALUE, O.MSP AS ZINDEX
 FROM DPAD_SAI2GATEWAY_SAI2ZONECHILDREN AS Z JOIN DPADD_OBJECT AS O ON O.ID = Z.ZID
 ORDER BY Z.ZID, Z.CID;"""
 

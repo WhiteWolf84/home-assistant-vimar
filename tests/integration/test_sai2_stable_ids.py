@@ -365,3 +365,56 @@ def test_naming_convention_prefix(zone_name, expected):
 def test_names_without_prefix_use_the_old_rules(zone_name, expected):
     device_class = _guess_device_class(zone_name)
     assert (device_class.value if device_class else None) == expected
+
+
+# ---------------------------------------------------------------------------
+# SAI2 not loaded: its registry entries are kept, the rest is cleaned up
+# ---------------------------------------------------------------------------
+
+
+async def _cleanup(hass, entry, sai2_error):
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.vimar.vimar_coordinator import VimarDataUpdateCoordinator
+
+    registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    sai_device = devices.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "sai2_alarm")}, name="SAI Alarm"
+    )
+    area = registry.async_get_or_create(
+        ALARM, DOMAIN, "vimar_casa_sai2_area_1", config_entry=entry, device_id=sai_device.id
+    )
+    legacy_zone = registry.async_get_or_create(
+        ZONE, DOMAIN, "vimar_sai2_zone_1399", config_entry=entry, device_id=sai_device.id
+    )
+    gone_light = registry.async_get_or_create(
+        "light", DOMAIN, "vimar_casa_light_999", config_entry=entry
+    )
+
+    coordinator = VimarDataUpdateCoordinator.__new__(VimarDataUpdateCoordinator)
+    coordinator.hass = hass
+    coordinator.entry = entry
+    coordinator.devices_for_platform = {}
+    coordinator.vimarproject = SimpleNamespace(sai2_error=sai2_error)
+    await coordinator.async_remove_old_devices()
+    return registry, devices, sai_device, area, legacy_zone, gone_light
+
+
+async def test_a_failed_sai2_load_keeps_its_entities_and_device(hass, entry):
+    registry, devices, sai_device, area, zone, light = await _cleanup(
+        hass, entry, "KeyError('GID')"
+    )
+
+    assert registry.async_get(area.entity_id) is not None
+    assert registry.async_get(zone.entity_id) is not None
+    assert devices.async_get(sai_device.id) is not None
+    assert registry.async_get(light.entity_id) is None  # cleanup still works
+
+
+async def test_without_a_sai2_error_cleanup_is_unchanged(hass, entry):
+    registry, devices, sai_device, area, zone, light = await _cleanup(hass, entry, None)
+
+    assert registry.async_get(area.entity_id) is None
+    assert registry.async_get(zone.entity_id) is None
+    assert devices.async_get(sai_device.id) is None

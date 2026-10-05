@@ -66,6 +66,16 @@ def parse_sai2_index(value: object) -> int | None:
     return index if index > 0 else None
 
 
+def sai2_row(row: dict) -> dict:
+    """Return a SAI2 result row keyed by bare, upper-case column names.
+
+    Defence in depth for the structure queries: should the web server name a
+    column after its table qualifier ("G.GID") despite the aliases, the row
+    still reads as "GID" instead of raising KeyError.
+    """
+    return {str(key).rsplit(".", 1)[-1].upper(): value for key, value in row.items()}
+
+
 def is_valid_sai2_bitmask(value: str | None) -> bool:
     """Return True if `value` is a well-formed SAI2 area CURRENT_VALUE."""
     return value is not None and len(value) == SAI2_BITMASK_LENGTH and set(value) <= {"0", "1"}
@@ -667,7 +677,7 @@ class VimarLink:
             return None
 
         groups: dict = {}
-        for row in payload:
+        for row in map(sai2_row, payload):
             gid = row["GID"]
             gname = row["GNAME"]
             if not gname:  # skip unnamed groups
@@ -701,7 +711,7 @@ class VimarLink:
             return None
 
         zones: dict = {}
-        for row in payload:
+        for row in map(sai2_row, payload):
             zid = row["ZID"]
             zname = row["GNAME"]
             if not zname:
@@ -735,7 +745,7 @@ class VimarLink:
             return None
 
         mapping: dict[str, str] = {}
-        for row in payload:
+        for row in map(sai2_row, payload):
             zid = str(row.get("ZID", ""))
             gid = str(row.get("GID", ""))
             if zid and gid:
@@ -934,6 +944,8 @@ class VimarProject:
         # Guard: {group_id: monotonic_deadline} - prevents slim poll from
         # overwriting optimistic values while a command is being processed.
         self.sai2_optimistic_until: dict[str, float] = {}
+        # Set (to the error) when the last SAI2 load failed: see _load_sai2.
+        self.sai2_error: str | None = None
 
     @property
     def devices(self):
@@ -954,23 +966,51 @@ class VimarProject:
         if devices_count != len(self._devices) or forced:
             self._link.get_room_ids()
             self._link.get_paged_results(self._link.get_room_devices, self._devices)
-            # Fetch SAI2 alarm structure (names, children)
-            self.sai2_groups = self._link.get_sai2_devices()
-            self.sai2_zones = self._link.get_sai2_zones()
-            self.sai2_zone_to_group = self._link.get_sai2_zone_to_group()
-            # Fetch initial live area values
-            if self.sai2_groups:
-                self.sai2_area_values = self._link.get_sai2_area_checked_values(
-                    list(self.sai2_groups.keys())
-                )
-            # Fetch initial live zone values
-            if self.sai2_zones:
-                self.sai2_zone_values = self._link.get_sai2_area_values(
-                    list(self.sai2_zones.keys())
-                )
+            self._load_sai2()
             self.check_devices()
 
         return self._devices
+
+    def _load_sai2(self) -> None:
+        """Fetch the SAI2 alarm structure (areas, zones) and its live values.
+
+        Isolated from the rest of the discovery: a SAI2 failure must never take
+        the lights, covers and climate down with it, as an unexpected column
+        name did in 2026.10.0b4. On failure the alarm is left empty and
+        `sai2_error` is set, so the areas and zones are unavailable - and kept
+        in the entity registry (see VimarDataUpdateCoordinator
+        .async_remove_old_devices) - until a discovery succeeds.
+        """
+        try:
+            groups = self._link.get_sai2_devices()
+            zones = self._link.get_sai2_zones()
+            zone_to_group = self._link.get_sai2_zone_to_group()
+            area_values = (
+                self._link.get_sai2_area_checked_values(list(groups.keys())) if groups else None
+            )
+            zone_values = self._link.get_sai2_area_values(list(zones.keys())) if zones else None
+        except Exception as err:  # noqa: BLE001 - SAI2 must not break the rest
+            _LOGGER.error(
+                "SAI2: could not load the alarm areas and zones, they are unavailable "
+                "until the next discovery (lights, covers, climate are not affected): %r",
+                err,
+                exc_info=True,
+            )
+            self.sai2_error = repr(err)
+            self.sai2_groups = None
+            self.sai2_zones = None
+            self.sai2_zone_to_group = None
+            self.sai2_area_values = None
+            self.sai2_zone_values = None
+            return
+        self.sai2_error = None
+        self.sai2_groups = groups
+        self.sai2_zones = zones
+        self.sai2_zone_to_group = zone_to_group
+        if groups:
+            self.sai2_area_values = area_values
+        if zones:
+            self.sai2_zone_values = zone_values
 
     def check_devices(self):
         """Parse device types and names to determine correct platform."""

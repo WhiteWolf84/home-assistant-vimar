@@ -54,7 +54,11 @@ from .const import (
     ENERGY_REFRESH_STATUS_NAMES,
     PLATFORMS,
 )
-from .sai2_ids import async_migrate_sai2_unique_ids
+from .sai2_ids import (
+    SAI2_DEVICE_IDENTIFIER,
+    async_migrate_sai2_unique_ids,
+    is_sai2_unique_id,
+)
 from .vimar_device_customizer import VimarDeviceCustomizer
 from .vimarlink.exceptions import VimarApiError
 from .vimarlink.vimarlink import VimarLink, VimarProject, is_valid_sai2_bitmask
@@ -400,10 +404,14 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         self._climate_refresh_ids = self._collect_climate_refresh_ids(devices)
                         # Include SAI2 alarm CIDs in slim poll
                         if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
-                            sai2_ids = self.vimarconnection.get_sai2_status_ids(
-                                self.vimarproject.sai2_groups,
-                                self.vimarproject.sai2_zones,
-                            )
+                            try:
+                                sai2_ids = self.vimarconnection.get_sai2_status_ids(
+                                    self.vimarproject.sai2_groups,
+                                    self.vimarproject.sai2_zones,
+                                )
+                            except Exception as err:  # noqa: BLE001 - see _load_sai2
+                                _LOGGER.warning("SAI2: status IDs not indexed: %r", err)
+                                sai2_ids = []
                             self._known_status_ids.extend(sai2_ids)
                         self._last_device_count = len(devices)
                         self._slim_poll_active = True
@@ -438,13 +446,21 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
                     self._apply_slim_results(self.vimarproject.devices, slim_results)
                     # Update SAI2 zone/group children from slim poll results
-                    if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
-                        self.vimarconnection.update_sai2_from_slim(
-                            self.vimarproject.sai2_groups,
-                            self.vimarproject.sai2_zones,
-                            slim_results,
+                    # SAI2 must never fail the poll of everything else.
+                    try:
+                        if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
+                            self.vimarconnection.update_sai2_from_slim(
+                                self.vimarproject.sai2_groups,
+                                self.vimarproject.sai2_zones,
+                                slim_results,
+                            )
+                        await self._refresh_sai2_live_state()
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "SAI2 poll failed, alarm values kept from the last poll: %r",
+                            err,
+                            exc_info=True,
                         )
-                    await self._refresh_sai2_live_state()
                     devices = self.vimarproject.devices
 
                     current_count = len(devices)
@@ -1160,8 +1176,20 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
         entity_registry = er.async_get(self.hass)
         entity_entries = er.async_entries_for_config_entry(entity_registry, self.entry.entry_id)
+        # The SAI2 load failed (see VimarProject._load_sai2): its entities were
+        # not created this time, but they are not gone. Removing them would
+        # throw away their entity_ids and settings.
+        sai2_error = getattr(self.vimarproject, "sai2_error", None)
+        keep_sai2 = isinstance(sai2_error, str)
+        if keep_sai2:
+            _LOGGER.warning(
+                "SAI2 not loaded (%s): its entities stay registered, unavailable",
+                sai2_error,
+            )
         for entity_entry in entity_entries:
             identifier = entity_entry.unique_id
+            if keep_sai2 and is_sai2_unique_id(identifier):
+                continue
             if (
                 identifier
                 and identifier not in configured_entities
@@ -1178,6 +1206,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         )
         for device_entry in device_registry_entries:
             device_identifiers_frozen = frozenset(device_entry.identifiers)
+            if keep_sai2 and SAI2_DEVICE_IDENTIFIER in device_entry.identifiers:
+                continue
             if (
                 device_identifiers_frozen not in configured_device_ids
                 and device_entry.id not in devices_to_be_removed
