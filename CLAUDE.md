@@ -324,7 +324,7 @@ examples/
 
 ## Compatibility
 
-- **Home Assistant**: Requires 2026.5.0+ (see hacs.json); dev environment on 2026.10.0
+- **Home Assistant**: Requires 2026.8.0+ (see hacs.json); dev environment on 2026.10.0
 - **Python**: **3.14.2+** required. Home Assistant 2026.3.0 and later declare
   `Requires-Python >=3.14.2`, so any supported HA version already runs on it —
   a claim of "3.13.2+" was contradictory and broke CI when installing HA on
