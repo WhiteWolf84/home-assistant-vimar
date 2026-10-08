@@ -14,6 +14,35 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0b6] - 2026-10-09
+
+> **BREAKING for installations on Home Assistant 2026.5, 2026.6 and 2026.7:
+> this release requires Home Assistant 2026.8.0 or newer.**
+>
+> **Beta.** Includes everything in `2026.10.0b5`. Alignment with the device
+> registry API of Home Assistant 2026.8+ only: **no functional change, and no
+> change to entity_ids, unique_ids or device identifiers.**
+>
+> **After upgrading, check the Home Assistant log:** the two deprecation
+> warnings about `via_device` and `device_registry.async_get_device` reported
+> by Home Assistant 2026.8+ for this integration should be gone.
+
+### Breaking change
+
+- **Home Assistant 2026.8.0 or newer is required** (was 2026.5.0). The device registry APIs used below only exist from 2026.8.0; on older versions setup would fail. This release must not be installed on Home Assistant 2026.5, 2026.6 or 2026.7.
+
+### Changed
+
+- **The "SAI Alarm" device is linked to the "Vimar WebServer" device with `via_device_id`** (the hub's registry id) instead of the deprecated `via_device` (removed in Home Assistant 2027.8). The device, its name and its parent are unchanged.
+- **The room-label lookup is scoped to the config entry** (`async_get_device_by_identifier`) instead of the deprecated `async_get_device` (removed in Home Assistant 2027.8). Which devices get which room label is unchanged.
+
+### Internal
+
+- Development and CI pinned to Home Assistant 2026.10.0 (`requirements_dev.txt`, `pytest-homeassistant-custom-component` 0.13.371, the pyright job in `lint.yml`).
+- New tests pin that Home Assistant's per-entry device lookups accept the integration's three-element identifiers, so a release that starts validating their length fails in CI first.
+
+---
+
 ## [2026.10.0b5] - 2026-10-05
 
 > **Beta.** Replaces `2026.10.0b4`, which **did not start**: on a real
