@@ -23,13 +23,18 @@ Three regressions are covered here.
    registered with three. Home Assistant resolves a via_device by looking the
    identifier up verbatim, so both halves have to come from one place, and the
    hub has to exist before the alarm platform (forwarded first) asks for it.
+   Since Home Assistant 2026.8 the link is made by the hub's registry id
+   (`via_device_id`); `via_device` is deprecated and removed in 2027.8.
 """
 
 import os
 import sys
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -249,34 +254,113 @@ async def test_the_hub_device_is_registered_before_any_platform_is_forwarded():
         side_effect=lambda *a, **kw: calls.append("forward")
     )
 
+    def _register_hub(**kw):
+        calls.append("hub")
+        return MagicMock(id="hub-device-id")
+
     with patch("custom_components.vimar.vimar_coordinator.dr.async_get") as dev_reg:
-        dev_reg.return_value.async_get_or_create.side_effect = lambda **kw: calls.append("hub")
+        dev_reg.return_value.async_get_or_create.side_effect = _register_hub
         await coordinator.async_register_devices_platforms()
 
     assert calls == ["hub", "forward"]
     created = dev_reg.return_value.async_get_or_create.call_args.kwargs
     assert created["identifiers"] == {(DOMAIN, "casa", "status")}
     assert created["name"] == "Vimar WebServer"
+    # What the alarm platform will point its device at.
+    assert coordinator.webserver_device_id == "hub-device-id"
 
 
-async def test_the_alarm_device_points_at_the_hub_identifier():
-    """A two-element via_device would never resolve against a three-element hub."""
-    coordinator = MagicMock()
+@pytest.fixture
+def vimar_entry(hass):
+    config_entry = MockConfigEntry(domain=DOMAIN, unique_id="casa", title="Casa")
+    config_entry.add_to_hass(hass)
+    return config_entry
+
+
+def _alarm_coordinator(hass, entry):
+    """A coordinator with SAI2 present but no areas: enough to register the device."""
+    coordinator = VimarDataUpdateCoordinator.__new__(VimarDataUpdateCoordinator)
+    coordinator.hass = hass
+    coordinator.entry = entry
+    coordinator.entity_unique_id_prefix = "casa"
     coordinator.devices_for_platform = {}
+    coordinator.vimarproject = MagicMock()
     coordinator.vimarproject.sai2_groups = {}
-    coordinator.webserver_identifiers = (DOMAIN, "casa", "status")
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    return coordinator
 
-    hass = MagicMock()
-    hass.data = {DOMAIN: {ENTRY_ID: coordinator}}
-    entry = MagicMock(entry_id=ENTRY_ID)
-    entry.data = {}
-    entry.options = {}
 
-    with patch("custom_components.vimar.alarm_control_panel.dr.async_get") as dev_reg:
-        await alarm_async_setup_entry(hass, entry, MagicMock())
+def _sai_device(hass, entry):
+    return dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "sai2_alarm"), entry.entry_id)
 
-    registered = dev_reg.return_value.async_get_or_create.call_args.kwargs
-    assert registered["via_device"] == (DOMAIN, "casa", "status")
+
+def _hub_device(hass, entry):
+    return dr.async_get(hass).async_get_device_by_identifier(
+        cast("tuple[str, str]", (DOMAIN, "casa", "status")), entry.entry_id
+    )
+
+
+def _deprecation_reports(caplog):
+    return [r.getMessage() for r in caplog.records if "deprecated" in r.getMessage()]
+
+
+async def test_the_alarm_device_hangs_off_the_hub_by_registry_id(hass, vimar_entry, caplog):
+    """via_device_id is the hub's registry id, without the deprecated via_device."""
+    coordinator = _alarm_coordinator(hass, vimar_entry)
+    coordinator._async_register_webserver_device()
+
+    await alarm_async_setup_entry(hass, vimar_entry, MagicMock())
+
+    assert _deprecation_reports(caplog) == []
+    hub = _hub_device(hass, vimar_entry)
+    assert hub is not None
+    assert _sai_device(hass, vimar_entry).via_device_id == hub.id
+    assert coordinator.webserver_device_id == hub.id
+
+
+async def test_a_second_setup_changes_nothing_on_the_alarm_device(hass, vimar_entry):
+    """A reload must find the same device, not create a second one."""
+    coordinator = _alarm_coordinator(hass, vimar_entry)
+    coordinator._async_register_webserver_device()
+    await alarm_async_setup_entry(hass, vimar_entry, MagicMock())
+    first = _sai_device(hass, vimar_entry)
+
+    coordinator._async_register_webserver_device()
+    await alarm_async_setup_entry(hass, vimar_entry, MagicMock())
+
+    again = _sai_device(hass, vimar_entry)
+    assert again.id == first.id
+    assert again.via_device_id == first.via_device_id
+    assert len(dr.async_entries_for_config_entry(dr.async_get(hass), vimar_entry.entry_id)) == 2
+
+
+async def test_without_the_hub_the_alarm_device_is_still_registered(hass, vimar_entry, caplog):
+    """No hub id: a warning and no parent, never an exception that stops setup."""
+    coordinator = _alarm_coordinator(hass, vimar_entry)
+    assert coordinator.webserver_device_id is None
+
+    await alarm_async_setup_entry(hass, vimar_entry, MagicMock())
+
+    sai = _sai_device(hass, vimar_entry)
+    assert sai is not None
+    assert sai.via_device_id is None
+    assert "Vimar WebServer device is not registered" in caplog.text
+    assert _deprecation_reports(caplog) == []
+
+
+@pytest.mark.parametrize("hub_id", [None, "a-device-id-that-is-not-registered"])
+async def test_a_missing_hub_id_keeps_the_existing_parent(hass, vimar_entry, hub_id):
+    """Leaving via_device_id out must not clear a link the device already has."""
+    coordinator = _alarm_coordinator(hass, vimar_entry)
+    coordinator._async_register_webserver_device()
+    await alarm_async_setup_entry(hass, vimar_entry, MagicMock())
+    linked_to = _sai_device(hass, vimar_entry).via_device_id
+    assert linked_to is not None
+
+    coordinator.webserver_device_id = hub_id
+    await alarm_async_setup_entry(hass, vimar_entry, MagicMock())
+
+    assert _sai_device(hass, vimar_entry).via_device_id == linked_to
 
 
 def test_the_hub_identifier_has_one_definition():

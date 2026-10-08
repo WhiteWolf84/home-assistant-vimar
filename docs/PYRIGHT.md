@@ -210,5 +210,5 @@ does not claim to run on at all. Rules such as
 `reportIncompatibleMethodOverride` read `@final` off the installed Home
 Assistant, so that job had been checking a different API from the one the code
 runs against — the `@final` violations above would not necessarily have been
-caught by it. It now uses Python 3.14 and the pinned `2026.7.0`, matching
+caught by it. It now uses Python 3.14 and the pinned `2026.10.0`, matching
 `requirements_dev` and the integration tests.

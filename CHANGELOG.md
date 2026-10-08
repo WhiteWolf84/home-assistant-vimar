@@ -14,6 +14,305 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0] - 2026-10-09
+
+> First stable release since `2026.8.2`. It contains everything from the
+> `2026.10.0b0`–`b6` pre-releases. The sections below describe the net effect
+> of upgrading from `2026.8.2`; the individual pre-release entries are kept
+> further down for reference.
+>
+> **BREAKING for installations on Home Assistant 2026.5, 2026.6 and 2026.7:
+> this release requires Home Assistant 2026.8.0 or newer.**
+>
+> **Before upgrading, make a backup** of Home Assistant: the first start
+> migrates the SAI2 entries of the entity registry. Check the
+> *Breaking changes* and *Behaviour changes* below if you have scripts or
+> automations that arm or disarm the alarm, or read the zone attribute
+> `memory`.
+
+### Breaking changes
+
+- **Home Assistant 2026.8.0 or newer is required** (was 2026.5.0). The integration uses device registry APIs that only exist from 2026.8.0; on older versions setup would fail. This release must not be installed on Home Assistant 2026.5, 2026.6 or 2026.7.
+- **Zone attribute `memory` renamed to `excluded`.** Bit 2 of a zone value is the zone's exclusion from the armed mode, not an alarm memory. The web server only refreshes a zone's value on an event of that zone, so the attribute turns on at the zone's first event after arming. Automations or templates reading `memory` must use `excluded`.
+
+### Fixed
+
+- **A disarm or an arm could be lost without any error.** The web server answers `DPCM-0000` to a SAI2 command even when the control unit does not carry it out. In the case that prompted the fix, three areas were disarmed, only one actually was, and the alarm went off an hour later. Every area command, arm and disarm, is now **confirmed**: the area's live state is read once per second, for up to **20 s**, until it shows the requested mode. If it does not, the action fails with `sai2_disarm_not_confirmed` / `sai2_arm_not_confirmed`, a persistent notification and a `WARNING` in the log, and the area shows its real state.
+- **Area commands run one at a time**, each waiting for its confirmation, so a command never reaches a control unit still busy with the previous one. That busy state was also why a **valid PIN could be reported as wrong**: the PIN is now checked right before every command. A wrong PIN still fails at once and costs a single attempt per action; nothing is retried.
+- **Arming an area already armed in that mode no longer disarms it for a moment**; switching between armed modes (e.g. *night* → *away*) waits for the intermediate disarm to be confirmed before arming.
+- **Armed areas no longer show as disarmed when the web server serves unreadable values** (e.g. after a web server restart). Only an 8-character bitmask of 0 and 1 is a value; anything else makes the area `unknown`, never `disarmed`. Values already read are kept for up to 60 s from an area's last valid reading, so a single failed query changes nothing.
+- **SAI2 areas and zones no longer turn into new `_2` entities when the control unit is reprogrammed.** Their unique_ids now use the area/zone number on the control unit instead of the web server ID (`vimar_<entry>_sai2_area_<n>`, `vimar_<entry>_sai2_zone_<n>`). Existing entities are migrated at startup and keep their entity_id; an entity already replaced by a `_2` copy gets its original entity_id and settings back. A device class you set yourself ("Show as") is no longer lost on a reprogramming.
+- **SAI2 commands target the area number from the control unit** (the object's `MSP`, shown in the `area_index` attribute) instead of counting areas in web server ID order, which a reprogramming could reshuffle.
+- **A SAI2 error no longer stops the whole integration.** On an error the alarm areas and zones are unavailable (`ERROR` in the log, with the cause), everything else starts normally, and the SAI2 entities and the "SAI Alarm" device stay in the registry with their settings until the next successful load.
+
+### Added
+
+- **Recommended zone naming convention.** A zone name starting with `Tenda` or `Vol` is `motion`, `Cont.` is `door` (`garage_door` if the name contains `basculante`, `garag` or `sezional`), `Manom.` is `tamper`, `Virt.` is `safety`, before any other rule. A prefix counts only as a whole word. Names without one of these prefixes keep the previous keyword rules. See the README.
+- **`sai2_raw` attribute** on each alarm area: the last real state bitmask the panel state is decoded from.
+- A `WARNING` when an area's value becomes unreadable, logged once, and an `INFO` line when a valid value comes back.
+
+### Changed
+
+- **Areas show `arming` / `disarming` while a command waits for confirmation**; the requested mode is shown only once the control unit confirms it.
+- The "SAI Alarm" device is linked to the "Vimar WebServer" device with `via_device_id`, and the room-label lookup is scoped to the config entry, replacing device registry APIs deprecated by Home Assistant 2026.8 (removed in 2027.8). This removes the two deprecation warnings Home Assistant 2026.8+ logs for this integration; devices, names and labels are unchanged.
+
+### Behaviour changes
+
+- **An arm or disarm that is not confirmed makes the action call fail** (`HomeAssistantError`). With several areas in one call, every area is still attempted, then the call fails. A script or automation **stops at that step** unless it has `continue_on_error: true`; if you use that, check the state of the areas afterwards.
+- **Arming and disarming take longer**: areas are handled one after the other, each waiting for its confirmation — usually a few seconds per area, at most about 20 s.
+- **Automations that trigger on the alarm state** see `arming` / `disarming` first, and the final state only once it is confirmed.
+- **An area whose value cannot be read is `unknown`, not `disarmed`.** Automations that check `disarmed` / `armed_*` should expect `unknown` while the web server serves unreadable values. Commands can still be sent to an `unknown` area.
+- **Some zones may show a different device class**: `vol.` now wins over every other keyword (`vol. garage` was a garage door, now `motion`), and a known prefix decides on its own. A class you set yourself is not affected.
+
+### After upgrading
+
+1. Restart Home Assistant fully: the new error messages are only loaded at startup.
+2. Check that the entity_ids of the SAI2 areas and zones are unchanged (Settings → Entities, filter "SAI"), and that no new `_2` entity appeared.
+3. Replace `memory` with `excluded` in automations or templates reading the zone attribute.
+4. Review scripts and automations that arm or disarm the alarm for the behaviour changes above.
+
+---
+
+## [2026.10.0b6] - 2026-10-09
+
+> **BREAKING for installations on Home Assistant 2026.5, 2026.6 and 2026.7:
+> this release requires Home Assistant 2026.8.0 or newer.**
+>
+> **Beta.** Includes everything in `2026.10.0b5`. Alignment with the device
+> registry API of Home Assistant 2026.8+ only: **no functional change, and no
+> change to entity_ids, unique_ids or device identifiers.**
+>
+> **After upgrading, check the Home Assistant log:** the two deprecation
+> warnings about `via_device` and `device_registry.async_get_device` reported
+> by Home Assistant 2026.8+ for this integration should be gone.
+
+### Breaking change
+
+- **Home Assistant 2026.8.0 or newer is required** (was 2026.5.0). The device registry APIs used below only exist from 2026.8.0; on older versions setup would fail. This release must not be installed on Home Assistant 2026.5, 2026.6 or 2026.7.
+
+### Changed
+
+- **The "SAI Alarm" device is linked to the "Vimar WebServer" device with `via_device_id`** (the hub's registry id) instead of the deprecated `via_device` (removed in Home Assistant 2027.8). The device, its name and its parent are unchanged.
+- **The room-label lookup is scoped to the config entry** (`async_get_device_by_identifier`) instead of the deprecated `async_get_device` (removed in Home Assistant 2027.8). Which devices get which room label is unchanged.
+
+### Internal
+
+- Development and CI pinned to Home Assistant 2026.10.0 (`requirements_dev.txt`, `pytest-homeassistant-custom-component` 0.13.371, the pyright job in `lint.yml`).
+- New tests pin that Home Assistant's per-entry device lookups accept the integration's three-element identifiers, so a release that starts validating their length fails in CI first.
+
+---
+
+## [2026.10.0b5] - 2026-10-05
+
+> **Beta.** Replaces `2026.10.0b4`, which **did not start**: on a real
+> installation setup failed with `Error communicating with API: 'GID'` and
+> the whole integration stayed down. Includes everything announced for
+> `2026.10.0b4` (stable SAI2 unique_ids, area number from the control unit,
+> zone attribute `excluded`, zone naming convention): read its notes.
+> b4 never got as far as migrating the registry, so the migration runs on the
+> first start of b5.
+>
+> **Before upgrading, make a backup** of Home Assistant. **After upgrading,
+> check that the entity_ids of the SAI2 areas and zones are unchanged**
+> (Settings → Entities, filter "SAI"), and that no new `_2` entity appeared.
+
+### Fixed
+
+- **2026.10.0b4 did not start (`'GID'`).** The new SAI2 queries that read the area/zone numbers selected table-qualified columns without an alias (`G.GID`), and the web server returned them under another name, so reading `GID` failed. Every column now has an explicit alias, as in every other query of the integration, and the SAI2 rows are read even if a column comes back with a table qualifier.
+- **A SAI2 error no longer stops the whole integration.** Loading the alarm areas and zones is isolated from the rest of the setup and of the poll: on an error it is logged (`ERROR`, with the cause), the areas and zones are unavailable, and lights, covers, climate and the rest start normally. The SAI2 entities and the "SAI Alarm" device stay in the entity registry with their settings, and come back at the next successful load.
+
+---
+
+## [2026.10.0b4] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b3`. SAI2 areas and zones get
+> **stable unique_ids**, so reprogramming the control unit no longer creates
+> `_2` entities, and commands target the area number from the control unit.
+> **Breaking:** the zone attribute `memory` is now `excluded`.
+>
+> **Before upgrading, make a backup** of Home Assistant: the first start
+> migrates the SAI2 entries of the entity registry. **After upgrading, check
+> that the entity_ids of the SAI2 areas and zones are unchanged** (Settings →
+> Entities, filter "SAI"), and that no new `_2` entity appeared.
+
+### Breaking change
+
+- **Zone attribute `memory` renamed to `excluded`.** Bit 2 of a zone value is the zone's exclusion from the armed mode, not an alarm memory: with the areas armed INT, the volumetric detectors excluded in INT reported it on every detection while no area was ever triggered. The web server only refreshes a zone's value on an event of that zone, so the attribute turns on at the zone's first event after arming. Automations or templates reading `memory` must use `excluded`.
+
+### Fixed
+
+- **SAI2 commands could arm or disarm the wrong area after the control unit was reprogrammed.** The area a command targets was found by counting the areas in web server ID order. A reprogramming recreates the areas under new IDs, which need not sort the same way (on 2026-10-05 all three areas were renumbered and happened to keep their order). The area number now comes from the control unit itself (the object's `MSP`), shown in the `area_index` attribute.
+- **SAI2 areas and zones no longer turn into new `_2` entities when the control unit is reprogrammed.** Their unique_ids now use the area/zone number on the control unit instead of the web server ID: `vimar_<entry>_sai2_area_<n>` and `vimar_<entry>_sai2_zone_<n>`. Existing entities are migrated at startup and keep their entity_id. An entity already replaced by a `_2` copy gets its original entity_id back, with the name, icon, device class, area, labels and aliases it had, where the copy has not set them itself.
+- **Zone device class:** a zone named `vol.` is always `motion`, so `vol. garage` is no longer a garage door. The web server does not say what kind of detector a zone is, so the class is still guessed from the name. Since the IDs are now stable, a class you set yourself in Home Assistant ("Show as") is no longer lost when the control unit is reprogrammed.
+
+### Added
+
+- **Recommended zone naming convention.** A zone name starting with `Tenda` or `Vol` is `motion`, `Cont.` is `door` (`garage_door` if the name contains `basculante`, `garag` or `sezional`), `Manom.` is `tamper`, `Virt.` (a wired zone driven by an external system, e.g. an ESP32 controlled by Home Assistant) is `safety`, before any other rule. A prefix counts only as a whole word, followed by a space, a dot or the end of the name (`Vol sala` yes, `Voliera` no). Names without one of these prefixes keep the previous keyword rules. See the README.
+
+### Behaviour change
+
+- **Some zones may show a different device class.** `vol.` now wins over every other keyword (`vol. garage` was a garage door, now `motion`), and a known prefix decides on its own. A class you set yourself in Home Assistant ("Show as") is not affected.
+
+---
+
+## [2026.10.0b3] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b2`. Fixes a case where Home
+> Assistant showed SAI2 areas **disarmed while the control unit had them
+> armed**. **Behaviour change:** an area whose value cannot be read is now
+> `unknown`, never `disarmed`.
+
+### Fixed
+
+- **Armed areas shown as disarmed after a web server restart.** After the web server restarted, the SAI2 area values it served read `0`, or nothing at all. The control unit carried out the arm commands. Home Assistant correctly reported them as not confirmed (`sai2_arm_not_confirmed`), then showed the three areas **disarmed**: with no valid reading after the command, it fell back on the value from before it (`0`), and the poll read `0` as disarmed.
+  - **Only an 8-character bitmask of 0 and 1 is a value**, in the poll, in the confirmation of a command and at startup. NULL/empty, a missing row, `0`, another length or other characters are not a value: the area is `unknown`.
+  - **A failing SAI2 query no longer keeps an old state for ever.** The values already read are kept for up to **60 s** from an area's last valid reading, so a single failed query changes nothing; after that the area is `unknown`, with a `WARNING`, until the first valid reading, which shows the state read then.
+  - **After a command, the state shown always comes from a reading taken after it.** If a command is not confirmed and no valid reading came back, if a rejected command cannot be re-read, or if a script is stopped while a command is in progress, the area is `unknown` until the next valid poll — never the value from before the command, which the command may have changed.
+
+### Behaviour change
+
+- **An area whose value cannot be read is `unknown`, not `disarmed`.** This includes a NULL/empty value, which was read as `disarmed` until now. A `WARNING` is logged when an area becomes unreadable, once, and an `INFO` line when a valid value comes back:
+  `SAI2 poll: area 7560 (Reparto Giorno) CURRENT_VALUE '0' is not a valid bitmask; its state is unknown until a valid value arrives`
+  or, when the query keeps failing for more than 60 s:
+  `SAI2 poll: area 7560 (Reparto Giorno) has had no valid CURRENT_VALUE for 64s (the query keeps failing); its state is unknown until a valid value arrives`
+- Automations that check `disarmed` / `armed_*` should expect `unknown` while the web server serves unreadable values. Commands can still be sent to an `unknown` area.
+- If an installation's control unit uses a bitmask that is not 8 characters long, its areas are now `unknown`, with the `WARNING` above. Every installation seen so far uses 8 characters; please open an issue if yours does not.
+
+### Debugging
+
+As in `2026.10.0b2`, the SAI2 lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+---
+
+## [2026.10.0b2] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b1`. Fixes a regression of
+> `2026.10.0b1`: when one action armed several SAI2 areas, **only the first
+> area was armed**; the others failed with `sai2_arm_not_confirmed`. The PIN is
+> now checked right before **every** command again.
+
+### Fixed
+
+- **Only the first area of a multi-area action was armed.** `2026.10.0b1` checked the PIN once per action and reused that result for the other areas. On real hardware their commands were acknowledged by the web server (`DPCM-0000`) on an idle control unit and then never carried out: a PIN check seems to authorise the command that follows it, not to validate the PIN for good.
+  - **Every command now gets its own PIN check, right before it.** An area's check starts only after the previous area's command was confirmed, so no check lands on a control unit that is still busy (the cause of the *wrong PIN* reported for a valid PIN, fixed in `2026.10.0b1`).
+  - **Switching between armed modes** (e.g. *night* → *away*) now waits for the intermediate disarm to be confirmed, then checks the PIN again before arming. If the intermediate disarm is not confirmed within 20 s, the arm is not sent and the action fails with `sai2_arm_not_confirmed`; the area keeps showing its real state. The intermediate step stays hidden behind `arming`.
+- **A wrong PIN still fails at once and costs a single attempt per action.** Only that result (`SAI2-3127`) is remembered for the other areas of the same action, in memory and as a keyed hash, never logged. A valid result is never reused.
+
+### Behaviour change
+
+- An action on several areas makes one PIN check per area (two for an area switching between armed modes) instead of one per action, each taking about 1.2 s.
+- Switching an area between armed modes takes a few seconds longer: the intermediate disarm is now confirmed before the arm is sent.
+
+### Debugging
+
+As in `2026.10.0b1`, the SAI2 lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+---
+
+## [2026.10.0b1] - 2026-10-05
+
+> **Beta.** Includes everything in `2026.10.0b0`. Fixes two problems that
+> `2026.10.0b0` showed on real hardware when one action armed several SAI2
+> areas: a **valid PIN reported as wrong**, and an **arm command lost without
+> any error**, leaving the house half armed. **Behaviour change:** arming is
+> now confirmed too, so an arm the control unit does not confirm makes the
+> action call **fail**, exactly like an unconfirmed disarm. Areas show
+> `arming` / `disarming` until the control unit confirms. Restart Home
+> Assistant fully after installing: a new error message is only loaded at
+> startup.
+
+### Fixed
+
+- **A valid PIN could be reported as wrong.** Since `2026.10.0b0` the areas of one action are handled one after the other, so the PIN check of the second area ran a few milliseconds after the first area's command, while the control unit was still busy with it. Such a check took 2.7–4.4 s instead of ~1.3 s and sometimes answered *wrong PIN* (`SAI2-3127`) to a valid one: the action failed with "Wrong PIN" and that area was left as it was.
+  - **The PIN is now checked once per action**, before the first command, and that result is used for every area of the same action. It is kept only in memory, as a keyed hash rather than the PIN itself, for at most 120 s, and is never logged.
+  - **A wrong PIN still fails at once**, and now costs the control unit a single attempt per action instead of one per area. Nothing is retried.
+- **An arm command could be lost without any error.** A command that reaches the control unit while it is still busy is acknowledged by the web server (`DPCM-0000`) and then not carried out. In the case that prompted this fix, one area out of three was never armed and nothing said so.
+  - **Arming is now confirmed like disarming**: the area's live state is read once per second, for up to **20 s**, until it shows the requested mode.
+  - Because each area waits for its confirmation, **the next area's command is only sent once the control unit has finished with the previous one** — commands no longer go out fractions of a second apart.
+  - **If an arm is not confirmed, the action fails** with the new error `sai2_arm_not_confirmed` — *"The control unit did not confirm the arming of <area> within 20 s: the area may NOT be armed."* — together with a persistent notification and a `WARNING` in the log, and the area shows its real state.
+- **Arming an area already armed in that mode disarmed it for a moment.** The integration sent a disarm, waited one second, then armed it again. An area already in the requested mode is now left alone. An area commanded in the last 20 s gets the command again (its live state may not be up to date yet), but never the intermediate disarm, which is kept only for switching between armed modes (e.g. *night* → *away*). This had been the case since the alarm was first supported.
+- **A disarm is always sent and confirmed**, even on an area that already reads disarmed.
+- When the web server rejected a command, or a script was stopped while a command was in progress, the panel kept showing the requested mode until the next poll. It now goes straight back to the real state.
+
+### Changed
+
+- **Areas show `arming` / `disarming` while a command waits for confirmation.** The requested mode (`armed_away`, `disarmed`, …) is shown only once the control unit has confirmed it; until then the area is in the transitional state. If the command fails, the area shows its real state, or `unknown` if no real value is known. When switching between armed modes, the intermediate disarm stays hidden behind `arming`.
+- The `sai2_raw` attribute now always holds the last real reading, also while a command is in progress.
+
+### Behaviour change
+
+- **An arm that is not confirmed now makes the action call fail** (`HomeAssistantError`), as an unconfirmed disarm already did in `2026.10.0b0`. With several areas in one call, every area is still attempted, then the call fails. A script or automation **stops at that step** unless it has `continue_on_error: true`; if you use that, check the state of the areas afterwards.
+- **Arming several areas takes longer**: the areas are handled one after the other, each waiting for its confirmation — usually a few seconds per area, at most about 20 s.
+- **Automations that trigger on the alarm state** now see `arming` / `disarming` first, and the final state only once it is confirmed. A trigger on `to: armed_away` fires when the area is really armed, not when the command is sent.
+
+### Debugging
+
+As in `2026.10.0b0`, the SAI2 lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+---
+
+## [2026.10.0b0] - 2026-10-05
+
+> **Beta.** Built on `2026.8.2`. Fixes SAI2 alarm areas that could stay
+> **armed** after a disarm that Home Assistant reported as successful.
+> **Behaviour change:** a disarm the control unit does not confirm now makes
+> the action call **fail** — check scripts and automations that disarm the
+> alarm (see *Behaviour change* below). Restart Home Assistant fully after
+> installing: a new error message is only loaded at startup.
+
+### Fixed
+
+- **A disarm could be lost without any error, leaving the area armed.** The web server answers `DPCM-0000` to the SAI2 command even when the control unit does not carry it out, and the integration took that answer as success: the panel showed *disarmed* at once, and a poll a few seconds later quietly put the area back to *armed*. When one action disarmed several areas, the commands were also sent at the same instant. In the case that prompted this fix, all three were acknowledged, only one area was disarmed, and the alarm went off an hour later.
+  - **Area commands now run one at a time** (`PARALLEL_UPDATES = 1`), so an action on several areas no longer fires them together.
+  - **A disarm is reported done only once the control unit confirms it**: the area's live state is read once per second, for up to **20 s**, until it reads disarmed. An empty/NULL or malformed value is not a reading and never counts as a confirmation.
+  - **If it is not confirmed, the action fails** with the new error `sai2_disarm_not_confirmed` — *"The control unit did not confirm the disarm of <area> within 20 s: the area may still be ARMED."* — together with a persistent notification and a `WARNING` in the log.
+  - **When the error is raised, the panel already shows the real state** (the last valid reading, or the state before the command), so a script that checks the area straight after the failed action sees *armed*, not *disarmed*.
+  - **If no real value is known at all, the area shows `unknown`**, never *disarmed*, until a poll brings a real value or a new command is sent.
+- The panel no longer flips *disarmed → armed → disarmed* for a few seconds after a command when the control unit is slow to update: during a disarm, polls cannot overwrite the panel until the confirmation is over.
+
+### Added
+
+- **`sai2_raw` attribute** on each alarm area: the raw state bitmask the panel state is decoded from, so the recorder keeps the value behind every state change.
+- **A `WARNING` when an area's state comes back NULL/empty** from the web server, logged once when it happens (not on every poll), with an `INFO` line when a real value returns. Such a value still reads as *disarmed*, as it always has; it is now visible in the log.
+
+### Behaviour change
+
+- **A disarm that is not confirmed now makes the action call fail** (`HomeAssistantError`). With several areas in one call, every area is still attempted, then the call fails. A script or automation **stops at that step** unless it has `continue_on_error: true`; if you use that, check the state of the areas afterwards.
+- **Disarming takes longer**: areas are handled one after the other, each waiting for its confirmation — usually a few seconds, at most about 20 s per area.
+- Arming is unchanged.
+
+### Debugging
+
+The SAI2 command, confirmation and poll lines are logged at debug level under the integration's logger:
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.vimar: debug
+```
+
+This enables debug for the whole integration. The `WARNING` lines above do not need it.
+
+---
+
 ## [2026.8.2] - 2026-08-15
 
 > First stable release since `2026.8.1`. It contains everything from the

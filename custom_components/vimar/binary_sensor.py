@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.components.binary_sensor import (
@@ -18,26 +19,63 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEVICE_TYPE_BINARY_SENSOR as CURR_PLATFORM
 from .const import DOMAIN
+from .sai2_ids import sai2_zone_area_name, sai2_zone_entity_name, sai2_zone_unique_ids
 from .vimar_coordinator import VimarDataUpdateCoordinator
 from .vimar_entity import VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
 
-# Keywords in zone names used to infer BinarySensorDeviceClass.
-# Checked case-insensitively, first match wins.
+# The web server does not say what kind of detector a zone is: neither the
+# SAI2_ZONE rows (VALUES_TYPE, OPTIONALP and DESCRIPTION are empty, the
+# RENDERING_ID is the same for every zone) nor their children, relations or
+# the control unit's project export carry a type - only the zone number and
+# its name (16 characters on the control unit). So the name is all there is.
+#
+# Recommended naming convention (see the README): the zone name starts with
+# the detector type. A known prefix decides the device class on its own,
+# before any other rule. Checked case-insensitively, and only as a whole word:
+# followed by a space, a dot or the end of the name ("Vol sala", "Vol.",
+# not "Voliera").
+_DEVICE_CLASS_PREFIXES: dict[str, BinarySensorDeviceClass] = {
+    "tenda": BinarySensorDeviceClass.MOTION,
+    "vol": BinarySensorDeviceClass.MOTION,
+    "cont": BinarySensorDeviceClass.DOOR,  # garage_door: see _guess_device_class
+    "manom": BinarySensorDeviceClass.TAMPER,
+    # A wired zone driven by an external system (e.g. an ESP32 controlled by
+    # Home Assistant closing the circuit), not by a detector.
+    "virt": BinarySensorDeviceClass.SAFETY,
+}
+_PREFIX_RE = re.compile(r"(" + "|".join(_DEVICE_CLASS_PREFIXES) + r")(?=[ .]|$)")
+# A contact on the garage door: tilting ("basculante") or sectional
+# ("sezionale"). "garag" because 16 characters often cut "garage".
+_GARAGE_KEYWORDS = ("basculante", "garag", "sezional")
+
+# Fallback for names without a known prefix: keywords anywhere in the name,
+# first match wins. Volumetric detectors come first: "vol. garage" is a
+# motion detector in the garage, not the garage door. A name can only say
+# where a detector is, not always what it is - "fin." may be a window contact
+# or a curtain detector - so the guess is a default the user can override
+# ("Show as") in Home Assistant; with stable unique_ids (see sai2_ids) that
+# override survives a reprogramming of the control unit.
 _DEVICE_CLASS_HINTS: list[tuple[list[str], BinarySensorDeviceClass]] = [
+    (["vol.", "vol ", "volumetr", "pir", "motion", "tenda"], BinarySensorDeviceClass.MOTION),
+    (["sirena", "manomis", "tamper"], BinarySensorDeviceClass.TAMPER),
     (["basculante", "garage", "garag"], BinarySensorDeviceClass.GARAGE_DOOR),
     (["porta", "portone", "ingresso"], BinarySensorDeviceClass.DOOR),
-    (["portafin"], BinarySensorDeviceClass.DOOR),
     (["fin", "finestra", "fines"], BinarySensorDeviceClass.WINDOW),
-    (["vol", "volumetr", "pir", "motion"], BinarySensorDeviceClass.MOTION),
-    (["sirena", "manomis", "tamper"], BinarySensorDeviceClass.TAMPER),
 ]
 
 
 def _guess_device_class(zone_name: str) -> BinarySensorDeviceClass | None:
-    """Infer device class from zone name keywords."""
-    name_lower = zone_name.lower()
+    """Infer the device class from the zone name: prefix first, then keywords."""
+    name_lower = zone_name.strip().lower()
+    if match := _PREFIX_RE.match(name_lower):
+        device_class = _DEVICE_CLASS_PREFIXES[match.group(1)]
+        if device_class is BinarySensorDeviceClass.DOOR and any(
+            kw in name_lower for kw in _GARAGE_KEYWORDS
+        ):
+            return BinarySensorDeviceClass.GARAGE_DOOR
+        return device_class
     for keywords, device_class in _DEVICE_CLASS_HINTS:
         for kw in keywords:
             if kw in name_lower:
@@ -49,24 +87,33 @@ def _parse_sai2_zone_value(value: str) -> dict[str, bool]:
     """Decode SAI2 zone CURRENT_VALUE bitmask to state flags.
 
     Returns dict with boolean flags for each known state bit.
-    Bit mapping (confirmed from diagnostic logs 2026-03-04):
+    Bit mapping (bit 0 confirmed from diagnostic logs 2026-03-04, bit 2 on
+    2026-10-05):
         Bit 0: Aperta (zone physically open)  — value 1
         Bit 1: (reserved)
-        Bit 2: Memoria (memory flag)           — value 4
+        Bit 2: Esclusa (excluded)              — value 4
         Bit 3: Allarme (alarm triggered)
         Bit 4: Manomessa (tampered)
         Bit 5: Mascherata (masked)
+
+    Bit 2 used to be read as "memory". On 2026-10-05, with the areas armed
+    INT, "vol. sala" and "vol. corrid. P1" - the volumetric detectors the
+    project excludes in INT - read 00000101 on every detection for hours,
+    while no area ever went triggered: an alarm memory without an alarm is
+    not possible, an exclusion is what INT does to those zones. The web
+    server only rewrites a zone's CURRENT_VALUE on an event of that zone, so
+    the bit shows up at the zone's first event after arming, not at arming.
     """
     if not value:
-        return {"open": False, "memory": False, "alarm": False, "tamper": False, "masked": False}
+        return {"open": False, "excluded": False, "alarm": False, "tamper": False, "masked": False}
     try:
         bits = int(value, 2) if len(value) > 2 else int(value)
     except ValueError:
-        return {"open": False, "memory": False, "alarm": False, "tamper": False, "masked": False}
+        return {"open": False, "excluded": False, "alarm": False, "tamper": False, "masked": False}
 
     return {
         "open": bool(bits & (1 << 0)),
-        "memory": bool(bits & (1 << 2)),
+        "excluded": bool(bits & (1 << 2)),
         "alarm": bool(bits & (1 << 3)),
         "tamper": bool(bits & (1 << 4)),
         "masked": bool(bits & (1 << 5)),
@@ -99,11 +146,13 @@ async def async_setup_entry(
         _LOGGER.debug("SAI2: no alarm zones found, skipping zone binary sensors")
         return
 
-    zone_to_group = vimarproject.sai2_zone_to_group or {}
-    zone_entities: list[VimarSAI2ZoneSensor] = []
-    for zone_id, zone_data in vimarproject.sai2_zones.items():
-        parent_group_id = zone_to_group.get(zone_id)
-        zone_entities.append(VimarSAI2ZoneSensor(coordinator, zone_id, zone_data, parent_group_id))
+    unique_ids = sai2_zone_unique_ids(
+        coordinator.entity_unique_id_prefix or "", vimarproject.sai2_zones
+    )
+    zone_entities: list[VimarSAI2ZoneSensor] = [
+        VimarSAI2ZoneSensor(coordinator, zone_id, zone_data, unique_ids[zone_id])
+        for zone_id, zone_data in vimarproject.sai2_zones.items()
+    ]
 
     if zone_entities:
         _LOGGER.info("Adding %d SAI2 zone binary_sensor entities", len(zone_entities))
@@ -213,31 +262,18 @@ class VimarSAI2ZoneSensor(CoordinatorEntity[VimarDataUpdateCoordinator], BinaryS
         coordinator: VimarDataUpdateCoordinator,
         zone_id: str,
         zone_data: dict[str, Any],
-        parent_group_id: str | None = None,
+        unique_id: str,
     ) -> None:
         """Initialize the SAI2 zone sensor."""
         super().__init__(coordinator)
         self._zone_id = zone_id
         self._zone_data = zone_data
-        self._parent_group_id = parent_group_id
         zone_name = zone_data.get("name", f"Zone {zone_id}")
 
-        # Resolve parent area name for labelling
-        self._area_name: str | None = None
-        if parent_group_id:
-            project = coordinator.vimarproject
-            if project and project.sai2_groups:
-                group = project.sai2_groups.get(parent_group_id)
-                if group:
-                    self._area_name = group.get("name")
-
         # Prefix entity name with area for visual grouping
-        if self._area_name:
-            self._attr_name = f"{self._area_name} - {zone_name}"
-        else:
-            self._attr_name = zone_name
-
-        self._attr_unique_id = f"vimar_sai2_zone_{zone_id}"
+        self._area_name = sai2_zone_area_name(coordinator.vimarproject, zone_id)
+        self._attr_name = sai2_zone_entity_name(zone_name, self._area_name)
+        self._attr_unique_id = unique_id  # see sai2_ids
         self._attr_device_class = _guess_device_class(zone_name)
         self._last_logged_bits: int = -1
 

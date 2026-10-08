@@ -140,6 +140,12 @@
     "sai2_command_rejected": {
       "message": "La centrale SAI2 a refusé la commande (résultat {code})."
     },
+    "sai2_arm_not_confirmed": {
+      "message": "La centrale n'a pas confirmé l'activation de {area} dans les {seconds} s : la zone n'est peut-être PAS armée."
+    },
+    "sai2_disarm_not_confirmed": {
+      "message": "La centrale n'a pas confirmé la désactivation de {area} dans les {seconds} s : la zone est peut-être encore ARMÉE."
+    },
     "sai2_no_response": {
       "message": "La centrale SAI2 n'a pas répondu. Vérifiez la connexion au serveur web Vimar."
     },

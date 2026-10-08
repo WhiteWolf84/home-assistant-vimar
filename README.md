@@ -7,7 +7,7 @@
 
 # VIMAR By-Me / By-Web Integration for Home Assistant
 
-> **Current Version:** 2026.8.2 · **Requires:** Home Assistant 2026.5.0+ · **Python:** 3.14.2+ (imposed by Home Assistant 2026.3+; the standalone `vimarlink` library still runs on 3.13)
+> **Current Version:** 2026.10.0 · **Requires:** Home Assistant 2026.8.0+ · **Python:** 3.14.2+ (imposed by Home Assistant 2026.3+; the standalone `vimarlink` library still runs on 3.13)
 
 A comprehensive Home Assistant custom integration for the VIMAR By-me / By-web bus system. Controls lights, covers, climate, switches, sensors, media players, scenes, and the **SAI2 alarm system** through the VIMAR web server.
 
@@ -212,16 +212,43 @@ Each SAI2 area is exposed as an `alarm_control_panel` entity supporting:
 
 ### Zone Binary Sensors
 
-Each SAI2 zone is exposed as a `binary_sensor` with automatic device class detection:
+Each SAI2 zone is exposed as a `binary_sensor`. The web server does not say what kind of detector a zone is, so the device class is inferred from the zone name. You can always change it in Home Assistant (entity settings → **Show as**); the change survives a reprogramming of the control unit.
+
+#### Recommended zone naming convention
+
+Zone names on the SAI2 control unit are at most 16 characters. Start each name with the detector type, then where it is. A known prefix decides the device class on its own. Prefixes are case-insensitive and count only as a whole word, followed by a space, a dot or the end of the name: `Vol sala` and `Vol.sala` match, `Voliera` does not.
+
+| Name starts with | Zone | Device Class |
+|------------------|------|--------------|
+| `Tenda` | curtain detector | `motion` |
+| `Vol` | volumetric detector | `motion` |
+| `Cont.` | magnetic contact | `door` — `garage_door` if the name contains `basculante`, `garag` or `sezional` |
+| `Manom.` | tamper line | `tamper` |
+| `Virt.` | virtual zone: wired, but driven by an external system (e.g. an ESP32 controlled by Home Assistant that closes the circuit) | `safety` |
+
+Example:
+
+```text
+Tenda fin. sala      → motion
+vol corridoio P1     → motion
+Cont. porta ingr     → door
+Cont. sezionale      → garage_door
+Manom. sirena        → tamper
+Virt. sensori HA     → safety
+Voliera              → no prefix: keyword rules below
+```
+
+Names without one of these prefixes fall back to keywords anywhere in the name, first match wins:
 
 | Zone Name Keywords | Device Class |
 |-----------|--------------|
-| porta, ingresso, basculante | `door` |
-| finestra | `window` |
-| volumetrico, PIR, motion | `motion` |
+| vol., volumetrico, PIR, motion, tenda | `motion` |
 | sirena, manomissione, tamper | `tamper` |
+| basculante, garage | `garage_door` |
+| porta, portone, ingresso | `door` |
+| fin., finestra | `window` |
 
-**Extra attributes:** `raw_value`, `excluded`, `alarm`, `tampered`, `masked`, `memory`, `area`
+**Extra attributes:** `zone_id`, `area_name`, `raw_bitmask`, `open`, `excluded`, `alarm`, `tamper`, `masked`. `excluded` is set while the zone is excluded from the armed mode (e.g. volumetric detectors in INT); the web server only refreshes it at the zone's next event.
 
 ### Setup
 

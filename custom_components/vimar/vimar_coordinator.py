@@ -54,9 +54,14 @@ from .const import (
     ENERGY_REFRESH_STATUS_NAMES,
     PLATFORMS,
 )
+from .sai2_ids import (
+    SAI2_DEVICE_IDENTIFIER,
+    async_migrate_sai2_unique_ids,
+    is_sai2_unique_id,
+)
 from .vimar_device_customizer import VimarDeviceCustomizer
 from .vimarlink.exceptions import VimarApiError
-from .vimarlink.vimarlink import VimarLink, VimarProject
+from .vimarlink.vimarlink import VimarLink, VimarProject, is_valid_sai2_bitmask
 
 log = _LOGGER
 
@@ -69,6 +74,10 @@ _WRITE_GUARD_SECONDS = 15.0
 # never collide with a real value: _hash_device_state() returns an md5
 # hexdigest, which is always 32 characters.
 _HASH_INVALIDATED = ""
+
+# A failed SAI2 query keeps the area values already read, but not for ever:
+# with no valid reading of an area for this long, its state is unknown.
+_SAI2_STALE_SECONDS = 60.0
 
 
 class VimarDataUpdateCoordinator(DataUpdateCoordinator):
@@ -97,6 +106,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     # --- slim-poll state (class-level defaults, overridden as instance attrs in __init__) ---
     _slim_poll_active: bool = False
     _last_device_count: int = -1
+    # Device registry id of the "Vimar WebServer" hub, set when the hub is
+    # registered (see _async_register_webserver_device). None until then.
+    webserver_device_id: str | None = None
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, vimarconfig: ConfigType) -> None:
         """Initialize."""
@@ -159,6 +171,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # the optimistic value set by change_state() is not bounced back by a
         # poll that reads stale hardware state. Cleared lazily in _apply_slim_results.
         self._pending_write_guards: dict[str, float] = {}
+
+        # SAI2 areas whose CURRENT_VALUE is currently not a valid bitmask
+        # (their state is unknown); logged once when an area enters/leaves
+        # that condition.
+        self._sai2_invalid_areas: set[str] = set()
+        # Monotonic time of each SAI2 area's last valid reading in the poll.
+        self._sai2_last_valid_at: dict[str, float] = {}
 
         refresh = vimarconfig.get(CONF_ENERGY_REFRESH_INTERVAL)
         self._energy_refresh_interval: float = (
@@ -388,10 +407,14 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         self._climate_refresh_ids = self._collect_climate_refresh_ids(devices)
                         # Include SAI2 alarm CIDs in slim poll
                         if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
-                            sai2_ids = self.vimarconnection.get_sai2_status_ids(
-                                self.vimarproject.sai2_groups,
-                                self.vimarproject.sai2_zones,
-                            )
+                            try:
+                                sai2_ids = self.vimarconnection.get_sai2_status_ids(
+                                    self.vimarproject.sai2_groups,
+                                    self.vimarproject.sai2_zones,
+                                )
+                            except Exception as err:  # noqa: BLE001 - see _load_sai2
+                                _LOGGER.warning("SAI2: status IDs not indexed: %r", err)
+                                sai2_ids = []
                             self._known_status_ids.extend(sai2_ids)
                         self._last_device_count = len(devices)
                         self._slim_poll_active = True
@@ -426,13 +449,21 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
                     self._apply_slim_results(self.vimarproject.devices, slim_results)
                     # Update SAI2 zone/group children from slim poll results
-                    if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
-                        self.vimarconnection.update_sai2_from_slim(
-                            self.vimarproject.sai2_groups,
-                            self.vimarproject.sai2_zones,
-                            slim_results,
+                    # SAI2 must never fail the poll of everything else.
+                    try:
+                        if self.vimarproject.sai2_groups or self.vimarproject.sai2_zones:
+                            self.vimarconnection.update_sai2_from_slim(
+                                self.vimarproject.sai2_groups,
+                                self.vimarproject.sai2_zones,
+                                slim_results,
+                            )
+                        await self._refresh_sai2_live_state()
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "SAI2 poll failed, alarm values kept from the last poll: %r",
+                            err,
+                            exc_info=True,
                         )
-                    await self._refresh_sai2_live_state()
                     devices = self.vimarproject.devices
 
                     current_count = len(devices)
@@ -739,22 +770,39 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
         DPADD_OBJECT.CURRENT_VALUE for SAI2 group IDs updates immediately
         after commands, unlike the DPAD_SAI2GATEWAY_SAI2GROUPCHILDREN view.
-        Group values respect the per-group optimistic-update guard so
-        in-flight commands aren't overwritten by stale reads.
+        Group values respect the per-group guard set while an alarm command
+        is in flight, so a stale read cannot overwrite them. A group value that
+        is not a valid bitmask is stored as None: the area's state is unknown.
         """
         if self.vimarproject.sai2_groups:
             group_ids = list(self.vimarproject.sai2_groups.keys())
-            fresh_values = await self.hass.async_add_executor_job(
-                self.vimarconnection.get_sai2_area_values, group_ids
+            raw_values = await self.hass.async_add_executor_job(
+                self.vimarconnection.get_sai2_area_raw_values, group_ids
             )
-            if fresh_values is not None:
-                now = time.monotonic()
+            fresh_values = self._sai2_checked_area_values(raw_values, group_ids)
+            now = time.monotonic()
+            if fresh_values is None:
+                self._sai2_expire_stale_areas(group_ids, now)
+            else:
                 guard = self.vimarproject.sai2_optimistic_until
                 if self.vimarproject.sai2_area_values is None:
                     self.vimarproject.sai2_area_values = {}
                 for gid, val in fresh_values.items():
+                    if val is not None:
+                        self._sai2_last_valid_at[gid] = now
+                    old = self.vimarproject.sai2_area_values.get(gid)
                     if guard.get(gid, 0) > now:
-                        continue  # optimistic value still protected
+                        if val != old:
+                            _LOGGER.debug(
+                                "SAI2 poll: area %s raw=%s ignored (kept %s, guard %.1fs left)",
+                                gid,
+                                val,
+                                old,
+                                guard[gid] - now,
+                            )
+                        continue  # a command is in flight: value protected
+                    if val != old:
+                        _LOGGER.debug("SAI2 poll: area %s raw %s -> %s", gid, old, val)
                     self.vimarproject.sai2_area_values[gid] = val
 
         if self.vimarproject.sai2_zones:
@@ -764,6 +812,76 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             )
             if fresh_zone_values is not None:
                 self.vimarproject.sai2_zone_values = fresh_zone_values
+
+    def _sai2_expire_stale_areas(self, group_ids: list[str], now: float) -> None:
+        """The SAI2 query failed: areas not read validly for too long go unknown.
+
+        Until _SAI2_STALE_SECONDS after an area's last valid reading (or after
+        the first failed poll, when there was none) its value is kept: a
+        single failed query is not worth an unknown state. Past that, the
+        value is stored as None, with a WARNING once; the first valid reading
+        brings the area back (see _sai2_checked_area_values). An area with a
+        command in flight is left to the command's own confirmation.
+        """
+        project = self.vimarproject
+        groups = project.sai2_groups or {}
+        guard = project.sai2_optimistic_until
+        for gid in group_ids:
+            since = self._sai2_last_valid_at.setdefault(gid, now)
+            if now - since <= _SAI2_STALE_SECONDS or guard.get(gid, 0) > now:
+                continue
+            if project.sai2_area_values is None:
+                project.sai2_area_values = {}
+            project.sai2_area_values[gid] = None
+            if gid not in self._sai2_invalid_areas:
+                self._sai2_invalid_areas.add(gid)
+                _LOGGER.warning(
+                    "SAI2 poll: area %s (%s) has had no valid CURRENT_VALUE for %.0fs "
+                    "(the query keeps failing); its state is unknown until a valid "
+                    "value arrives",
+                    gid,
+                    groups.get(gid, {}).get("name", "?"),
+                    now - since,
+                )
+
+    def _sai2_checked_area_values(
+        self, raw_values: dict[str, str | None] | None, group_ids: list[str]
+    ) -> dict[str, str | None] | None:
+        """Keep the valid area values; None for any other (state unknown).
+
+        NULL/empty, a missing row, '0', another length: none of them is a
+        reading (see is_valid_sai2_bitmask), and decoding one used to show
+        "disarmed" - on 2026-10-05, for areas the control unit had armed. An
+        area entering that condition is logged once as a WARNING, and once at
+        INFO when a valid value comes back. None for the whole result means
+        the query failed: see _sai2_expire_stale_areas.
+        """
+        if raw_values is None:
+            return None
+        groups = self.vimarproject.sai2_groups or {}
+        checked: dict[str, str | None] = {}
+        for gid in group_ids:
+            raw = raw_values.get(gid)
+            name = groups.get(gid, {}).get("name", "?")
+            if is_valid_sai2_bitmask(raw):
+                checked[gid] = raw
+                if gid in self._sai2_invalid_areas:
+                    self._sai2_invalid_areas.discard(gid)
+                    _LOGGER.info(
+                        "SAI2 poll: area %s (%s) CURRENT_VALUE is back: %s", gid, name, raw
+                    )
+                continue
+            checked[gid] = None
+            if gid not in self._sai2_invalid_areas:
+                self._sai2_invalid_areas.add(gid)
+                _LOGGER.warning(
+                    "SAI2 poll: area %s (%s) CURRENT_VALUE %s is not a valid bitmask; "
+                    "its state is unknown until a valid value arrives",
+                    gid,
+                    name,
+                    "is missing" if gid not in raw_values else f"{raw!r}",
+                )
+        return checked
 
     def _apply_slim_results(self, devices: dict, slim_results: list) -> None:
         """Patch CURRENT_VALUE from slim poll into existing device tree.
@@ -898,16 +1016,20 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         alarm platform, which points its own device at this one, is forwarded
         FIRST (see PLATFORMS). Registering it here means the via_device always
         resolves, instead of resolving only from the second start onwards.
+
+        The registry id is kept: Home Assistant 2026.8 deprecated `via_device`
+        (an identifier) in favour of `via_device_id` (this id), removed in 2027.8.
         """
         if self.entry is None:
             return
-        dr.async_get(self.hass).async_get_or_create(
+        hub = dr.async_get(self.hass).async_get_or_create(
             config_entry_id=self.entry.entry_id,
             identifiers={self.webserver_identifiers},  # pyright: ignore[reportArgumentType]
             name="Vimar WebServer",
             model="Vimar WebServer",
             manufacturer="Vimar",
         )
+        self.webserver_device_id = hub.id
 
     async def async_register_devices_platforms(self):
         """Execute async_forward_entry_setup for each platform."""
@@ -920,6 +1042,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # Recorded BEFORE awaiting the forward so async_unload_entry can undo
         # a setup that failed halfway through.
         self.forwarded_platforms = list(platforms)
+        # Before any SAI2 entity is created under its new unique_id, or the
+        # registry would get a second entry instead of the migrated one.
+        async_migrate_sai2_unique_ids(
+            self.hass, self.entry, self.entity_unique_id_prefix or "", self.vimarproject
+        )
         await self.hass.config_entries.async_forward_entry_setups(self.entry, platforms)
 
         self._platforms_registered = True
@@ -983,9 +1110,19 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         relabelled = 0
         for device_id, room in rooms_by_device.items():
             # Three elements where Home Assistant's own type says two, matching
-            # how VimarEntity.device_info registers them.
-            identifiers = cast("set[tuple[str, str]]", {(DOMAIN, prefix, device_id)})
-            device_entry = device_registry.async_get_device(identifiers=identifiers)
+            # how VimarEntity.device_info registers them. Do NOT change the
+            # shape: it is the identity of every device already in the
+            # registry. The lookup works because Home Assistant matches an
+            # identifier as an exact dict key, whatever its length - an
+            # implementation detail, pinned by test_device_identifiers.py so a
+            # Home Assistant release that starts validating the length shows
+            # up in CI first. Scoped to this entry: async_get_device is
+            # deprecated (2026.8, removed in 2027.8) because identifiers are
+            # only unique within a config entry.
+            identifier = cast("tuple[str, str]", (DOMAIN, prefix, device_id))
+            device_entry = device_registry.async_get_device_by_identifier(
+                identifier, self.entry.entry_id
+            )
             if device_entry is None:
                 continue
             labels = (device_entry.labels - managed_label_ids) | {label_ids[room]}
@@ -1056,8 +1193,20 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
         entity_registry = er.async_get(self.hass)
         entity_entries = er.async_entries_for_config_entry(entity_registry, self.entry.entry_id)
+        # The SAI2 load failed (see VimarProject._load_sai2): its entities were
+        # not created this time, but they are not gone. Removing them would
+        # throw away their entity_ids and settings.
+        sai2_error = getattr(self.vimarproject, "sai2_error", None)
+        keep_sai2 = isinstance(sai2_error, str)
+        if keep_sai2:
+            _LOGGER.warning(
+                "SAI2 not loaded (%s): its entities stay registered, unavailable",
+                sai2_error,
+            )
         for entity_entry in entity_entries:
             identifier = entity_entry.unique_id
+            if keep_sai2 and is_sai2_unique_id(identifier):
+                continue
             if (
                 identifier
                 and identifier not in configured_entities
@@ -1074,6 +1223,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         )
         for device_entry in device_registry_entries:
             device_identifiers_frozen = frozenset(device_entry.identifiers)
+            if keep_sai2 and SAI2_DEVICE_IDENTIFIER in device_entry.identifiers:
+                continue
             if (
                 device_identifiers_frozen not in configured_device_ids
                 and device_entry.id not in devices_to_be_removed
