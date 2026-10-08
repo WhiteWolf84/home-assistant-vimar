@@ -1110,9 +1110,19 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         relabelled = 0
         for device_id, room in rooms_by_device.items():
             # Three elements where Home Assistant's own type says two, matching
-            # how VimarEntity.device_info registers them.
-            identifiers = cast("set[tuple[str, str]]", {(DOMAIN, prefix, device_id)})
-            device_entry = device_registry.async_get_device(identifiers=identifiers)
+            # how VimarEntity.device_info registers them. Do NOT change the
+            # shape: it is the identity of every device already in the
+            # registry. The lookup works because Home Assistant matches an
+            # identifier as an exact dict key, whatever its length - an
+            # implementation detail, pinned by test_device_identifiers.py so a
+            # Home Assistant release that starts validating the length shows
+            # up in CI first. Scoped to this entry: async_get_device is
+            # deprecated (2026.8, removed in 2027.8) because identifiers are
+            # only unique within a config entry.
+            identifier = cast("tuple[str, str]", (DOMAIN, prefix, device_id))
+            device_entry = device_registry.async_get_device_by_identifier(
+                identifier, self.entry.entry_id
+            )
             if device_entry is None:
                 continue
             labels = (device_entry.labels - managed_label_ids) | {label_ids[room]}

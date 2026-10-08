@@ -21,6 +21,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import label_registry as lr
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -32,6 +35,7 @@ from custom_components.vimar.vimar_coordinator import (  # noqa: E402
 pytestmark = pytest.mark.integration  # Home Assistant required
 
 PREFIX = "casa"
+ENTRY_ID = "entry-1"
 
 
 class _FakeLabelRegistry:
@@ -62,10 +66,15 @@ class _FakeDeviceRegistry:
         }
         self.updates: list[tuple[str, set[str]]] = []
 
-    def async_get_device(self, identifiers=None, connections=None):
-        for domain, prefix, device_id in identifiers or ():
-            if domain == DOMAIN and prefix == PREFIX and device_id in self._devices:
-                return self._devices[device_id]
+    def async_get_device_by_identifier(self, identifier, config_entry_id):
+        domain, prefix, device_id = identifier
+        if (
+            config_entry_id == ENTRY_ID
+            and domain == DOMAIN
+            and prefix == PREFIX
+            and device_id in self._devices
+        ):
+            return self._devices[device_id]
         return None
 
     def async_update_device(self, device_id, *, labels=None, **kwargs):
@@ -79,6 +88,7 @@ def _coordinator(vimar_devices, config=None):
     """A coordinator with just the state _async_apply_room_labels reads."""
     coordinator = VimarDataUpdateCoordinator.__new__(VimarDataUpdateCoordinator)
     coordinator.hass = MagicMock()
+    coordinator.entry = SimpleNamespace(entry_id=ENTRY_ID)
     coordinator.vimarconfig = config if config is not None else {}
     coordinator.entity_unique_id_prefix = PREFIX
     coordinator.vimarproject = MagicMock()
@@ -221,7 +231,7 @@ async def test_it_runs_once_the_devices_exist():
     exactly the kind of failure no assertion on the rule itself would catch.
     """
     coordinator = _coordinator(_devices(**{"721": "Bagnetto"}))
-    coordinator.entry = MagicMock()
+    coordinator.entry = MagicMock(entry_id=ENTRY_ID)
     coordinator._async_register_webserver_device = MagicMock()
     forward = AsyncMock()
     coordinator.hass.config_entries.async_forward_entry_setups = forward
@@ -242,3 +252,52 @@ async def test_it_runs_once_the_devices_exist():
 
     assert forward.await_count == 1
     assert devices.updates == [("reg_721", {"label_bagnetto"})]
+
+
+# ---------------------------------------------------------------------------
+# Against the real registries
+# ---------------------------------------------------------------------------
+
+
+def _register(hass, entry, device_id):
+    return dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, PREFIX, device_id)},  # pyright: ignore[reportArgumentType]
+        name=f"Device {device_id}",
+    )
+
+
+async def test_room_labels_reach_the_real_registry_without_deprecations(hass, caplog):
+    """async_get_device is deprecated (2026.8, removed 2027.8): not used any more."""
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=PREFIX)
+    entry.add_to_hass(hass)
+    device = _register(hass, entry, "721")
+    coordinator = _coordinator(_devices(**{"721": "Bagnetto"}))
+    coordinator.hass = hass
+    coordinator.entry = entry
+
+    coordinator._async_apply_room_labels()
+
+    assert [r.getMessage() for r in caplog.records if "deprecated" in r.getMessage()] == []
+    bagnetto = lr.async_get(hass).async_get_label_by_name("Bagnetto")
+    assert bagnetto is not None
+    assert dr.async_get(hass).async_get(device.id).labels == {bagnetto.label_id}
+
+
+async def test_room_labels_stay_within_their_config_entry(hass):
+    """The same identifier under another entry is another device: not ours."""
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=PREFIX)
+    entry.add_to_hass(hass)
+    other_entry = MockConfigEntry(domain=DOMAIN, unique_id="altra_casa")
+    other_entry.add_to_hass(hass)
+    ours = _register(hass, entry, "721")
+    theirs = _register(hass, other_entry, "721")
+    coordinator = _coordinator(_devices(**{"721": "Bagnetto"}))
+    coordinator.hass = hass
+    coordinator.entry = entry
+
+    coordinator._async_apply_room_labels()
+
+    registry = dr.async_get(hass)
+    assert registry.async_get(ours.id).labels
+    assert registry.async_get(theirs.id).labels == set()
