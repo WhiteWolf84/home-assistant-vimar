@@ -14,6 +14,65 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.0] - 2026-10-09
+
+> First stable release since `2026.8.2`. It contains everything from the
+> `2026.10.0b0`–`b6` pre-releases. The sections below describe the net effect
+> of upgrading from `2026.8.2`; the individual pre-release entries are kept
+> further down for reference.
+>
+> **BREAKING for installations on Home Assistant 2026.5, 2026.6 and 2026.7:
+> this release requires Home Assistant 2026.8.0 or newer.**
+>
+> **Before upgrading, make a backup** of Home Assistant: the first start
+> migrates the SAI2 entries of the entity registry. Check the
+> *Breaking changes* and *Behaviour changes* below if you have scripts or
+> automations that arm or disarm the alarm, or read the zone attribute
+> `memory`.
+
+### Breaking changes
+
+- **Home Assistant 2026.8.0 or newer is required** (was 2026.5.0). The integration uses device registry APIs that only exist from 2026.8.0; on older versions setup would fail. This release must not be installed on Home Assistant 2026.5, 2026.6 or 2026.7.
+- **Zone attribute `memory` renamed to `excluded`.** Bit 2 of a zone value is the zone's exclusion from the armed mode, not an alarm memory. The web server only refreshes a zone's value on an event of that zone, so the attribute turns on at the zone's first event after arming. Automations or templates reading `memory` must use `excluded`.
+
+### Fixed
+
+- **A disarm or an arm could be lost without any error.** The web server answers `DPCM-0000` to a SAI2 command even when the control unit does not carry it out. In the case that prompted the fix, three areas were disarmed, only one actually was, and the alarm went off an hour later. Every area command, arm and disarm, is now **confirmed**: the area's live state is read once per second, for up to **20 s**, until it shows the requested mode. If it does not, the action fails with `sai2_disarm_not_confirmed` / `sai2_arm_not_confirmed`, a persistent notification and a `WARNING` in the log, and the area shows its real state.
+- **Area commands run one at a time**, each waiting for its confirmation, so a command never reaches a control unit still busy with the previous one. That busy state was also why a **valid PIN could be reported as wrong**: the PIN is now checked right before every command. A wrong PIN still fails at once and costs a single attempt per action; nothing is retried.
+- **Arming an area already armed in that mode no longer disarms it for a moment**; switching between armed modes (e.g. *night* → *away*) waits for the intermediate disarm to be confirmed before arming.
+- **Armed areas no longer show as disarmed when the web server serves unreadable values** (e.g. after a web server restart). Only an 8-character bitmask of 0 and 1 is a value; anything else makes the area `unknown`, never `disarmed`. Values already read are kept for up to 60 s from an area's last valid reading, so a single failed query changes nothing.
+- **SAI2 areas and zones no longer turn into new `_2` entities when the control unit is reprogrammed.** Their unique_ids now use the area/zone number on the control unit instead of the web server ID (`vimar_<entry>_sai2_area_<n>`, `vimar_<entry>_sai2_zone_<n>`). Existing entities are migrated at startup and keep their entity_id; an entity already replaced by a `_2` copy gets its original entity_id and settings back. A device class you set yourself ("Show as") is no longer lost on a reprogramming.
+- **SAI2 commands target the area number from the control unit** (the object's `MSP`, shown in the `area_index` attribute) instead of counting areas in web server ID order, which a reprogramming could reshuffle.
+- **A SAI2 error no longer stops the whole integration.** On an error the alarm areas and zones are unavailable (`ERROR` in the log, with the cause), everything else starts normally, and the SAI2 entities and the "SAI Alarm" device stay in the registry with their settings until the next successful load.
+
+### Added
+
+- **Recommended zone naming convention.** A zone name starting with `Tenda` or `Vol` is `motion`, `Cont.` is `door` (`garage_door` if the name contains `basculante`, `garag` or `sezional`), `Manom.` is `tamper`, `Virt.` is `safety`, before any other rule. A prefix counts only as a whole word. Names without one of these prefixes keep the previous keyword rules. See the README.
+- **`sai2_raw` attribute** on each alarm area: the last real state bitmask the panel state is decoded from.
+- A `WARNING` when an area's value becomes unreadable, logged once, and an `INFO` line when a valid value comes back.
+
+### Changed
+
+- **Areas show `arming` / `disarming` while a command waits for confirmation**; the requested mode is shown only once the control unit confirms it.
+- The "SAI Alarm" device is linked to the "Vimar WebServer" device with `via_device_id`, and the room-label lookup is scoped to the config entry, replacing device registry APIs deprecated by Home Assistant 2026.8 (removed in 2027.8). This removes the two deprecation warnings Home Assistant 2026.8+ logs for this integration; devices, names and labels are unchanged.
+
+### Behaviour changes
+
+- **An arm or disarm that is not confirmed makes the action call fail** (`HomeAssistantError`). With several areas in one call, every area is still attempted, then the call fails. A script or automation **stops at that step** unless it has `continue_on_error: true`; if you use that, check the state of the areas afterwards.
+- **Arming and disarming take longer**: areas are handled one after the other, each waiting for its confirmation — usually a few seconds per area, at most about 20 s.
+- **Automations that trigger on the alarm state** see `arming` / `disarming` first, and the final state only once it is confirmed.
+- **An area whose value cannot be read is `unknown`, not `disarmed`.** Automations that check `disarmed` / `armed_*` should expect `unknown` while the web server serves unreadable values. Commands can still be sent to an `unknown` area.
+- **Some zones may show a different device class**: `vol.` now wins over every other keyword (`vol. garage` was a garage door, now `motion`), and a known prefix decides on its own. A class you set yourself is not affected.
+
+### After upgrading
+
+1. Restart Home Assistant fully: the new error messages are only loaded at startup.
+2. Check that the entity_ids of the SAI2 areas and zones are unchanged (Settings → Entities, filter "SAI"), and that no new `_2` entity appeared.
+3. Replace `memory` with `excluded` in automations or templates reading the zone attribute.
+4. Review scripts and automations that arm or disarm the alarm for the behaviour changes above.
+
+---
+
 ## [2026.10.0b6] - 2026-10-09
 
 > **BREAKING for installations on Home Assistant 2026.5, 2026.6 and 2026.7:
