@@ -261,12 +261,22 @@ async def async_setup_entry(
         "manufacturer": "Vimar",
         "model": "SAI2",
     }
-    # Nest the alarm under the web server it belongs to. This used to read
-    # `coordinator.webserver_id`, an attribute nothing ever assigned, so the
-    # branch never ran - and would not have worked if it had: it built a
-    # two-element identifier, while the hub is registered with three.
-    sai_device_info["via_device"] = coordinator.webserver_identifiers
+    # Nest the alarm under the web server it belongs to, by the hub's registry
+    # id: `via_device` (an identifier) is deprecated since Home Assistant
+    # 2026.8 and removed in 2027.8. The hub is registered before any platform
+    # is forwarded, so the id is normally there. If it is not, leave the
+    # parameter out rather than fail: async_get_or_create then keeps whatever
+    # via_device_id the device already has, and an unregistered id would raise
+    # - a SAI2 problem must never stop the integration from loading.
     dev_reg = dr.async_get(hass)
+    hub_id = coordinator.webserver_device_id
+    if hub_id is not None and dev_reg.async_get(hub_id) is not None:
+        sai_device_info["via_device_id"] = hub_id
+    else:
+        _LOGGER.warning(
+            "SAI2: the Vimar WebServer device is not registered; "
+            "the SAI Alarm device keeps its current parent device"
+        )
     dev_reg.async_get_or_create(config_entry_id=entry.entry_id, **sai_device_info)
 
     # {ha_user_id: pin} so a logged-in HA user's own PIN is used automatically.

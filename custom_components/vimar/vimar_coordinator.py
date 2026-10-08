@@ -106,6 +106,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     # --- slim-poll state (class-level defaults, overridden as instance attrs in __init__) ---
     _slim_poll_active: bool = False
     _last_device_count: int = -1
+    # Device registry id of the "Vimar WebServer" hub, set when the hub is
+    # registered (see _async_register_webserver_device). None until then.
+    webserver_device_id: str | None = None
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, vimarconfig: ConfigType) -> None:
         """Initialize."""
@@ -1013,16 +1016,20 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         alarm platform, which points its own device at this one, is forwarded
         FIRST (see PLATFORMS). Registering it here means the via_device always
         resolves, instead of resolving only from the second start onwards.
+
+        The registry id is kept: Home Assistant 2026.8 deprecated `via_device`
+        (an identifier) in favour of `via_device_id` (this id), removed in 2027.8.
         """
         if self.entry is None:
             return
-        dr.async_get(self.hass).async_get_or_create(
+        hub = dr.async_get(self.hass).async_get_or_create(
             config_entry_id=self.entry.entry_id,
             identifiers={self.webserver_identifiers},  # pyright: ignore[reportArgumentType]
             name="Vimar WebServer",
             model="Vimar WebServer",
             manufacturer="Vimar",
         )
+        self.webserver_device_id = hub.id
 
     async def async_register_devices_platforms(self):
         """Execute async_forward_entry_setup for each platform."""
