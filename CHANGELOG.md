@@ -14,6 +14,21 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.1b0] - 2026-10-17
+
+> **Beta.** Includes everything in `2026.10.0`. One fix to the session
+> handling: no change to entities, unique_ids or configuration.
+
+### Fixed
+
+- **After the web server dropped the session, the SAI2 arm/disarm confirmation kept failing for its whole 20 s window.** An `LGMG-3019` reply drops the session so that the next request logs in again, but only the coordinator poll did log in again: the confirmation loop, which reads the area once a second, kept sending the dropped session and got `LGMG-3019` every time (17 `SQL request rejected by webserver` warnings in a row), and the command ended as "not confirmed" even when the control unit had carried it out. Every SQL request now logs in again first when there is no session; if that login fails, the request is skipped as a failed read.
+
+### Internal
+
+- New unit tests (`tests/unit/test_sql_relogin.py`): the request after an `LGMG-*` reply logs in and carries the new session id, and a failed login sends no request.
+
+---
+
 ## [2026.10.0] - 2026-10-09
 
 > First stable release since `2026.8.2`. It contains everything from the

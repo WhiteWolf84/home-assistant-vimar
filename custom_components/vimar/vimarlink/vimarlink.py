@@ -836,6 +836,17 @@ class VimarLink:
 
     def _request_vimar_sql(self, select: str):
         """Build and execute SQL request."""
+        # An LGMG-* reply below drops the session. Callers outside the
+        # coordinator poll (the SAI2 confirmation loop reads once a second)
+        # never log in again by themselves: without this they kept sending
+        # sessionid "None" and got LGMG-3019 for the whole 20s window.
+        if not self.is_logged():
+            try:
+                if not self.check_login():
+                    return None
+            except VimarApiError as err:
+                _LOGGER.warning("Re-login before SQL request failed: %s", err)
+                return None
         select = (
             select.replace("\r\n", " ")
             .replace("\n", " ")
