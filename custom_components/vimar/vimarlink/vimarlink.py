@@ -732,11 +732,20 @@ class VimarLink:
         _LOGGER.info("SAI2: found %d alarm zones", len(zones))
         return zones if zones else None
 
-    def get_sai2_zone_to_group(self) -> dict[str, str] | None:
+    def get_sai2_zone_to_group(self, groups: dict | None = None) -> dict[str, str] | None:
         """Fetch mapping of SAI2 zone IDs to their parent group IDs.
 
         Returns dict {zone_id: group_id} or None on error.
         Uses DPAD_SAI2GATEWAY_SAI2ZONEINTOGROUPS view.
+
+        A zone can belong to several areas. One that belongs to every named
+        area of `groups` (when there are at least two) belongs to the control
+        unit itself - e.g. the siren tamper - and is left out: its entity name
+        gets no area prefix. Otherwise the area with the lowest number wins,
+        so adding an area that combines others (e.g. "Buona Notte") does not
+        move the existing zones to it. This used to keep the last row's area,
+        i.e. the one with the highest web server ID: a newly added area took
+        every zone it shared with another one.
         """
         select = get_sai2_zone_to_group_query()
         payload = self._request_vimar_sql(select)
@@ -744,12 +753,23 @@ class VimarLink:
             _LOGGER.debug("SAI2: no zone-to-group mapping returned")
             return None
 
-        mapping: dict[str, str] = {}
+        zone_groups: dict[str, set[str]] = {}
         for row in map(sai2_row, payload):
             zid = str(row.get("ZID", ""))
             gid = str(row.get("GID", ""))
-            if zid and gid:
-                mapping[zid] = gid
+            if zid and gid and (groups is None or gid in groups):
+                zone_groups.setdefault(zid, set()).add(gid)
+
+        def _area_order(gid: str) -> tuple[int, int]:
+            index = (groups or {}).get(gid, {}).get("index")
+            return (index if index is not None else 1_000_000, int(gid) if gid.isdigit() else 0)
+
+        mapping: dict[str, str] = {}
+        for zid, gids in zone_groups.items():
+            if groups and len(groups) > 1 and gids >= set(groups):
+                _LOGGER.debug("SAI2: zone %s is in every area: no area prefix", zid)
+                continue
+            mapping[zid] = min(gids, key=_area_order)
 
         _LOGGER.info("SAI2: mapped %d zones to groups", len(mapping))
         return mapping if mapping else None
@@ -995,7 +1015,7 @@ class VimarProject:
         try:
             groups = self._link.get_sai2_devices()
             zones = self._link.get_sai2_zones()
-            zone_to_group = self._link.get_sai2_zone_to_group()
+            zone_to_group = self._link.get_sai2_zone_to_group(groups)
             area_values = (
                 self._link.get_sai2_area_checked_values(list(groups.keys())) if groups else None
             )

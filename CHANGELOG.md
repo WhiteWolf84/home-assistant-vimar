@@ -14,6 +14,25 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.1b1] - 2026-10-17
+
+> **Beta.** Includes everything in `2026.10.1b0`. No change to entity_ids or
+> unique_ids: only the displayed name of some SAI2 zones can change.
+>
+> **After upgrading:** zones that belong to every area (e.g. the siren
+> tamper) lose their area prefix. The entity_id stays the same; rename it by
+> hand if it contains the old area name.
+
+### Fixed
+
+- **A newly added SAI2 area took the zones it shares with the other areas.** A zone can belong to several areas, and its name was prefixed with the last one read, i.e. the area with the highest web server ID: always the newest. Now a zone that belongs to every area belongs to the control unit and gets no area prefix (e.g. the siren tamper), and a zone in several areas is named after the one with the lowest area number, so an area added later, such as one combining the others, does not rename the existing zones.
+
+### Internal
+
+- New unit tests (`tests/unit/test_sai2_zone_to_group.py`) with rows shaped after a real web server database.
+
+---
+
 ## [2026.10.1b0] - 2026-10-17
 
 > **Beta.** Includes everything in `2026.10.0`. One fix to the session
