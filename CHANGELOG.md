@@ -14,6 +14,34 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.1] - 2026-10-27
+
+> Stable release. It contains everything from the `2026.10.1b0`–`b2`
+> pre-releases. The sections below describe the net effect of upgrading from
+> `2026.10.0`; the individual pre-release entries are kept further down for
+> reference. No change to entity_ids or unique_ids.
+>
+> **Before upgrading,** check automations, scripts and dashboards that call
+> `climate.set_preset_mode` or `climate.set_temperature` on a thermostat that
+> may be **off**: those calls are now refused with an error instead of
+> switching the thermostat on (see *Breaking / behaviour changes*). A refused
+> step stops an automation unless it has `continue_on_error: true`.
+
+### Breaking / behaviour changes
+
+- **Thermostats: preset and temperature refused while off.** `climate.set_preset_mode` and `climate.set_temperature` on a thermostat that is off now raise an error (`climate_preset_while_off` / `climate_temperature_while_off`); nothing is sent and the state does not change. Only `climate.set_hvac_mode` (and `climate.turn_on` / `climate.turn_off`) switch a thermostat on or off. To switch on and set the temperature in one call, pass `hvac_mode: heat` or `hvac_mode: cool` to `set_temperature`; `hvac_mode` is now applied first (previously ignored), and `hvac_mode: off` with a temperature is refused.
+- **Thermostats: `turn_on` keeps the current heat/cool direction** instead of always choosing heat.
+- **Thermostats: `unknown` for unrecognised values.** A `funzionamento`, `regolazione` or `stagione` value the integration does not recognise (including an empty one) now shows the thermostat as `unknown`, with a one-time warning carrying the raw value; only `set_hvac_mode: off` is accepted in that state. On fan coils with a neutral zone (`CH_HVAC_FanCoilWithNeutralZone`), `regolazione` 0 (neutral zone) is `unknown` too: please open an issue with the raw value if you see the `unrecognised` warning.
+- **SAI2 zone names:** a zone that belongs to every area (e.g. the siren tamper) loses its area prefix; a zone in several areas is named after the lowest area number. Entity_ids do not change; rename by hand any that contain the old area name.
+
+### Fixed
+
+- **A thermostat that was off could be switched on by a preset or a temperature change**, e.g. by an automation running at Home Assistant start: the zones really started cooling.
+- **A newly added SAI2 area took the zones it shares with the other areas** (their names were prefixed with the newest area).
+- **After the web server dropped the session, the SAI2 arm/disarm confirmation kept failing for its whole 20 s window:** every SQL request now logs in again first when there is no session.
+
+---
+
 ## [2026.10.1b2] - 2026-10-27
 
 > **Beta.** Includes everything in `2026.10.1b1`. No change to entity_ids or
