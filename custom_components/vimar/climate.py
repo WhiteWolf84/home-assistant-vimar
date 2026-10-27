@@ -1,9 +1,11 @@
 """Platform for climate integration."""
 
 import logging
+from typing import NoReturn
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
+    ATTR_HVAC_MODE,
     FAN_HIGH,
     FAN_LOW,
     FAN_MEDIUM,
@@ -17,10 +19,12 @@ from homeassistant.components.climate.const import (
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.exceptions import ServiceValidationError
 
 from .const import (
     CLIMATE_POST_WRITE_REFRESH_DELAY,
     CLIMATE_REFRESH_STATUS_NAMES,
+    DOMAIN,
     PRESET_CLIMATE_AUTO,
     PRESET_CLIMATE_PROTECTION,
     VIMAR_CLIMATE_ASSENZA,
@@ -61,6 +65,43 @@ FANCOIL_OBJECT_TYPES = (
     "CH_HVAC_FanCoil",
     "CH_HVAC_FanCoilWithNeutralZone",
 )
+
+# Raw 'funzionamento' codes with a known meaning, per climate_type (see
+# get_const_value). Anything else - an empty CURRENT_VALUE included - is not a
+# valid reading: the mode is reported as unknown and only turning the
+# thermostat off is accepted, never a default such as cool or heat.
+KNOWN_FUNZIONAMENTO: dict[str, frozenset[str]] = {
+    "heat_cool": frozenset(
+        {
+            VIMAR_CLIMATE_OFF_I,
+            VIMAR_CLIMATE_MANUAL_I,
+            VIMAR_CLIMATE_AUTO_I,
+            VIMAR_CLIMATE_RIDUZIONE_I,
+            VIMAR_CLIMATE_PROTEZIONE_I,
+        }
+    ),
+    "heat_cool_fancoil": frozenset(
+        {
+            VIMAR_CLIMATE_AUTO_II,
+            VIMAR_CLIMATE_MANUAL_II,
+            VIMAR_CLIMATE_RIDUZIONE_II,
+            VIMAR_CLIMATE_ASSENZA_II,
+            VIMAR_CLIMATE_PROTEZIONE_II,
+            VIMAR_CLIMATE_OFF_II,
+        }
+    ),
+}
+
+# Raw heat/cool direction: 'stagione' on Type I, 'regolazione' on Type II.
+# The Type II neutral zone ('0', VIMAR_CLIMATE_NEUTRAL_II) has no HVACMode in
+# hvac_modes and reads as unknown.
+DIRECTION_MODES: dict[str, dict[str, HVACMode]] = {
+    "heat_cool": {VIMAR_CLIMATE_HEAT_I: HVACMode.HEAT, VIMAR_CLIMATE_COOL_I: HVACMode.COOL},
+    "heat_cool_fancoil": {
+        VIMAR_CLIMATE_HEAT_II: HVACMode.HEAT,
+        VIMAR_CLIMATE_COOL_II: HVACMode.COOL,
+    },
+}
 
 
 async def async_setup_entry(hass, entry, async_add_devices):
@@ -113,6 +154,10 @@ class VimarClimate(VimarEntity, ClimateEntity):
     # Row000016: '62834','stato_principale_condizionamento on/off','-1','0'  #cooling on/ff
     # Row000017: '62835','stato_principale_riscaldamento on/off','-1','0'  #heating on/ff
 
+    # Status keys already reported as unrecognised, so each is logged once per
+    # entity. Replaced, never mutated, so this class-level default is not shared.
+    _unrecognised_logged: frozenset[str] = frozenset()
+
     def __init__(self, coordinator, device_id: int):
         """Initialize the climate."""
         VimarEntity.__init__(self, coordinator, device_id)
@@ -129,11 +174,12 @@ class VimarClimate(VimarEntity, ClimateEntity):
         return CURR_PLATFORM
 
     @property
-    def is_on(self):
-        """Return True if the device is on or completely off."""
-        return (True, False)[
-            self.get_state("funzionamento") == self.get_const_value(VIMAR_CLIMATE_OFF)
-        ]
+    def is_on(self) -> bool | None:
+        """Return whether the thermostat is on, or None if the mode is unknown."""
+        mode = self._operating_mode
+        if mode is None:
+            return None
+        return mode != self.get_const_value(VIMAR_CLIMATE_OFF)
 
     @property
     def supported_features(self):
@@ -187,16 +233,15 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
         Auto/Manual/ECO/Away/Protection are expressed as preset_mode.
         The heat/cool direction persists across preset changes.
+        None (state 'unknown') when the mode, or the direction of a thermostat
+        that is on, is not a valid reading. Off needs no direction.
         """
-        if not self.is_on:
+        is_on = self.is_on
+        if is_on is None:
+            return None
+        if not is_on:
             return HVACMode.OFF
-        if self.climate_type == "heat_cool":
-            return (HVACMode.HEAT, HVACMode.COOL)[
-                self.get_state("stagione") == self.get_const_value(VIMAR_CLIMATE_COOL)
-            ]
-        return (HVACMode.HEAT, HVACMode.COOL)[
-            self.get_state("regolazione") == self.get_const_value(VIMAR_CLIMATE_COOL)
-        ]
+        return self._direction
 
     @property
     def hvac_modes(self):
@@ -212,9 +257,11 @@ class VimarClimate(VimarEntity, ClimateEntity):
         return presets
 
     @property
-    def preset_mode(self) -> str:
+    def preset_mode(self) -> str | None:
         """Return current preset (operating mode), independent of heat/cool direction."""
-        funz = self.get_state("funzionamento")
+        funz = self._operating_mode
+        if funz is None:
+            return None
         if funz == self.get_const_value(VIMAR_CLIMATE_AUTO):
             return PRESET_CLIMATE_AUTO
         if funz == self.get_const_value(VIMAR_CLIMATE_RIDUZIONE):
@@ -231,17 +278,18 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
     @property
     def hvac_action(self):
-        """Return current HVAC action (heating, cooling, idle, off)."""
-        if not self.is_on:
+        """Return current HVAC action (heating, cooling, idle, off), None if unknown."""
+        hvac_mode = self.hvac_mode
+        if hvac_mode is None:
+            return None
+        if hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
 
         if self.has_state("on/off") and self.get_state("on/off") == "0":
             return HVACAction.IDLE
 
         if self.climate_type == "heat_cool":
-            return (HVACAction.HEATING, HVACAction.COOLING)[
-                self.get_state("stagione") == self.get_const_value(VIMAR_CLIMATE_COOL)
-            ]
+            return HVACAction.COOLING if hvac_mode == HVACMode.COOL else HVACAction.HEATING
         else:
             if (
                 self.has_state("stato_principale_condizionamento on/off")
@@ -256,7 +304,13 @@ class VimarClimate(VimarEntity, ClimateEntity):
             return HVACAction.IDLE
 
     async def async_set_preset_mode(self, preset_mode):
-        """Set operating mode (funzionamento), keeping heat/cool direction unchanged."""
+        """Set operating mode (funzionamento), keeping heat/cool direction unchanged.
+
+        The preset lives in 'funzionamento', the very status that also holds
+        off: writing any preset to an off thermostat switches it on, and only
+        set_hvac_mode may do that. Refused while off or unknown.
+        """
+        self._refuse_unless_on("set_preset_mode", "climate_preset_while_off")
         if preset_mode == PRESET_CLIMATE_AUTO:
             set_function_mode = self.get_const_value(VIMAR_CLIMATE_AUTO)
         elif preset_mode == PRESET_ECO:
@@ -330,6 +384,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
         batch (see set_temperature docstring).
         """
         if hvac_mode == HVACMode.OFF:
+            # Accepted from any state, unknown included: off is the safe direction.
             _LOGGER.info("Vimar Climate setting hvac_mode to off")
             self.change_state("funzionamento", self.get_const_value(VIMAR_CLIMATE_OFF))
             self._schedule_post_write_refresh()
@@ -337,6 +392,11 @@ class VimarClimate(VimarEntity, ClimateEntity):
 
         if hvac_mode not in (HVACMode.HEAT, HVACMode.COOL):
             return
+
+        if self._operating_mode is None:
+            # Whether this is an activation (manual) or a direction change that
+            # keeps the preset cannot be told: turn it off first.
+            self._refuse("set_hvac_mode", "climate_mode_unknown")
 
         direction = self.get_const_value(
             VIMAR_CLIMATE_COOL if hvac_mode == HVACMode.COOL else VIMAR_CLIMATE_HEAT
@@ -378,15 +438,28 @@ class VimarClimate(VimarEntity, ClimateEntity):
         no funzionamento write. Re-sending funzionamento here would drop the
         thermostat to manual mode instead.
 
-        When the thermostat is off or in another preset (auto/eco/...),
-        activate manual mode first and apply the setpoint last. change_state()
-        sends the writes sequentially in this order, so the setpoint wins. The
-        heat/cool direction is left untouched: the user only chose a
-        temperature, not a season.
+        When the thermostat is on in another preset (auto/eco/protection),
+        activate manual mode first and apply the setpoint last (manual
+        override). change_state() sends the writes sequentially in this order,
+        so the setpoint wins. The heat/cool direction is left untouched.
+
+        An off or unknown thermostat is never switched on from here and no
+        setpoint is written to it: the call is refused. With an explicit
+        hvac_mode in the same call, set_hvac_mode() - the only method allowed
+        to switch the thermostat on - runs first, then the setpoint. With
+        hvac_mode off the whole call is refused, so nothing is half applied.
         """
         set_temperature = kwargs.get(ATTR_TEMPERATURE)
         if set_temperature is None:
             return
+
+        hvac_mode = kwargs.get(ATTR_HVAC_MODE)
+        if hvac_mode == HVACMode.OFF:
+            self._refuse("set_temperature", "climate_temperature_while_off")
+        if hvac_mode is not None:
+            await self.async_set_hvac_mode(hvac_mode)
+        self._refuse_unless_on("set_temperature", "climate_temperature_while_off")
+
         set_temperature = max(0, min(50, set_temperature))
 
         _LOGGER.info("Vimar Climate setting target temperature: %s", str(set_temperature))
@@ -405,7 +478,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
             self._schedule_post_write_refresh()
             return
 
-        # Off or another preset: enter manual mode, then override the setpoint.
+        # On in another preset (auto/eco/protection): manual override, setpoint last.
         set_function_mode = self.get_const_value(VIMAR_CLIMATE_MANUAL)
         extra = ("unita", self.get_state("unita")) if self.has_state("unita") else ()
         _LOGGER.info("Vimar Climate activating manual mode: %s", set_function_mode)
@@ -418,7 +491,74 @@ class VimarClimate(VimarEntity, ClimateEntity):
         )
         self._schedule_post_write_refresh()
 
+    async def async_turn_on(self) -> None:
+        """Switch on in the current heat/cool direction.
+
+        Home Assistant's default turn_on picks the first of HEAT_COOL/HEAT/COOL
+        in hvac_modes, i.e. HEAT, which would flip a cooling zone to heating.
+        """
+        direction = self._direction
+        if direction is None:
+            self._refuse("turn_on", "climate_mode_unknown")
+        if self.is_on:
+            return  # already on, in the direction it reports
+        await self.async_set_hvac_mode(direction)
+
     # helper
+
+    def _valid_raw(self, key: str, known) -> str | None:
+        """Return the raw value of `key` if it is a known code, else None.
+
+        An unrecognised value (missing, empty, or a code this integration does
+        not know) is logged once per entity with its raw repr.
+        """
+        value = self.get_state(key) if self.has_state(key) else None
+        if value is not None and value in known:
+            return value
+        if key not in self._unrecognised_logged:
+            self._unrecognised_logged = self._unrecognised_logged | {key}
+            _LOGGER.warning(
+                "Vimar Climate %s: unrecognised %s=%r, state reported as unknown",
+                self.entity_id,
+                key,
+                value,
+            )
+        return None
+
+    @property
+    def _operating_mode(self) -> str | None:
+        """Raw 'funzionamento' if it is a valid reading, else None."""
+        return self._valid_raw("funzionamento", KNOWN_FUNZIONAMENTO[self.climate_type])
+
+    @property
+    def _direction(self) -> HVACMode | None:
+        """Heat/cool direction from a valid reading, else None."""
+        key = "stagione" if self.climate_type == "heat_cool" else "regolazione"
+        directions = DIRECTION_MODES[self.climate_type]
+        raw = self._valid_raw(key, directions)
+        return None if raw is None else directions[raw]
+
+    def _refuse_unless_on(self, method: str, off_reason: str) -> None:
+        """Refuse a setpoint/preset call unless the thermostat is validly on."""
+        hvac_mode = self.hvac_mode
+        if hvac_mode is None:
+            self._refuse(method, "climate_mode_unknown")
+        if hvac_mode == HVACMode.OFF:
+            self._refuse(method, off_reason)
+
+    def _refuse(self, method: str, reason: str) -> NoReturn:
+        """Refuse a service call before anything is queued or published.
+
+        Raised ahead of change_state(): no SETVALUE is queued and the state in
+        Home Assistant is left as it was. Logged as a warning because nothing
+        reaches the thermostat, which a default `logger: warning` must show.
+        """
+        _LOGGER.warning("Vimar Climate %s: %s refused (%s)", self.entity_id, method, reason)
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key=reason,
+            translation_placeholders={"entity_id": str(self.entity_id)},
+        )
 
     def _schedule_post_write_refresh(self):
         """Ask the coordinator to GETVALUE this thermostat after a mode write.

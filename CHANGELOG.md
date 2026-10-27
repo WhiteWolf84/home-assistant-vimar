@@ -14,6 +14,37 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.1b2] - 2026-10-27
+
+> **Beta.** Includes everything in `2026.10.1b1`. No change to entity_ids or
+> unique_ids.
+>
+> **Before upgrading:** service calls that used to be accepted on a thermostat
+> that is **off** are now refused with an error (see below). Check automations,
+> scripts and dashboards that call `climate.set_preset_mode` or
+> `climate.set_temperature` without first making sure the zone is on: a refused
+> step stops the automation unless it has `continue_on_error: true`.
+
+### Fixed
+
+- **A thermostat that was off could be switched on by a preset or a temperature change.** The preset is stored in the same thermostat status (`funzionamento`) that also holds "off", so `climate.set_preset_mode` on an off thermostat wrote a preset code and really switched it on; `climate.set_temperature` did the same by entering manual mode. An automation running at Home Assistant start (preset `none`) turned every off zone on in cooling. Only `climate.set_hvac_mode` (and `climate.turn_on` / `climate.turn_off`, which go through it) can now switch a thermostat on or off.
+- **`climate.turn_on` switched a cooling zone to heating.** Home Assistant's default picks the first of heat_cool/heat/cool, i.e. heat. It now switches the thermostat on in the direction it already reports.
+- **An unreadable thermostat mode was shown as cool or heat.** Any `funzionamento` value other than "off" counted as on, and any direction other than cool counted as heat.
+
+### Breaking / behaviour changes
+
+- **Preset refused while off.** `climate.set_preset_mode` on a thermostat that is off now raises an error (`climate_preset_while_off`); nothing is sent and the state does not change. Turn the thermostat on first (`climate.set_hvac_mode` heat or cool).
+- **Temperature refused while off.** `climate.set_temperature` on a thermostat that is off now raises an error (`climate_temperature_while_off`) and no setpoint is written. To switch on and set the temperature in one call, pass `hvac_mode: heat` or `hvac_mode: cool`.
+- **`set_temperature` now honours `hvac_mode`.** When the call includes `hvac_mode` heat or cool, it is applied first (also on a thermostat that is already on, where it changes the heat/cool direction), then the setpoint. Previously `hvac_mode` was ignored.
+- **`set_temperature` with `hvac_mode: off` is refused** as a whole (`climate_temperature_while_off`): nothing is written.
+- **`climate.turn_on` keeps the current direction** instead of always choosing heat. If the direction cannot be read, it is refused (`climate_mode_unknown`).
+- **Unknown state for unrecognised values.** If `funzionamento`, or the heat/cool direction of a thermostat that is on (`regolazione` / `stagione`), holds a value this integration does not recognise (including an empty value), the climate state is `unknown`, `hvac_action` and `preset_mode` are empty, and a warning with the raw value is logged once per thermostat. In this state `set_temperature`, `set_preset_mode`, `turn_on` and `set_hvac_mode` heat/cool are refused (`climate_mode_unknown`); `set_hvac_mode: off` is always accepted.
+  - Recognised values: Type II `funzionamento` 0–4 and 6, `regolazione` 1 (cool) and 2 (heat); Type I `funzionamento` 0, 3, 4, 6, 8, `stagione` 0 (heat) and 1 (cool).
+  - **Exception to watch:** on fan coils **with** a neutral zone (`CH_HVAC_FanCoilWithNeutralZone`), `regolazione` 0 (neutral zone) is now `unknown` instead of being shown as heat; Type II `funzionamento` 5 and Type I codes other than those listed are also `unknown`. If you see the `unrecognised` warning in your log, please open an issue with the raw value.
+- **Refusals are logged as warnings** (`Vimar Climate <entity_id>: <method> refused (<reason>)`), so they show up with the default `logger: warning` level.
+
+---
+
 ## [2026.10.1b1] - 2026-10-17
 
 > **Beta.** Includes everything in `2026.10.1b0`. No change to entity_ids or

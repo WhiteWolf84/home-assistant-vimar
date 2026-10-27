@@ -139,6 +139,15 @@
     }
   },
   "exceptions": {
+    "climate_mode_unknown": {
+      "message": "{entity_id}: impossibile leggere la modalità del termostato dal web server VIMAR, comando non inviato. Finché non arriva una lettura valida è accettato solo lo spegnimento."
+    },
+    "climate_preset_while_off": {
+      "message": "{entity_id} è spento: non si può impostare un preset senza accenderlo. Accendilo prima (caldo o freddo)."
+    },
+    "climate_temperature_while_off": {
+      "message": "{entity_id} è spento: temperatura non inviata. Accendilo prima, oppure indica hvac_mode heat o cool nella stessa chiamata."
+    },
     "sai2_no_pin_for_user": {
       "message": "Nessun PIN disponibile. Inserisci il codice sul tastierino oppure associa un PIN al tuo utente nelle opzioni dell'integrazione."
     },
