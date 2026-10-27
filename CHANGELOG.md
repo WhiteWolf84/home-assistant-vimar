@@ -14,6 +14,99 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.10.1] - 2026-10-27
+
+> Stable release. It contains everything from the `2026.10.1b0`–`b2`
+> pre-releases. The sections below describe the net effect of upgrading from
+> `2026.10.0`; the individual pre-release entries are kept further down for
+> reference. No change to entity_ids or unique_ids.
+>
+> **Before upgrading,** check automations, scripts and dashboards that call
+> `climate.set_preset_mode` or `climate.set_temperature` on a thermostat that
+> may be **off**: those calls are now refused with an error instead of
+> switching the thermostat on (see *Breaking / behaviour changes*). A refused
+> step stops an automation unless it has `continue_on_error: true`.
+
+### Breaking / behaviour changes
+
+- **Thermostats: preset and temperature refused while off.** `climate.set_preset_mode` and `climate.set_temperature` on a thermostat that is off now raise an error (`climate_preset_while_off` / `climate_temperature_while_off`); nothing is sent and the state does not change. Only `climate.set_hvac_mode` (and `climate.turn_on` / `climate.turn_off`) switch a thermostat on or off. To switch on and set the temperature in one call, pass `hvac_mode: heat` or `hvac_mode: cool` to `set_temperature`; `hvac_mode` is now applied first (previously ignored), and `hvac_mode: off` with a temperature is refused.
+- **Thermostats: `turn_on` keeps the current heat/cool direction** instead of always choosing heat.
+- **Thermostats: `unknown` for unrecognised values.** A `funzionamento`, `regolazione` or `stagione` value the integration does not recognise (including an empty one) now shows the thermostat as `unknown`, with a one-time warning carrying the raw value; only `set_hvac_mode: off` is accepted in that state. On fan coils with a neutral zone (`CH_HVAC_FanCoilWithNeutralZone`), `regolazione` 0 (neutral zone) is `unknown` too: please open an issue with the raw value if you see the `unrecognised` warning.
+- **SAI2 zone names:** a zone that belongs to every area (e.g. the siren tamper) loses its area prefix; a zone in several areas is named after the lowest area number. Entity_ids do not change; rename by hand any that contain the old area name.
+
+### Fixed
+
+- **A thermostat that was off could be switched on by a preset or a temperature change**, e.g. by an automation running at Home Assistant start: the zones really started cooling.
+- **A newly added SAI2 area took the zones it shares with the other areas** (their names were prefixed with the newest area).
+- **After the web server dropped the session, the SAI2 arm/disarm confirmation kept failing for its whole 20 s window:** every SQL request now logs in again first when there is no session.
+
+---
+
+## [2026.10.1b2] - 2026-10-27
+
+> **Beta.** Includes everything in `2026.10.1b1`. No change to entity_ids or
+> unique_ids.
+>
+> **Before upgrading:** service calls that used to be accepted on a thermostat
+> that is **off** are now refused with an error (see below). Check automations,
+> scripts and dashboards that call `climate.set_preset_mode` or
+> `climate.set_temperature` without first making sure the zone is on: a refused
+> step stops the automation unless it has `continue_on_error: true`.
+
+### Fixed
+
+- **A thermostat that was off could be switched on by a preset or a temperature change.** The preset is stored in the same thermostat status (`funzionamento`) that also holds "off", so `climate.set_preset_mode` on an off thermostat wrote a preset code and really switched it on; `climate.set_temperature` did the same by entering manual mode. An automation running at Home Assistant start (preset `none`) turned every off zone on in cooling. Only `climate.set_hvac_mode` (and `climate.turn_on` / `climate.turn_off`, which go through it) can now switch a thermostat on or off.
+- **`climate.turn_on` switched a cooling zone to heating.** Home Assistant's default picks the first of heat_cool/heat/cool, i.e. heat. It now switches the thermostat on in the direction it already reports.
+- **An unreadable thermostat mode was shown as cool or heat.** Any `funzionamento` value other than "off" counted as on, and any direction other than cool counted as heat.
+
+### Breaking / behaviour changes
+
+- **Preset refused while off.** `climate.set_preset_mode` on a thermostat that is off now raises an error (`climate_preset_while_off`); nothing is sent and the state does not change. Turn the thermostat on first (`climate.set_hvac_mode` heat or cool).
+- **Temperature refused while off.** `climate.set_temperature` on a thermostat that is off now raises an error (`climate_temperature_while_off`) and no setpoint is written. To switch on and set the temperature in one call, pass `hvac_mode: heat` or `hvac_mode: cool`.
+- **`set_temperature` now honours `hvac_mode`.** When the call includes `hvac_mode` heat or cool, it is applied first (also on a thermostat that is already on, where it changes the heat/cool direction), then the setpoint. Previously `hvac_mode` was ignored.
+- **`set_temperature` with `hvac_mode: off` is refused** as a whole (`climate_temperature_while_off`): nothing is written.
+- **`climate.turn_on` keeps the current direction** instead of always choosing heat. If the direction cannot be read, it is refused (`climate_mode_unknown`).
+- **Unknown state for unrecognised values.** If `funzionamento`, or the heat/cool direction of a thermostat that is on (`regolazione` / `stagione`), holds a value this integration does not recognise (including an empty value), the climate state is `unknown`, `hvac_action` and `preset_mode` are empty, and a warning with the raw value is logged once per thermostat. In this state `set_temperature`, `set_preset_mode`, `turn_on` and `set_hvac_mode` heat/cool are refused (`climate_mode_unknown`); `set_hvac_mode: off` is always accepted.
+  - Recognised values: Type II `funzionamento` 0–4 and 6, `regolazione` 1 (cool) and 2 (heat); Type I `funzionamento` 0, 3, 4, 6, 8, `stagione` 0 (heat) and 1 (cool).
+  - **Exception to watch:** on fan coils **with** a neutral zone (`CH_HVAC_FanCoilWithNeutralZone`), `regolazione` 0 (neutral zone) is now `unknown` instead of being shown as heat; Type II `funzionamento` 5 and Type I codes other than those listed are also `unknown`. If you see the `unrecognised` warning in your log, please open an issue with the raw value.
+- **Refusals are logged as warnings** (`Vimar Climate <entity_id>: <method> refused (<reason>)`), so they show up with the default `logger: warning` level.
+
+---
+
+## [2026.10.1b1] - 2026-10-17
+
+> **Beta.** Includes everything in `2026.10.1b0`. No change to entity_ids or
+> unique_ids: only the displayed name of some SAI2 zones can change.
+>
+> **After upgrading:** zones that belong to every area (e.g. the siren
+> tamper) lose their area prefix. The entity_id stays the same; rename it by
+> hand if it contains the old area name.
+
+### Fixed
+
+- **A newly added SAI2 area took the zones it shares with the other areas.** A zone can belong to several areas, and its name was prefixed with the last one read, i.e. the area with the highest web server ID: always the newest. Now a zone that belongs to every area belongs to the control unit and gets no area prefix (e.g. the siren tamper), and a zone in several areas is named after the one with the lowest area number, so an area added later, such as one combining the others, does not rename the existing zones.
+
+### Internal
+
+- New unit tests (`tests/unit/test_sai2_zone_to_group.py`) with rows shaped after a real web server database.
+
+---
+
+## [2026.10.1b0] - 2026-10-17
+
+> **Beta.** Includes everything in `2026.10.0`. One fix to the session
+> handling: no change to entities, unique_ids or configuration.
+
+### Fixed
+
+- **After the web server dropped the session, the SAI2 arm/disarm confirmation kept failing for its whole 20 s window.** An `LGMG-3019` reply drops the session so that the next request logs in again, but only the coordinator poll did log in again: the confirmation loop, which reads the area once a second, kept sending the dropped session and got `LGMG-3019` every time (17 `SQL request rejected by webserver` warnings in a row), and the command ended as "not confirmed" even when the control unit had carried it out. Every SQL request now logs in again first when there is no session; if that login fails, the request is skipped as a failed read.
+
+### Internal
+
+- New unit tests (`tests/unit/test_sql_relogin.py`): the request after an `LGMG-*` reply logs in and carries the new session id, and a failed login sends no request.
+
+---
+
 ## [2026.10.0] - 2026-10-09
 
 > First stable release since `2026.8.2`. It contains everything from the

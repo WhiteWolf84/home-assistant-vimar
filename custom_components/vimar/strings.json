@@ -138,6 +138,15 @@
     }
   },
   "exceptions": {
+    "climate_mode_unknown": {
+      "message": "{entity_id}: the thermostat mode could not be read from the VIMAR web server, so nothing was sent. Only turning it off is accepted until a valid reading arrives."
+    },
+    "climate_preset_while_off": {
+      "message": "{entity_id} is off: a preset cannot be set without switching the thermostat on. Turn it on (heat or cool) first."
+    },
+    "climate_temperature_while_off": {
+      "message": "{entity_id} is off: the target temperature was not sent. Turn it on first, or pass hvac_mode heat or cool in the same call."
+    },
     "sai2_no_pin_for_user": {
       "message": "No PIN available. Enter the code on the keypad, or map a PIN to your user in the integration options."
     },

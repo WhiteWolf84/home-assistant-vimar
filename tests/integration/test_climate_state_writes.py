@@ -126,19 +126,19 @@ async def test_set_temperature_in_manual_writes_only_setpoint():
     assert _scheduled_writes(climate) == [("S", "21.5", "NO-OPTIONALS")]
 
 
-async def test_set_temperature_when_off_activates_manual_then_setpoint():
-    """From off: funzionamento=MANUAL is written first, setpoint last."""
+async def test_set_temperature_when_off_is_refused():
+    """From off: refused, nothing written - only set_hvac_mode may switch on."""
+    from homeassistant.exceptions import ServiceValidationError
+
     status = _manual_fancoil_status()
     status["funzionamento"]["status_value"] = FUNZ_OFF
     climate, _ = _make_climate(status)
 
-    await climate.async_set_temperature(temperature=21.5)
+    with pytest.raises(ServiceValidationError):
+        await climate.async_set_temperature(temperature=21.5)
 
-    writes = _scheduled_writes(climate)
-    # Only mode + setpoint are written; the heat/cool direction is untouched.
-    assert [status_id for status_id, _, _ in writes] == ["F", "S"]
-    assert writes[0] == ("F", FUNZ_MANUAL, "NO-OPTIONALS")
-    assert writes[-1] == ("S", "21.5", "NO-OPTIONALS")
+    climate.coordinator.enqueue_device_writes.assert_not_called()
+    assert climate._device["status"]["funzionamento"]["status_value"] == FUNZ_OFF
 
 
 async def test_set_hvac_mode_from_off_does_not_write_setpoint():
