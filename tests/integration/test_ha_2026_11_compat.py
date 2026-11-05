@@ -1,9 +1,10 @@
-"""Home Assistant 2026.11 API: native climate temperatures.
+"""Home Assistant 2026.11 API: native climate temperatures, in-place entity_id changes.
 
 2026.11 logs a warning at import for every custom climate class still providing
-current_temperature / target_temperature / temperature_unit (removed in 2027.11).
-The values shown must not change: the same thermostat reads the same in 2026.10
-and in 2026.11.
+current_temperature / target_temperature / temperature_unit (removed in 2027.11),
+and removes and re-adds, on an entity_id rename, every custom entity whose class
+has an add/remove hook but no async_entity_id_changed. The values shown must not
+change: the same thermostat reads the same in 2026.10 and in 2026.11.
 """
 
 import importlib.util
@@ -17,9 +18,20 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from homeassistant.components.climate import ClimateEntity
+from homeassistant.helpers import entity as ha_entity
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
-from custom_components.vimar import climate
+from custom_components.vimar import (
+    alarm_control_panel,
+    binary_sensor,
+    climate,
+    cover,
+    light,
+    media_player,
+    scene,
+    sensor,
+    switch,
+)
 from custom_components.vimar.climate import VimarClimate
 
 pytestmark = pytest.mark.integration  # Home Assistant required
@@ -86,3 +98,28 @@ def test_climate_fahrenheit_device_converted_once():
     state = entity.state_attributes
     assert state["temperature"] == 25.0
     assert state["current_temperature"] == 20.0
+
+
+ENTITY_CLASSES = [
+    alarm_control_panel.VimarAlarmControlPanel,
+    binary_sensor.VimarBinarySensor,
+    binary_sensor.VimarSAI2ZoneSensor,
+    binary_sensor.VimarStatusSensor,
+    climate.VimarClimate,
+    cover.VimarCover,
+    light.VimarLight,
+    media_player.VimarMediaplayer,
+    scene.VimarScene,
+    sensor.VimarClimateTempSensor,
+    sensor.VimarSensor,
+    switch.VimarSwitch,
+]
+
+
+@pytest.mark.skipif(
+    not hasattr(ha_entity, "_entity_class_requires_readd"), reason="Home Assistant 2026.11+ only"
+)
+@pytest.mark.parametrize("entity_class", ENTITY_CLASSES, ids=lambda c: c.__name__)
+def test_entity_id_change_in_place(entity_class):
+    """No entity is removed and re-added when its entity_id is renamed."""
+    assert not ha_entity._entity_class_requires_readd(entity_class)
