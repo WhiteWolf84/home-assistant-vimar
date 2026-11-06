@@ -5,6 +5,7 @@ from datetime import datetime
 
 from homeassistant.components.scene import Scene
 from homeassistant.const import STATE_UNKNOWN
+from homeassistant.core import callback
 from homeassistant.util import dt as dt_util
 
 from .const import DEVICE_TYPE_SCENES as CURR_PLATFORM
@@ -50,6 +51,16 @@ class VimarScene(VimarEntity, Scene):
                     self.device_name,
                     last_state.state,
                 )
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity when its entity_id is renamed (Home Assistant 2026.11+).
+
+        The restored activation time lives on the entity, not under its
+        entity_id, so the rename is taken in place.
+        """
+        # Called by Home Assistant 2026.11+ only, whose Entity defines it.
+        super().async_entity_id_changed(old_entity_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     @property
     def entity_platform(self):

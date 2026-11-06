@@ -56,6 +56,12 @@ from .vimar_entity import MISSING_DEVICE, VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
 
+# Home Assistant 2026.11 reads the temperatures under native_* names and warns
+# about the plain ones, which stop working in 2027.11. Earlier releases read
+# only the plain names, so they are aliased below while hacs.json still
+# accepts them. Drop the aliases once the minimum is 2026.11.
+HA_NATIVE_TEMPERATURES = hasattr(ClimateEntity, "native_temperature_unit")
+
 # Known Vimar object types that include a physical fan coil unit.
 # CH_HVAC_NoZonaNeutra and similar thermostats expose 'modalita_fancoil' and
 # 'velocita_fancoil' status keys with value '0' even when no fan coil is
@@ -195,7 +201,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
         return flags
 
     @property
-    def current_temperature(self):
+    def native_current_temperature(self):
         """Return current temperature."""
         if self.has_state("temperatura"):
             return float(self.get_state("temperatura") or 0)
@@ -209,7 +215,7 @@ class VimarClimate(VimarEntity, ClimateEntity):
             return float(self.get_state("umidita") or 0)
 
     @property
-    def target_temperature(self):
+    def native_target_temperature(self):
         """Return the temperature we try to reach."""
         return float(self.get_state("setpoint") or 0)
 
@@ -219,13 +225,20 @@ class VimarClimate(VimarEntity, ClimateEntity):
         return 0.1
 
     @property
-    def temperature_unit(self):
+    def native_temperature_unit(self):
         """Return unit of temperature measurement."""
         if self.has_state("unita"):
             return (UnitOfTemperature.FAHRENHEIT, UnitOfTemperature.CELSIUS)[
                 self.get_state("unita") == "0"
             ]
         return UnitOfTemperature.CELSIUS
+
+    if not HA_NATIVE_TEMPERATURES:
+        # Home Assistant before 2026.11 reads the plain names only. Never run on
+        # 2026.11, where the type checker sees them declared Final.
+        current_temperature = native_current_temperature  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+        target_temperature = native_target_temperature  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+        temperature_unit = native_temperature_unit  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
 
     @property
     def hvac_mode(self):

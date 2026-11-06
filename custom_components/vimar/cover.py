@@ -297,6 +297,18 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             task.cancel()
 
     @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity when its entity_id is renamed (Home Assistant 2026.11+).
+
+        Nothing here is keyed on the entity_id - the tracking timer, the
+        background tasks and the travel times are not - so the rename is taken
+        in place: a movement in progress keeps being tracked instead of being
+        cut by a remove and re-add.
+        """
+        # Called by Home Assistant 2026.11+ only, whose Entity defines it.
+        super().async_entity_id_changed(old_entity_id)  # pyright: ignore[reportAttributeAccessIssue]
+
+    @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from coordinator."""
         super()._handle_coordinator_update()
