@@ -14,6 +14,24 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [2026.11.0] - 2026-11-06
+
+> Stable release. It contains everything from the `2026.11.0b0` pre-release
+> (alignment with Home Assistant 2026.11); the beta entry is kept below for
+> reference. No change to entity_ids, unique_ids, states or values, and Home
+> Assistant 2026.8–2026.10 keep working (`hacs.json` still requires 2026.8.0).
+
+### Fixed
+
+- **Thermostats: no deprecation warnings on Home Assistant 2026.11.** Temperatures are reported as `native_current_temperature`, `native_target_temperature` and `native_temperature_unit`; the old names, which stop working in 2027.11, are kept as aliases only on Home Assistant releases before 2026.11.
+- **Covers and scenes: renaming the entity_id no longer removes and re-adds the entity** on Home Assistant 2026.11, so a cover renamed while moving keeps tracking its position.
+
+### Tests / CI
+
+- CI job running the integration tests on Home Assistant 2026.11.0 (six files that need `pytest-homeassistant-custom-component` are skipped there until it has a 2026.11 release; they still run on 2026.10.0).
+
+---
+
 ## [2026.11.0b0] - 2026-11-05
 
 > **Beta.** Includes everything in `2026.10.1`. Alignment with Home Assistant
