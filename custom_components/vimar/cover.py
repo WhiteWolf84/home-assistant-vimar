@@ -1053,7 +1053,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 await self._tb_stop_at_new_target(target)
                 return
             _LOGGER.debug(
-                "%s: set_position %s%% ignorato (delta %s%% <= coda relè %.1f%%, non posizionabile)",
+                "%s: set_position %s%% ignored (delta %s%% <= relay coast %.1f%%, cannot be positioned)",
                 self.device_name,
                 target,
                 delta,

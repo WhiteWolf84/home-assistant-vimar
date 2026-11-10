@@ -10,6 +10,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Covers: the debug line for an ignored `set_cover_position` is in English.** `set_position 99% ignored (delta 1% <= relay coast 1.4%, cannot be positioned)` was written in Italian. Nothing else changes.
+
+---
+
 ## [2026.11.1b0] - 2026-11-10
 
 > **Beta.** Includes everything in `2026.11.0`. Corrections from a review of
