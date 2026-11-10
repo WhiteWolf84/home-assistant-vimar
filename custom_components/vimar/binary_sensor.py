@@ -12,7 +12,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_VERIFY_SSL
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -221,6 +221,18 @@ class VimarStatusSensor(BinarySensorEntity):
         """Follow the coordinator: the state changes with the poll that changed it."""
         await super().async_added_to_hass()
         self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity when its entity_id is renamed (Home Assistant 2026.11+).
+
+        Defining async_added_to_hass makes Home Assistant 2026.11 remove and
+        re-add the entity on a rename, unless the class says it can take the
+        change in place. It can: the coordinator listener belongs to the
+        entity, not to its entity_id.
+        """
+        # Called by Home Assistant 2026.11+ only, whose Entity defines it.
+        super().async_entity_id_changed(old_entity_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     @property
     def is_on(self) -> bool:
