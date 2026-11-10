@@ -81,6 +81,15 @@ WriteResults = list[tuple[DeviceWrite, CommandOutcome]]
 # hexdigest, which is always 32 characters.
 _HASH_INVALIDATED = ""
 
+# How many polls in a row may fail before the update is reported as failed -
+# which is what turns every entity unavailable. The third one does it: one
+# hiccup (a read timeout, an expired session whose login is slow) must not
+# blank the whole installation, and a web server that is really gone must not
+# go on being shown with the values of its last good poll.
+# It is a number of polls, not of seconds: a poll that fails on a timeout
+# takes as long as that timeout before the next one is even scheduled.
+_FAILED_POLLS_BEFORE_UNAVAILABLE = 3
+
 # A failed SAI2 query keeps the area values already read, but not for ever:
 # with no valid reading of an area for this long, its state is unknown.
 _SAI2_STALE_SECONDS = 60.0
@@ -108,6 +117,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     _last_devices_hash = ""
     _consecutive_auth_failures = 0
     _reauth_triggered = False
+    # See __init__ and _async_update_data_locked.
+    _failed_polls = 0
+    last_poll_ok = True
 
     # --- slim-poll state (class-level defaults, overridden as instance attrs in __init__) ---
     _slim_poll_active: bool = False
@@ -159,6 +171,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._update_lock = asyncio.Lock()
         # Set by async_force_refresh() to make the next cycle a full discovery.
         self._force_full_discovery = False
+        # Polls failed in a row (see _FAILED_POLLS_BEFORE_UNAVAILABLE), and
+        # whether the LAST one got through: what the Connection sensor shows,
+        # from the first failure on.
+        self._failed_polls = 0
+        self.last_poll_ok = True
 
         # FIX: single global FIFO for all device writes (SETVALUE). Every
         # change_state() from every entity enqueues its batch here and one
@@ -403,7 +420,66 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             return await self._async_update_data_locked()
 
     async def _async_update_data_locked(self):
-        """Run one update cycle. Callers must hold _update_lock."""
+        """Run one update cycle and decide what a failure of it means.
+
+        Callers must hold _update_lock.
+
+        Every way a poll can fail counts the same - no answer to the slim
+        poll, a timeout, a login that does not go through, an error of ours -
+        and none of them fails the update by itself: the previous values are
+        kept until _FAILED_POLLS_BEFORE_UNAVAILABLE polls in a row have
+        failed. Only then is UpdateFailed raised and the entities go
+        unavailable. Before, an exception failed the update at once, while a
+        slim poll without an answer never did, however long it lasted.
+
+        Kept values are the last ones READ: nothing is made up to fill the
+        gap, and that goes for the SAI2 areas as for everything else.
+
+        Not softened: the first update of an entry (there is nothing to keep,
+        and the setup has to be retried) and a rejected login, which is not an
+        interruption but a credential to fix.
+        """
+        try:
+            data = await self._async_poll_once()
+        except ConfigEntryAuthFailed:
+            self.last_poll_ok = False
+            raise
+        except UpdateFailed as err:
+            self.last_poll_ok = False
+            self._failed_polls += 1
+            if not self._can_keep_previous_data():
+                if self._failed_polls >= _FAILED_POLLS_BEFORE_UNAVAILABLE:
+                    _LOGGER.warning(
+                        "Vimar: %d polls in a row failed (%s): entities are unavailable "
+                        "until the web server answers again",
+                        self._failed_polls,
+                        err,
+                    )
+                raise
+            _LOGGER.info(
+                "Vimar: poll failed (%d of %d before the entities go unavailable), "
+                "previous values kept: %s",
+                self._failed_polls,
+                _FAILED_POLLS_BEFORE_UNAVAILABLE,
+                err,
+            )
+            return self.vimarproject.devices
+
+        self._failed_polls = 0
+        self.last_poll_ok = True
+        return data
+
+    def _can_keep_previous_data(self) -> bool:
+        """True while a failed poll may still be answered with the last values."""
+        return (
+            self._failed_polls < _FAILED_POLLS_BEFORE_UNAVAILABLE
+            and self._first_update_data_executed
+            and self._platforms_registered
+            and bool(self.vimarproject.devices)
+        )
+
+    async def _async_poll_once(self):
+        """Fetch the data once; raises UpdateFailed / ConfigEntryAuthFailed."""
         _LOGGER.debug("Updating coordinator..")
 
         # FIX #23b: svuota il set a inizio ciclo cosi' ogni poll parte pulito.
@@ -478,10 +554,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                     )
 
                     if slim_results is None:
-                        _LOGGER.debug(
-                            "Vimar: slim poll returned None (transient), keeping previous state"
-                        )
-                        return self.vimarproject.devices
+                        # Counted like any other failed poll by the caller. It
+                        # used to be returned as a successful update, so a web
+                        # server that kept failing fast - connection refused,
+                        # with the session id still cached - was never noticed.
+                        raise UpdateFailed("No answer to the slim poll")
 
                     self._apply_slim_results(self.vimarproject.devices, slim_results)
                     # Update SAI2 zone/group children from slim poll results
@@ -536,6 +613,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
         except ConfigEntryAuthFailed:
             self._handle_auth_failure()
+            raise
+        except UpdateFailed:
+            # Raised on purpose a few lines up: not an unexpected error.
             raise
         except TimeoutError:
             _LOGGER.warning("Timeout communicating with Vimar web server")
@@ -1013,6 +1093,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._last_device_count = -1
         self._consecutive_auth_failures = 0
         self._reauth_triggered = False
+        self._failed_polls = 0
+        self.last_poll_ok = True
         self._device_state_hashes = {}
         self._pending_write_guards = {}
         self.devices_for_platform = {}

@@ -170,7 +170,8 @@ class VimarStatusSensor(BinarySensorEntity):
     """Representation of Vimar connection status sensor."""
 
     _coordinator: VimarDataUpdateCoordinator
-    _attr_should_poll = True
+    # Pushed by the coordinator after every poll (see async_added_to_hass).
+    _attr_should_poll = False
     _attr_has_entity_name = True
 
     def __init__(self, coordinator: VimarDataUpdateCoordinator):
@@ -197,7 +198,6 @@ class VimarStatusSensor(BinarySensorEntity):
             "Vimar Url": conn.base_url,
             "Certificate": conn.certificate,
         }
-        self._attr_is_on = False
 
     @property
     def unique_id(self):
@@ -217,14 +217,25 @@ class VimarStatusSensor(BinarySensorEntity):
             manufacturer="Vimar",
         )
 
-    def update(self):
-        """Fetch new state data for the sensor.
+    async def async_added_to_hass(self) -> None:
+        """Follow the coordinator: the state changes with the poll that changed it."""
+        await super().async_added_to_hass()
+        self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))
 
-        FIX #10: this method is called by HA on the executor thread
-        (because _attr_should_poll = True and update() is synchronous),
-        so the blocking is_logged() network call is safe here.
+    @property
+    def is_on(self) -> bool:
+        """Whether the web server answered the last poll.
+
+        Off from the FIRST poll that fails, two polls before the entities go
+        unavailable (see the coordinator's _FAILED_POLLS_BEFORE_UNAVAILABLE):
+        it is the early sign of an outage, and the only one of a short one.
+
+        It used to report whether a session id was cached, read every 30 s:
+        that stayed on through an outage that did not happen to drop the
+        session, and went off for 30 s whenever one was dropped, whether or
+        not anything else was wrong.
         """
-        self._attr_is_on = self._coordinator.vimarconnection.is_logged()
+        return bool(self._coordinator.last_poll_ok)
 
 
 class VimarBinarySensor(VimarEntity, BinarySensorEntity):

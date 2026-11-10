@@ -166,14 +166,18 @@ async def test_login_slower_than_the_poll_budget_still_succeeds():
 
 
 async def test_a_slow_slim_poll_still_fails_fast():
-    """The tight budget is the point of the poll: keep it."""
+    """The tight budget is the point of the poll: keep it.
+
+    Asked of the single poll: whether one failed poll fails the update is
+    another matter (it takes three in a row, see test_webserver_outage.py).
+    """
     from homeassistant.helpers.update_coordinator import UpdateFailed
 
     coordinator, hass = _coordinator(timeout=0.3, setup_timeout=3.0, slim_poll_active=True)
     hass.async_add_executor_job = _slow_executor_job(1.0)  # > poll budget
 
     with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
+        await coordinator._async_poll_once()
 
 
 async def test_a_normal_slim_poll_is_unaffected():
