@@ -1,8 +1,9 @@
 """A new command while a time-based cover is already moving (HA required).
 
-_tb_start_tracking() returns at once when the requested operation is the one
-in progress, before it stores the target. The relay command is sent again
-(harmless: same direction), but the tracking keeps the old target.
+_tb_start_tracking() used to return at once when the requested operation was
+the one in progress, before it stored the target. The relay command was sent
+again (harmless: same direction), but the tracking kept the old target. A
+same-direction command now replaces the target and nothing else.
 
 Recorded on the plant on 2026-11-10, stanza multimediale,
 CH_ShutterWithoutPosition_Automation, travel 36 s up / 35 s down; both stops
@@ -55,8 +56,6 @@ UP_DOWN = "up/down"  # 347 on the plant: "0" opens, "1" closes
 STOP = "stop up/stop down"  # 345 on the plant
 STOP_COMMAND = "vimar_cover_stop"  # task that sends the STOP
 MECHANICAL_STOP = "vimar_cover_stop_tracking"  # task that only ends the tracking
-
-PENDING = "review 2026-11 #1.4: a same-direction command does not update the tracking target"
 
 
 class _Clock:
@@ -153,7 +152,6 @@ def closed(monkeypatch) -> _Rig:
 # --- the two sequences recorded on the plant --------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason=PENDING)
 async def test_6a_set_position_30_then_70_stops_at_70(closed):
     cover = closed.cover
     await cover.async_set_cover_position(**{ATTR_POSITION: 30})
@@ -172,7 +170,6 @@ async def test_6a_set_position_30_then_70_stops_at_70(closed):
     assert cover._tb_position == 70
 
 
-@pytest.mark.xfail(strict=True, reason=PENDING)
 async def test_6b_set_position_30_then_open_runs_to_the_end_stop(closed):
     cover = closed.cover
     await cover.async_set_cover_position(**{ATTR_POSITION: 30})
@@ -203,7 +200,6 @@ async def test_the_relay_command_is_sent_again_as_logged(closed):
 # --- same direction ---------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason=PENDING)
 async def test_a_nearer_target_the_same_way_replaces_the_first(closed):
     """30 -> 10 while rising and still below 10: stop earlier, same direction."""
     cover = closed.cover
@@ -221,7 +217,6 @@ async def test_a_nearer_target_the_same_way_replaces_the_first(closed):
     assert cover._tb_position == 10
 
 
-@pytest.mark.xfail(strict=True, reason=PENDING)
 async def test_close_during_a_partial_closing_runs_to_the_end_stop(monkeypatch):
     rig = _Rig(monkeypatch, position=100)
     cover = rig.cover
@@ -251,6 +246,57 @@ async def test_a_same_direction_command_does_not_restart_the_measurement(closed)
 
     assert cover._tb_start_time == started_at
     assert cover._tb_start_position == 0
+
+
+# --- a new target the cover is already at -----------------------------------
+
+
+@pytest.mark.parametrize("target", [19, 20], ids=["same position", "within the deadband"])
+async def test_a_target_within_reach_stops_the_moving_cover(closed, target):
+    """At 19% on the way to 30%: 19 or 20 cannot be placed better than "here"."""
+    cover = closed.cover
+    await cover.async_set_cover_position(**{ATTR_POSITION: 30})
+    closed.at(7.5)
+    assert cover._tb_position == 19
+
+    await cover.async_set_cover_position(**{ATTR_POSITION: target})
+
+    assert closed.stop_commands == [(STOP, "1")]
+    assert cover._tb_operation is None
+    assert cover._tb_position == 19
+
+
+@pytest.mark.parametrize(
+    ("position", "target", "operation", "relay"),
+    [(99, 100, "opening", "0"), (1, 0, "closing", "1")],
+    ids=["opening, 100 asked at 99%", "opening, 0 asked at 1%"],
+)
+async def test_an_end_stop_within_reach_is_still_run_to(closed, position, target, operation, relay):
+    """First exception: 0 and 100 never get a STOP, whatever the estimate says."""
+    cover = closed.cover
+    await cover.async_set_cover_position(**{ATTR_POSITION: 50})
+    cover._tb_position = position  # the estimate, a tick before the request
+
+    await cover.async_set_cover_position(**{ATTR_POSITION: target})
+
+    assert closed.stop_commands == []
+    assert closed.tasks == []
+    assert cover._tb_operation == operation
+    assert cover._tb_target == target
+    assert closed.writes[-1] == (UP_DOWN, relay)
+
+
+@pytest.mark.parametrize("target", [19, 20], ids=["same position", "within the deadband"])
+async def test_a_target_within_reach_sends_nothing_to_a_cover_at_rest(monkeypatch, target):
+    """Second exception: a cover that is not moving gets no command at all."""
+    rig = _Rig(monkeypatch, position=19)
+
+    await rig.cover.async_set_cover_position(**{ATTR_POSITION: target})
+
+    assert rig.writes == []
+    assert rig.tasks == []
+    assert rig.cover._tb_operation is None
+    assert rig.cover._tb_position == 19
 
 
 # --- reversal ---------------------------------------------------------------
@@ -308,7 +354,6 @@ async def test_the_poll_after_a_command_does_not_end_the_tracking(closed):
     assert cover._tb_start_position == 0
 
 
-@pytest.mark.xfail(strict=True, reason=PENDING)
 async def test_the_poll_after_a_retarget_leaves_the_new_target(closed):
     cover = closed.cover
     await cover.async_set_cover_position(**{ATTR_POSITION: 30})

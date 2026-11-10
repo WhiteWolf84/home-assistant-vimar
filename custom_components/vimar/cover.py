@@ -553,6 +553,26 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         operation = "opening" if opening else "closing"
 
         if self._tb_operation == operation:
+            # Already moving this way: only the target changes. The movement
+            # under way keeps being measured from the command that started it
+            # - resetting the start time or position here would count the
+            # travel already done from the wrong moment. This used to return
+            # before the target was stored, so a further set_position was
+            # ignored and open/close during a partial move was stopped at the
+            # old target by our own STOP.
+            new_target = target if target is not None else (100 if opening else 0)
+            if new_target != self._tb_target:
+                _LOGGER.debug(
+                    "%s: Retarget %s from %s%% to %s%% (was %s%%)",
+                    self.device_name,
+                    operation,
+                    self._tb_position,
+                    new_target,
+                    self._tb_target,
+                )
+                self._tb_target = new_target
+                self._tb_planned_stop = False
+                self.async_write_ha_state()
             return
 
         # _tb_position resta None finché async_added_to_hass non ha
@@ -891,10 +911,22 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             )
             self._tb_position = 0
 
-        if target == self._tb_position:
+        moving = self._tb_operation is not None
+        # 0% and 100% are the mechanical end stops: a cover sent there runs
+        # until its own limit switch and NEVER gets a STOP from us, which is
+        # what resets the drift of a position estimated by time. While the
+        # cover is moving that holds whatever the estimate says, so an end-stop
+        # target skips the deadband below instead of being answered with a STOP.
+        end_stop = target in (0, 100)
+
+        if target == self._tb_position and not (moving and end_stop):
+            if moving:
+                await self._tb_stop_at_new_target(target)
             return
 
-        opening = target > self._tb_position
+        # At an end-stop target the direction is the end stop's own, also when
+        # the estimate already reads 0 or 100.
+        opening = target == 100 if end_stop else target > self._tb_position
         delta = abs(target - self._tb_position)
 
         # Deadband (FIX #2): un movimento <= alla coda relè non e' posizionabile
@@ -902,7 +934,13 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # ticchettio del relè. Lo ignoriamo. La soglia e' la stessa quantita'
         # usata per la compensazione overshoot, cosi' i due meccanismi sono
         # coerenti e non si genera mai uno start+stop immediato.
-        if delta <= self._overshoot_pct(opening):
+        if delta <= self._overshoot_pct(opening) and not (moving and end_stop):
+            if moving:
+                # Not ignorable while moving: the cover would carry on to the
+                # target it had before. It is already as close to the new one
+                # as it can be placed, so it is stopped where it is.
+                await self._tb_stop_at_new_target(target)
+                return
             _LOGGER.debug(
                 "%s: set_position %s%% ignorato (delta %s%% <= coda relè %.1f%%, non posizionabile)",
                 self.device_name,
@@ -918,6 +956,20 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         else:
             await self._tb_start_tracking(False, target=target)
             self.change_state("up/down", "1")
+
+    async def _tb_stop_at_new_target(self, target: int) -> None:
+        """Stop a moving cover whose new target is where it already is.
+
+        Only ever reached with an intermediate target (see
+        async_set_cover_position): the end stops are never stopped.
+        """
+        _LOGGER.info(
+            "%s: New target %s%% is within reach of the current %s%%, sending STOP",
+            self.device_name,
+            target,
+            self._tb_position,
+        )
+        await self.async_stop_cover()
 
     async def async_open_cover_tilt(self, **kwargs):
         self.change_state("clockwise/counterclockwise", "0")

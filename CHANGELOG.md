@@ -12,6 +12,10 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Covers (time-based position): a command sent while the cover is already moving the same way is no longer ignored.** A second `set_cover_position` now replaces the target, and `open_cover` / `close_cover` during a partial move run to the end stop. Before, the cover kept its first target: on the plant (2026-11-10) "30% then 70%" stopped at 30%, and "30% then open" was stopped at 30% by the integration's own STOP. The movement under way keeps being measured from the command that started it. A new intermediate target the cover has already reached (within the relay-coast tolerance) stops it where it is; a cover at rest still gets no command for such a target. Nothing changes at the end stops: at 0% and 100% no STOP is ever sent.
+
 ---
 
 ## [2026.11.0] - 2026-11-06
