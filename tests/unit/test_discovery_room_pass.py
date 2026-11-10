@@ -2,17 +2,18 @@
 
 A full discovery runs two queries over the same devices: get_remote_devices,
 which reads every status with its range (OPTIONALP), then get_room_devices,
-which only exists to attach the rooms. The second one selects every status
-again - without the range - and _generate_device_list replaces the whole status
-dict with what it got, so every device that sits in a room loses its
-`status_range`; a device in no room keeps it.
+which only exists to attach the rooms. The second one used to select every
+status again - without the range - and _generate_device_list replaced the
+whole status dict with what it got, so every device sitting in a room lost its
+`status_range`; a device in no room kept it. Seen on the plant on 2026-11-10:
+none of the 13 sensors with a room had the attribute, all 24 without did.
 
 The range is not decoration: sensor.not_a_reading() uses "min=0|max=1" to tell
 a flag from a measurement, so on a meter placed in a room that check never
-fires.
+fired.
 
-The room query also returns one row per (device, status) to say one thing per
-device. One row per device would both fix this and cut the pages to read.
+The room query now returns one row per device - its ID and its rooms - and the
+room pass sets the rooms and nothing else.
 """
 
 import os
@@ -77,6 +78,40 @@ def _project() -> VimarProject:
     return VimarProject(link)
 
 
+def test_the_room_query_asks_for_rooms_only():
+    """One row per device: nothing about statuses to write back over them."""
+    query = get_room_devices_query("5,6", 0, 300)
+
+    assert "status" not in query.lower()
+    assert "GROUP BY o2.ID\n" in query
+
+
+def test_a_device_in_two_rooms_gets_both():
+    link = VimarLink("https", "192.168.1.1", 443, "user", "pass")
+    link._rooms = {"5": {"id": "5", "name": "CUCINA"}, "6": {"id": "6", "name": "PIANO TERRA"}}
+    link._room_ids = "5,6"
+    link._request_vimar_sql = lambda select: [
+        {"object_id": IN_A_ROOM, "room_ids": "5,6"},
+        {"object_id": "999", "room_ids": "5"},  # not a device of ours: ignored
+    ]
+    devices = {IN_A_ROOM: {"room_ids": [], "room_names": [], "room_name": "", "status": {}}}
+
+    result = link.get_room_devices(devices, 0, 300)
+
+    assert result == (devices, 2)
+    assert devices[IN_A_ROOM]["room_names"] == ["CUCINA", "PIANO TERRA"]
+    assert devices[IN_A_ROOM]["room_name"] == "CUCINA"
+    assert list(devices) == [IN_A_ROOM]
+
+
+def test_a_failed_room_query_is_a_failed_page():
+    link = VimarLink("https", "192.168.1.1", 443, "user", "pass")
+    link._room_ids = "5"
+    link._request_vimar_sql = lambda select: None
+
+    assert link.get_room_devices({}, 0, 300) is None
+
+
 def test_the_room_is_attached():
     devices = _project().update(forced=True)
 
@@ -90,18 +125,12 @@ def test_a_device_in_no_room_keeps_its_status_range():
     assert devices[IN_NO_ROOM]["status"]["dynamic_mode"]["status_range"] == RANGE
 
 
-@pytest.mark.xfail(
-    strict=True, reason="review 2026-11 #1.3: the room pass replaces the status dict, range lost"
-)
 def test_a_device_in_a_room_keeps_its_status_range():
     devices = _project().update(forced=True)
 
     assert devices[IN_A_ROOM]["status"]["dynamic_mode"].get("status_range") == RANGE
 
 
-@pytest.mark.xfail(
-    strict=True, reason="review 2026-11 #2.3: LIMIT paging without ORDER BY has no defined order"
-)
 @pytest.mark.parametrize(
     "query",
     [get_remote_devices_query(0, 300), get_room_devices_query("5,6", 0, 300)],

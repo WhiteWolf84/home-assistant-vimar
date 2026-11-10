@@ -28,16 +28,25 @@ class VimarDevice(TypedDict):
 
 
 def get_room_devices_query(room_ids: str, start: int, limit: int) -> str:
-    """Generate SQL query to fetch devices belonging to rooms."""
-    return f"""SELECT GROUP_CONCAT(r2.PARENTOBJ_ID) AS room_ids, o2.ID AS object_id,
-o2.NAME AS object_name, o2.VALUES_TYPE as object_type,
-o3.ID AS status_id, o3.NAME AS status_name, o3.CURRENT_VALUE AS status_value
+    """Generate SQL query to fetch which rooms each device belongs to.
+
+    One row per device: its ID and the rooms it sits in. It used to select
+    every status of every device as well (ID, name, value) and group by all
+    of them, returning devices x statuses rows to say one thing per device -
+    and the caller wrote those statuses back over the ones the discovery had
+    just read, without their range (see VimarLink.get_room_devices).
+
+    DISTINCT because a device is one row now: without it a device related to
+    the same room twice would list that room twice.
+
+    Run on the plant on 2026-11-10: 22 rows where the old form returned 120.
+    """
+    return f"""SELECT o2.ID AS object_id, GROUP_CONCAT(DISTINCT r2.PARENTOBJ_ID) AS room_ids
 FROM DPADD_OBJECT_RELATION r2
 INNER JOIN DPADD_OBJECT o2 ON r2.CHILDOBJ_ID = o2.ID AND o2.type = "BYMEIDX"
-INNER JOIN DPADD_OBJECT_RELATION r3 ON o2.ID = r3.PARENTOBJ_ID AND r3.RELATION_WEB_TIPOLOGY = "BYME_IDXOBJ_RELATION"
-INNER JOIN DPADD_OBJECT o3 ON r3.CHILDOBJ_ID = o3.ID AND o3.type = "BYMEOBJ" AND o3.NAME != ""
 WHERE r2.PARENTOBJ_ID IN ({room_ids}) AND r2.RELATION_WEB_TIPOLOGY = "GENERIC_RELATION"
-GROUP BY o2.ID, o2.NAME, o2.VALUES_TYPE, o3.ID, o3.NAME, o3.CURRENT_VALUE
+GROUP BY o2.ID
+ORDER BY o2.ID
 LIMIT {start}, {limit};"""
 
 
@@ -47,6 +56,13 @@ def get_remote_devices_query(start: int, limit: int) -> str:
     FIX #4: removed duplicate columns object_name and object_type that appeared
     twice in the SELECT due to a copy-paste residue. The parser would silently
     overwrite the first value with the second; now each column appears once.
+
+    ORDER BY: the result is read in pages (LIMIT start, limit), and without a
+    defined order nothing says two pages cut the same sequence - a row could
+    be read twice or not at all. Run on the plant on 2026-11-10: accepted, and
+    the same 154 (object, status) pairs as without it, which the web server
+    already returned in another order. That plant fits in one page, so reading
+    a second page has not been exercised there.
     """
     return f"""SELECT '' AS room_ids, o2.id AS object_id, o2.name AS object_name, o2.VALUES_TYPE AS object_type,
 o3.ID AS status_id, o3.NAME AS status_name, o3.OPTIONALP as status_range, o3.CURRENT_VALUE AS status_value
@@ -55,6 +71,7 @@ INNER JOIN (SELECT CLASSNAME,IS_EVENT,IS_EXECUTABLE FROM DPAD_WEB_PHPCLASS) AS D
 INNER JOIN DPADD_OBJECT_RELATION r3 ON o2.ID = r3.PARENTOBJ_ID AND r3.RELATION_WEB_TIPOLOGY = "BYME_IDXOBJ_RELATION"
 INNER JOIN DPADD_OBJECT o3 ON r3.CHILDOBJ_ID = o3.ID AND o3.type IN ('BYMETVAL','BYMEOBJ') AND o3.NAME != ""
 WHERE o2.OPTIONALP NOT LIKE "%%restricted%%" AND o2.IS_VISIBLE=1 AND o2.OWNED_BY!="SYSTEM" AND o2.OPTIONALP LIKE "%%category=%%"
+ORDER BY o2.ID, o3.ID
 LIMIT {start}, {limit};"""
 
 

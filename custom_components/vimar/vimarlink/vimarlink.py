@@ -541,7 +541,35 @@ class VimarLink:
         _LOGGER.debug("get_room_devices started - from %d to %d", start, start + limit)
 
         select = get_room_devices_query(self._room_ids, start, limit)
-        return self._generate_device_list(select, devices, only_update=True)
+        payload = self._request_vimar_sql(select)
+        if payload is None:
+            return None
+
+        # Rooms only. This pass used to go through _generate_device_list,
+        # which rebuilt every status dict from what the room query returned -
+        # ID and value, no range - so each device sitting in a room lost the
+        # status_range the discovery had read a moment before.
+        for row in payload:
+            device = devices.get(row["object_id"])
+            if device is not None:
+                self._assign_rooms(device, row.get("room_ids"))
+
+        return devices, len(payload)
+
+    def _assign_rooms(self, device: VimarDevice, room_ids_csv: str | None) -> None:
+        """Set a device's rooms from a comma-separated list of room IDs."""
+        if not room_ids_csv:
+            return
+        room_ids = []
+        room_names = []
+        for room_id in room_ids_csv.split(","):
+            if room_id and self._rooms and room_id in self._rooms:
+                room_ids.append(room_id)
+                room_names.append(self._rooms[room_id]["name"])
+
+        device["room_ids"] = room_ids
+        device["room_names"] = room_names
+        device["room_name"] = room_names[0] if room_names else ""
 
     def get_remote_devices(
         self,
@@ -575,7 +603,6 @@ class VimarLink:
         self,
         select: str,
         devices: dict[str, VimarDevice] | None = None,
-        only_update: bool = False,
     ):
         """Generate device list from SQL query."""
         if devices is None:
@@ -589,9 +616,6 @@ class VimarLink:
             object_id = device["object_id"]
 
             if object_id not in devices:
-                if only_update:
-                    continue
-
                 deviceItem: VimarDevice = {
                     "room_ids": [],
                     "room_names": [],
@@ -619,18 +643,7 @@ class VimarLink:
                         "status_range"
                     ]
 
-            if device["room_ids"] is not None and device["room_ids"] != "":
-                room_ids = []
-                room_names = []
-                for roomId in device["room_ids"].split(","):
-                    if roomId and self._rooms and roomId in self._rooms:
-                        room = self._rooms[roomId]
-                        room_ids.append(roomId)
-                        room_names.append(room["name"])
-
-                deviceItem["room_ids"] = room_ids
-                deviceItem["room_names"] = room_names
-                deviceItem["room_name"] = room_names[0] if room_names else ""
+            self._assign_rooms(deviceItem, device.get("room_ids"))
 
         return devices, len(payload)
 
