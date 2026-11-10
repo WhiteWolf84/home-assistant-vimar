@@ -10,7 +10,21 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ---
 
-## [Unreleased]
+## [2026.11.1b0] - 2026-11-10
+
+> **Beta.** Includes everything in `2026.11.0`. Corrections from a review of
+> the integration against a plant (covers, SQL answers, discovery, command
+> sessions, failed polls). No change to entity_ids or unique_ids, and Home
+> Assistant 2026.8–2026.11 keep working (`hacs.json` still requires 2026.8.0).
+>
+> **Not tried on the plant,** covered by tests only: reading a second page of
+> the discovery (the plant fits in one), and everything that follows a write
+> refused for an expired session (`LGMG-*` was never seen on a write there).
+>
+> **Known and not fixed - RGB lights:** choosing a colour for a `CH_Dimmer_RGB`
+> light sends nothing (the light reads `hs_color`, Home Assistant passes
+> `rgb_color`). Read from the code: the plant this fork is developed on has no
+> lights, so neither the defect nor a fix can be tried on hardware by us.
 
 ### Fixed
 
