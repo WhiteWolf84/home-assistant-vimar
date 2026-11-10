@@ -290,7 +290,7 @@ async def test_an_end_stop_within_reach_is_still_run_to(closed, position, target
 
 @pytest.mark.parametrize("target", [19, 20], ids=["same position", "within the deadband"])
 async def test_a_target_within_reach_sends_nothing_to_a_cover_at_rest(monkeypatch, target):
-    """Second exception: a cover that is not moving gets no command at all."""
+    """Second exception: at rest, an intermediate target within reach sends nothing."""
     rig = _Rig(monkeypatch, position=19)
 
     await rig.cover.async_set_cover_position(**{ATTR_POSITION: target})
@@ -299,6 +299,40 @@ async def test_a_target_within_reach_sends_nothing_to_a_cover_at_rest(monkeypatc
     assert rig.tasks == []
     assert rig.cover._tb_operation is None
     assert rig.cover._tb_position == 19
+
+
+@pytest.mark.parametrize(
+    ("position", "target", "operation", "relay", "travel"),
+    [
+        (99, 100, "opening", "0", TRAVEL_UP),
+        (1, 0, "closing", "1", TRAVEL_DOWN),
+        (100, 100, "opening", "0", TRAVEL_UP),
+        (0, 0, "closing", "1", TRAVEL_DOWN),
+    ],
+    ids=["99 to 100", "1 to 0", "100 to 100", "0 to 0"],
+)
+async def test_an_end_stop_is_run_to_from_rest_whatever_the_estimate(
+    monkeypatch, position, target, operation, relay, travel
+):
+    """An estimate of 99% may be a cover that is not fully open.
+
+    set_position 0 or 100 on a cover at rest sends the relay command alone,
+    like open_cover and close_cover: no STOP, the limit switch stops the motor
+    and the estimate is back on a known position.
+    """
+    rig = _Rig(monkeypatch, position=position)
+
+    await rig.cover.async_set_cover_position(**{ATTR_POSITION: target})
+
+    assert rig.writes == [(UP_DOWN, relay)]
+    assert rig.cover._tb_operation == operation
+    assert rig.cover._tb_target == target
+
+    rig.at(travel + 1.0)
+
+    assert rig.cover._tb_position == target
+    assert rig.stop_commands == []
+    assert rig.tasks == [MECHANICAL_STOP]
 
 
 # --- reversal ---------------------------------------------------------------

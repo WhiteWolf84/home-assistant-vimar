@@ -1023,12 +1023,14 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         moving = self._tb_operation is not None
         # 0% and 100% are the mechanical end stops: a cover sent there runs
         # until its own limit switch and NEVER gets a STOP from us, which is
-        # what resets the drift of a position estimated by time. While the
-        # cover is moving that holds whatever the estimate says, so an end-stop
-        # target skips the deadband below instead of being answered with a STOP.
+        # what resets the drift of a position estimated by time. That holds
+        # whatever the estimate says, moving or at rest: "99%" may well be a
+        # cover that is not fully open, so an end-stop target always sends the
+        # relay command - as open_cover and close_cover do - and skips both
+        # the "already there" check and the deadband below.
         end_stop = target in (0, 100)
 
-        if target == self._tb_position and not (moving and end_stop):
+        if target == self._tb_position and not end_stop:
             if moving:
                 await self._tb_stop_at_new_target(target)
             return
@@ -1043,7 +1045,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # ticchettio del relè. Lo ignoriamo. La soglia e' la stessa quantita'
         # usata per la compensazione overshoot, cosi' i due meccanismi sono
         # coerenti e non si genera mai uno start+stop immediato.
-        if delta <= self._overshoot_pct(opening) and not (moving and end_stop):
+        if delta <= self._overshoot_pct(opening) and not end_stop:
             if moving:
                 # Not ignorable while moving: the cover would carry on to the
                 # target it had before. It is already as close to the new one
