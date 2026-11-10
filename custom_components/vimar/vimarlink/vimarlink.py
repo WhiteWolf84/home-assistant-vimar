@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from collections.abc import Callable
+from typing import NamedTuple
+from xml.etree import ElementTree
+from xml.sax.saxutils import escape
 
 from .connection import VimarConnection
 from .device_queries import (
@@ -96,6 +100,56 @@ MAX_ROWS_PER_REQUEST = 300
 SQL_RESULT_OK = "DPCM-0000"
 
 
+# <result> of a command (SETVALUE, GETVALUE, the SAI2 services) the web server
+# accepted. Unlike SQL_RESULT_OK this one is captured: every write measured on
+# the plant on 2026-11-10 logged "-> result=DPCM-0000".
+COMMAND_RESULT_OK = "DPCM-0000"
+# Prefix of the codes that mean "no valid session" (LGMG-3019 on the plant).
+SESSION_EXPIRED_PREFIX = "LGMG"
+
+
+def xml_text(value: object) -> str:
+    """Return `value` as the text of an XML element.
+
+    The envelopes are built by formatting strings, so anything put into one
+    without this can end its own element and start others. That matters most
+    for the SAI2 PIN, which reaches VimarLink from a service call's `code`.
+    """
+    return escape(str(value))
+
+
+class CommandOutcome(NamedTuple):
+    """How a command sent to the web server went.
+
+    `code` is the <result> of the last answer received, or None when there
+    was none to read: no answer at all, or no session to send the command with.
+    """
+
+    code: str | None
+    #: True when the command was sent a second time, after a new login.
+    resent: bool = False
+    #: time.monotonic() right before the request this outcome is about.
+    sent_at: float | None = None
+    #: True when no request left at all (the login before it failed).
+    not_sent: bool = False
+
+    @property
+    def accepted(self) -> bool:
+        """The web server accepted the command."""
+        return self.code == COMMAND_RESULT_OK
+
+    @property
+    def rejected(self) -> bool:
+        """The command is known NOT to have been carried out.
+
+        Refused for lack of a session, or never sent. A command that got no
+        answer is neither accepted nor rejected: it may have been executed.
+        """
+        return self.not_sent or (
+            self.code is not None and self.code.startswith(SESSION_EXPIRED_PREFIX)
+        )
+
+
 class VimarLink:
     """Link to communicate with the Vimar webserver."""
 
@@ -180,67 +234,142 @@ class VimarLink:
         return (
             '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
             '<soapenv:Body><service-runonelement xmlns="urn:xmethods-dpadws">'
-            f"<payload>{payload}</payload>"
+            f"<payload>{xml_text(payload)}</payload>"
             "<hashcode>NO-HASHCODE</hashcode>"
-            f"<optionals>{optionals}</optionals>"
+            f"<optionals>{xml_text(optionals)}</optionals>"
             "<callsource>WEB-DOMUSPAD_SOAP</callsource>"
             f"<sessionid>{self._session_id}</sessionid><waittime>10</waittime>"
-            f"<idobject>{object_id}</idobject>"
+            f"<idobject>{xml_text(object_id)}</idobject>"
             f"<operation>{operation}</operation>"
             "</service-runonelement></soapenv:Body></soapenv:Envelope>"
         )
 
-    def set_device_status(self, object_id, status, optionals="NO-OPTIONALS"):
-        """Set status for one device."""
+    def _ensure_session(self) -> bool:
+        """Log in if there is no session; False if that did not work.
+
+        Only the SQL path used to do this. After an LGMG-* answer dropped the
+        session, a command issued before the next poll was sent with the
+        literal session id "None" and refused.
+        """
+        if self.is_logged():
+            return True
+        try:
+            return bool(self.check_login())
+        except VimarApiError as err:
+            _LOGGER.warning("Login before a command failed: %s", err)
+            return False
+
+    def _send_command(
+        self, build_envelope: Callable[[], str], what: str, *, resend: bool
+    ) -> tuple[ElementTree.Element | None, CommandOutcome]:
+        """Send a command with a valid session; return (answer, outcome).
+
+        `build_envelope` is called for every request, because the envelope
+        carries the session id and a new login changes it.
+
+        An LGMG-* answer means the web server refused the command for lack of
+        a session. The session is dropped either way, so the next request logs
+        in again. With `resend`, the command is sent ONCE more after a new
+        login: that is for SETVALUE and GETVALUE only. The SAI2 services are
+        never sent twice from here - a command to the control unit that may
+        or may not have been taken must not be repeated on a guess.
+
+        That an LGMG-refused command was not executed is inferred from what
+        the code means, not observed: none of the writes measured on the plant
+        ever got one.
+        """
+        if not self._ensure_session():
+            _LOGGER.warning("%s not sent: no session with the web server", what)
+            return None, CommandOutcome(None, not_sent=True)
+
+        resent = False
+        while True:
+            sent_at = time.monotonic()
+            response = self._request_vimar_soap(build_envelope())
+            if response is None or response is False:
+                return None, CommandOutcome(None, resent, sent_at)
+
+            result = response.find(".//result")
+            code = (result.text or "").strip() if result is not None else None
+            if code is None or not code.startswith(SESSION_EXPIRED_PREFIX):
+                return response, CommandOutcome(code, resent, sent_at)
+
+            self._connection.invalidate_session()
+            if not resend or resent:
+                _LOGGER.warning(
+                    "%s refused by the web server for lack of a session (result=%s)%s",
+                    what,
+                    code,
+                    ", also after a new login: given up" if resent else "; not sent again",
+                )
+                return response, CommandOutcome(code, resent, sent_at)
+
+            _LOGGER.warning(
+                "%s refused by the web server for lack of a session (result=%s): "
+                "logging in again and sending it once more",
+                what,
+                code,
+            )
+            if not self._ensure_session():
+                return response, CommandOutcome(code, resent, sent_at)
+            resent = True
+
+    def set_device_status(self, object_id, status, optionals="NO-OPTIONALS") -> CommandOutcome:
+        """Set status for one device; see CommandOutcome for what comes back.
+
+        It used to return the answer's payload run through the SQL row parser,
+        which is not what a SETVALUE answers with, and nobody read it: a write
+        the web server refused looked exactly like one it accepted.
+        """
         _LOGGER.debug(
             "set_device_status: sending SETVALUE idobject=%s value=%s optionals=%s",
             object_id,
             status,
             optionals,
         )
+        what = f"SETVALUE idobject={object_id} value={status}"
 
-        # By-me thermostats (states flagged SYNCDB by get_optionals_param) only
-        # propagate a SETVALUE to the PHYSICAL device if a live device session
-        # is open. The native web UI opens it by issuing a GETVALUE on the
-        # object right before the save; without it, the SETVALUE updates only
-        # the webserver database and never reaches the device (HA shows the new
-        # value but the thermostat keeps regulating to the old one). Priming the
-        # session with a GETVALUE first makes the SETVALUE reach the device.
-        # Confirmed on hardware (01945) 2026-05-31. Covers/lights use
-        # NO-OPTIONALS and are unaffected.
+        # States flagged SYNCDB by get_optionals_param get a GETVALUE on the
+        # object right before the write. It was introduced on 2026-05-31 for
+        # the thermostat setpoint, which has since moved to NO-OPTIONALS (see
+        # get_optionals_param): today it concerns 'unita' and the media player
+        # states only. Covers and thermostat writes are unaffected.
         if optionals == "SYNCDB":
             _LOGGER.debug(
                 "set_device_status: priming device session with GETVALUE idobject=%s",
                 object_id,
             )
-            self._request_vimar_soap(
-                self._build_runonelement(object_id, "0", "NO-OPTIONALS", "GETVALUE")
+            self._send_command(
+                lambda: self._build_runonelement(object_id, "0", "NO-OPTIONALS", "GETVALUE"),
+                f"GETVALUE idobject={object_id}",
+                resend=True,
             )
 
-        post = self._build_runonelement(object_id, status, optionals, "SETVALUE")
+        response, outcome = self._send_command(
+            lambda: self._build_runonelement(object_id, status, optionals, "SETVALUE"),
+            what,
+            resend=True,
+        )
+        if response is None:
+            if not outcome.not_sent:
+                _LOGGER.warning(
+                    "set_device_status: no/failed response for idobject=%s value=%s optionals=%s",
+                    object_id,
+                    status,
+                    optionals,
+                )
+            return outcome
 
-        response = self._request_vimar_soap(post)
-        if response is None or response is False:
-            _LOGGER.warning(
-                "set_device_status: no/failed response for idobject=%s value=%s optionals=%s",
-                object_id,
-                status,
-                optionals,
-            )
-            return None
-
-        result = response.find(".//result")
-        payload = response.find(".//payload")
         _LOGGER.debug(
-            "set_device_status: idobject=%s value=%s -> result=%s payload=%s",
+            "set_device_status: idobject=%s value=%s -> result=%s%s",
             object_id,
             status,
-            result.text if result is not None else "n/a",
-            payload.text if payload is not None else "n/a",
+            outcome.code,
+            " (sent again after a new login)" if outcome.resent else "",
         )
-        if payload is not None:
-            return parse_sql_payload(payload.text)
-        return None
+        if not outcome.accepted and not outcome.rejected:
+            _LOGGER.warning("%s answered with result=%s", what, outcome.code)
+        return outcome
 
     def set_sai2_status(self, command: int, area_index: int, pin: str) -> str | None:
         """Send SAI2 alarm command via dedicated SOAP service.
@@ -264,17 +393,18 @@ class VimarLink:
         bitmask = 1 << (area_index - 1)
         groups_str = format(bitmask, "08b")
 
-        post = (
-            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
-            '<soapenv:Body><service-vimarsai2allgroupsset xmlns="urn:xmethods-dpadws">'
-            f"<command>{command}</command>"
-            f"<groups>{groups_str}</groups>"
-            f"<pin>{pin}</pin>"
-            "<callsource>WEB-DOMUSPAD_SOAP</callsource>"
-            f"<sessionid>{self._session_id}</sessionid>"
-            "<waittime>10</waittime>"
-            "</service-vimarsai2allgroupsset></soapenv:Body></soapenv:Envelope>"
-        )
+        def envelope() -> str:
+            return (
+                '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<soapenv:Body><service-vimarsai2allgroupsset xmlns="urn:xmethods-dpadws">'
+                f"<command>{xml_text(command)}</command>"
+                f"<groups>{groups_str}</groups>"
+                f"<pin>{xml_text(pin)}</pin>"
+                "<callsource>WEB-DOMUSPAD_SOAP</callsource>"
+                f"<sessionid>{self._session_id}</sessionid>"
+                "<waittime>10</waittime>"
+                "</service-vimarsai2allgroupsset></soapenv:Body></soapenv:Envelope>"
+            )
 
         _LOGGER.debug(
             "SAI2 SOAP: command=%d groups=%s (area %d)",
@@ -283,19 +413,18 @@ class VimarLink:
             area_index,
         )
 
-        response = self._request_vimar_soap(post)
-        if response is None or response is False:
+        # Never sent twice: see _send_command.
+        response, _outcome = self._send_command(
+            envelope, f"SAI2 command {command} on area {area_index}", resend=False
+        )
+        if response is None:
             _LOGGER.error("SAI2: no response from server")
             return None
 
-        # Log full response for debugging
-        try:
-            from xml.etree import ElementTree
-
-            resp_str = ElementTree.tostring(response, encoding="unicode")
-            _LOGGER.debug("SAI2 SOAP response: %s", resp_str)
-        except Exception:
-            pass
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "SAI2 SOAP response: %s", ElementTree.tostring(response, encoding="unicode")
+            )
 
         # Parse the result code. "DPCM-0000" means the web server accepted the
         # request. NOTE (confirmed on real hardware): this service returns
@@ -354,18 +483,20 @@ class VimarLink:
 
     def _authenticate_sai2_once(self, pin: str) -> str | None:
         """Single service-vimarsai2authenticate call; returns the raw result code."""
-        post = (
-            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
-            '<soapenv:Body><service-vimarsai2authenticate xmlns="urn:xmethods-dpadws">'
-            "<payload>NO-PAYLOAD</payload><hashcode>NO-HASCHODE</hashcode>"
-            "<optionals>NO-OPTIONAL</optionals><callsource>WEB-DOMUSPAD_SOAP</callsource>"
-            f"<sessionid>{self._session_id}</sessionid><waittime>5</waittime>"
-            f"<pin>{pin}</pin>"
-            "</service-vimarsai2authenticate></soapenv:Body></soapenv:Envelope>"
-        )
 
-        response = self._request_vimar_soap(post)
-        if response is None or response is False:
+        def envelope() -> str:
+            return (
+                '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<soapenv:Body><service-vimarsai2authenticate xmlns="urn:xmethods-dpadws">'
+                "<payload>NO-PAYLOAD</payload><hashcode>NO-HASCHODE</hashcode>"
+                "<optionals>NO-OPTIONAL</optionals><callsource>WEB-DOMUSPAD_SOAP</callsource>"
+                f"<sessionid>{self._session_id}</sessionid><waittime>5</waittime>"
+                f"<pin>{xml_text(pin)}</pin>"
+                "</service-vimarsai2authenticate></soapenv:Body></soapenv:Envelope>"
+            )
+
+        response, _outcome = self._send_command(envelope, "SAI2 authenticate", resend=False)
+        if response is None:
             _LOGGER.error("SAI2: no response from authenticate")
             return None
 
@@ -393,29 +524,20 @@ class VimarLink:
         """
         ok = 0
         for object_id in object_ids:
-            post = (
-                '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
-                '<soapenv:Body><service-runonelement xmlns="urn:xmethods-dpadws">'
-                "<payload>NO-PAYLOAD</payload>"
-                "<hashcode>NO-HASHCODE</hashcode>"
-                "<optionals>NO-OPTIONALS</optionals>"
-                "<callsource>WEB-DOMUSPAD_SOAP</callsource>"
-                f"<sessionid>{self._session_id}</sessionid><waittime>10</waittime>"
-                f"<idobject>{object_id}</idobject>"
-                "<operation>GETVALUE</operation>"
-                "</service-runonelement></soapenv:Body></soapenv:Envelope>"
+            response, outcome = self._send_command(
+                lambda oid=object_id: self._build_runonelement(
+                    oid, "NO-PAYLOAD", "NO-OPTIONALS", "GETVALUE"
+                ),
+                f"GETVALUE idobject={object_id}",
+                resend=True,
             )
-            response = self._request_vimar_soap(post)
-            if response is None or response is False:
+            if response is None:
                 continue
-            result = response.find(".//result")
-            if result is not None and (result.text or "").strip() == "DPCM-0000":
+            if outcome.accepted:
                 ok += 1
             else:
                 _LOGGER.debug(
-                    "request_value_refresh: GETVALUE on %s returned %s",
-                    object_id,
-                    None if result is None else result.text,
+                    "request_value_refresh: GETVALUE on %s returned %s", object_id, outcome.code
                 )
         return ok
 
@@ -894,11 +1016,14 @@ class VimarLink:
             except VimarApiError as err:
                 _LOGGER.warning("Re-login before SQL request failed: %s", err)
                 return None
-        select = (
-            select.replace("\r\n", " ")
-            .replace("\n", " ")
-            .replace('"', "&apos;")
-            .replace("'", "&apos;")
+        # One line, double quotes turned into single ones (as always), then
+        # escaped as XML text. Only the quotes used to be replaced, so a
+        # statement with <, > or & - a plain "WHERE ID < 100" through
+        # vimar.exec_vimar_sql - broke the envelope. For a statement without
+        # those characters the result is byte for byte what it was.
+        select = escape(
+            select.replace("\r\n", " ").replace("\n", " ").replace('"', "'"),
+            {"'": "&apos;"},
         )
 
         post = (

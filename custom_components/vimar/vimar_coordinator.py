@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import timedelta
 from typing import cast
@@ -61,7 +62,7 @@ from .sai2_ids import (
 )
 from .vimar_device_customizer import VimarDeviceCustomizer
 from .vimarlink.exceptions import VimarApiError
-from .vimarlink.vimarlink import VimarLink, VimarProject, is_valid_sai2_bitmask
+from .vimarlink.vimarlink import CommandOutcome, VimarLink, VimarProject, is_valid_sai2_bitmask
 
 log = _LOGGER
 
@@ -69,6 +70,11 @@ log = _LOGGER
 # change_state() enqueues a write. The VIMAR hardware typically applies a
 # SETVALUE within 8-10 s; 15 s gives comfortable headroom.
 _WRITE_GUARD_SECONDS = 15.0
+
+#: One SETVALUE of a batch: (status_id, value, optionals).
+DeviceWrite = tuple[str, str, str]
+#: What became of each write of a batch, in the order they were queued.
+WriteResults = list[tuple[DeviceWrite, CommandOutcome]]
 
 # Sentinel stored in _device_state_hashes by invalidate_device_hash(). It can
 # never collide with a real value: _hash_device_state() returns an md5
@@ -163,7 +169,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # change_state spawned its own executor job; with several pool threads
         # the SETVALUE requests reached the gateway out of order, corrupting
         # thermostat setpoints (cached value committing after the explicit one).
-        self._write_queue: asyncio.Queue[list[tuple[str, str, str]]] = asyncio.Queue()
+        self._write_queue: asyncio.Queue[
+            tuple[list[DeviceWrite], Callable[[WriteResults], None] | None]
+        ] = asyncio.Queue()
         self._write_worker_task: asyncio.Task | None = None
 
         # Write-guard: maps status_id → expiry timestamp (monotonic).
@@ -234,7 +242,11 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
     # --- serialized device writes ---------------------------------------
 
-    def enqueue_device_writes(self, writes: list[tuple[str, str, str]]) -> None:
+    def enqueue_device_writes(
+        self,
+        writes: list[DeviceWrite],
+        on_results: Callable[[WriteResults], None] | None = None,
+    ) -> None:
         """Queue a batch of SETVALUE writes for serialized, ordered execution.
 
         Called (in the event loop thread) by VimarEntity.change_state(). The
@@ -246,6 +258,10 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         Each status_id in the batch is registered in _pending_write_guards so
         that _apply_slim_results() skips overwriting the optimistic value until
         the hardware has had time to process the write (see _WRITE_GUARD_SECONDS).
+
+        `on_results` is called in the event loop once the batch has been sent,
+        with what the web server answered to each write: it is how the entity
+        that showed a value optimistically learns the write was refused.
         """
         self._ensure_write_worker()
         expiry = time.monotonic() + _WRITE_GUARD_SECONDS
@@ -254,7 +270,15 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             # str-ified status_id, so storing a non-str key (if status_id ever
             # became an int) would silently never match.
             self._pending_write_guards[str(status_id)] = expiry
-        self._write_queue.put_nowait(writes)
+        self._write_queue.put_nowait((writes, on_results))
+
+    def release_write_guard(self, status_id: str) -> None:
+        """Let the next poll overwrite this status again.
+
+        For a write that was refused: there is no optimistic value left to
+        protect, and what the web server holds is the truth.
+        """
+        self._pending_write_guards.pop(str(status_id), None)
 
     def _ensure_write_worker(self) -> None:
         """Start the write worker lazily on first use / after cancellation."""
@@ -264,24 +288,36 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     async def _write_worker(self) -> None:
         """Drain the write queue, executing one batch at a time, in order."""
         while True:
-            writes = await self._write_queue.get()
+            writes, on_results = await self._write_queue.get()
             try:
+                results: WriteResults = []
                 if self.vimarconnection is not None:
-                    await self.hass.async_add_executor_job(self._execute_device_writes, writes)
+                    results = await self.hass.async_add_executor_job(
+                        self._execute_device_writes, writes
+                    )
+                if on_results is not None and results:
+                    on_results(results)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Vimar: error while writing device states")
             finally:
                 self._write_queue.task_done()
 
-    def _execute_device_writes(self, writes: list[tuple[str, str, str]]) -> None:
+    def _execute_device_writes(self, writes: list[DeviceWrite]) -> WriteResults:
         """Send a batch of SETVALUE requests sequentially on one thread.
 
         Runs in an executor thread. Order matters for thermostats: the
         activating mode (funzionamento) must be sent before the setpoint so the
         setpoint wins within a batch.
+
+        Returns the outcome of each write. They used to be thrown away, so a
+        write the web server refused was indistinguishable from one it took.
         """
-        for status_id, value, optionals in writes:
-            self.vimarconnection.set_device_status(status_id, value, optionals)
+        results: WriteResults = []
+        for write in writes:
+            status_id, value, optionals = write
+            outcome = self.vimarconnection.set_device_status(status_id, value, optionals)
+            results.append((write, outcome))
+        return results
 
     async def async_shutdown_write_worker(self) -> None:
         """Cancel the write worker and pending refresh tasks (on unload/reload)."""

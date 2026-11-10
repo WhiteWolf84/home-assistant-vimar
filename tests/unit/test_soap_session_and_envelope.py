@@ -1,17 +1,24 @@
 """Commands need a live session too, and what goes into an envelope is escaped.
 
-Only the SQL path looks after its session: _request_vimar_sql drops it on an
-LGMG-* reply and logs in again when there is none (see test_sql_relogin.py).
-The commands - SETVALUE, GETVALUE, the SAI2 set and authenticate - do neither:
+Only the SQL path used to look after its session: _request_vimar_sql drops it
+on an LGMG-* reply and logs in again when there is none (see
+test_sql_relogin.py). The commands - SETVALUE, GETVALUE, the SAI2 set and
+authenticate - did neither:
 
-* after an invalidation they are sent with the literal session id "None";
-* an LGMG-* reply to a SETVALUE is not recognised, the stale session is kept
-  and the write is lost without a useful log line: Home Assistant shows the
-  optimistic value for the 15 s of the write-guard, then goes back.
+* after an invalidation they were sent with the literal session id "None";
+* an LGMG-* reply to a SETVALUE was not recognised, the stale session was kept
+  and the write was lost without a useful log line: Home Assistant showed the
+  optimistic value for the 15 s of the write-guard, then went back.
 
-The envelopes are built by string formatting with no escaping: a `<` or `&` in
-a statement breaks the XML, and a PIN - which reaches VimarLink from a service
-call's `code` - can close its own element and add others.
+Every command now logs in first when there is no session, and drops the
+session on an LGMG-* reply. SETVALUE and GETVALUE are then sent ONCE more
+after a new login; the SAI2 services never are - a command to the control unit
+is not repeated on a guess. None of this was observed on the plant: no write
+measured there (2026-11-10) ever got an LGMG-* reply.
+
+The envelopes are built by string formatting and used to have no escaping: a
+`<` or `&` in a statement broke the XML, and a PIN - which reaches VimarLink
+from a service call's `code` - could close its own element and add others.
 """
 
 import logging
@@ -25,6 +32,8 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..", "custom_components", "vimar")
 )
 
+from vimarlink import device_queries  # noqa: E402
+from vimarlink.exceptions import VimarConnectionError  # noqa: E402
 from vimarlink.vimarlink import VimarLink  # noqa: E402
 
 pytestmark = pytest.mark.no_ha  # No HA required
@@ -72,17 +81,14 @@ def _elements(envelope: str, tag: str) -> list[ElementTree.Element]:
 COMMANDS = {
     "setvalue": lambda link: link.set_device_status("8416", "26.0"),
     "getvalue": lambda link: link.request_value_refresh([8416]),
-    "sai2_set": lambda link: link.set_sai2_status(1, 1, "1234"),
-    "sai2_authenticate": lambda link: link.authenticate_sai2_pin("1234"),
+    "sai2_set": lambda link: link.set_sai2_status(1, 1, "0000"),
+    "sai2_authenticate": lambda link: link.authenticate_sai2_pin("0000"),
 }
 
 
 # --- session ----------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="review 2026-11 #3.1: commands are sent with sessionid 'None'"
-)
 @pytest.mark.parametrize("command", COMMANDS.values(), ids=COMMANDS.keys())
 def test_a_command_without_a_session_logs_in_first(link, command):
     link._connection._session_id = None
@@ -95,9 +101,6 @@ def test_a_command_without_a_session_logs_in_first(link, command):
     assert "<sessionid>fresh</sessionid>" in sent[0]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="review 2026-11 #3.1: an LGMG reply to a SETVALUE keeps the stale session"
-)
 def test_a_write_rejected_for_an_expired_session_drops_that_session(link):
     link._connection._session_id = "stale"
     _capture(link, [_reply("LGMG-3019", "Unknown-Payload")])
@@ -118,6 +121,102 @@ def test_an_accepted_write_keeps_its_session(link):
     assert len(sent) == 1
 
 
+# --- sent again, once -------------------------------------------------------
+
+EXPIRED = ("LGMG-3019", "Unknown-Payload")
+RESENT = {
+    "setvalue": lambda link: link.set_device_status("8416", "26.0"),
+    "getvalue": lambda link: link.request_value_refresh([8416]),
+}
+
+
+@pytest.mark.parametrize("command", RESENT.values(), ids=RESENT.keys())
+def test_a_write_refused_for_an_expired_session_is_sent_again_after_a_login(link, command):
+    link._connection._session_id = "stale"
+    sent = _capture(link, [_reply(*EXPIRED)])
+
+    command(link)
+
+    assert len(sent) == 2
+    assert "<sessionid>stale</sessionid>" in sent[0]
+    assert "<sessionid>fresh</sessionid>" in sent[1]
+    assert sent[1] == sent[0].replace("stale", "fresh")
+
+
+def test_the_outcome_of_a_resent_write_says_so(link):
+    link._connection._session_id = "stale"
+    _capture(link, [_reply(*EXPIRED)])
+
+    outcome = link.set_device_status("8416", "26.0")
+
+    assert outcome.accepted and outcome.resent and not outcome.rejected
+    assert outcome.sent_at is not None
+
+
+def test_a_write_is_sent_again_only_once(link, caplog):
+    """Refused again after the new login: given up, and said so."""
+    link._connection._session_id = "stale"
+    sent = _capture(link, [_reply(*EXPIRED), _reply(*EXPIRED), _reply()])
+
+    with caplog.at_level(logging.WARNING):
+        outcome = link.set_device_status("8416", "26.0")
+
+    assert len(sent) == 2
+    assert outcome.rejected and not outcome.accepted
+    assert not link.is_logged()
+    assert "given up" in caplog.text
+
+
+def test_a_write_without_an_answer_is_neither_accepted_nor_rejected(link):
+    """It may have been executed: nothing is sent again, nothing is assumed."""
+    link._connection._session_id = SESSION
+    sent = []
+
+    def no_answer(post):
+        sent.append(post)
+        return False
+
+    link._request_vimar_soap = no_answer
+
+    outcome = link.set_device_status("8416", "26.0")
+
+    assert len(sent) == 1
+    assert not outcome.accepted and not outcome.rejected
+
+
+def test_a_write_that_cannot_log_in_is_not_sent(link, monkeypatch):
+    link._connection._session_id = None
+
+    def no_login():
+        raise VimarConnectionError("Error during login: timeout")
+
+    monkeypatch.setattr(link._connection, "login", no_login)
+    sent = _capture(link)
+
+    outcome = link.set_device_status("8416", "26.0")
+
+    assert sent == []
+    assert outcome.not_sent and outcome.rejected
+
+
+NEVER_RESENT = {
+    "sai2_set": lambda link: link.set_sai2_status(1, 1, "0000"),
+    "sai2_authenticate": lambda link: link._authenticate_sai2_once("0000"),
+}
+
+
+@pytest.mark.parametrize("command", NEVER_RESENT.values(), ids=NEVER_RESENT.keys())
+def test_a_sai2_request_is_never_sent_twice(link, command):
+    """The session is dropped for the next request; this one is not repeated."""
+    link._connection._session_id = "stale"
+    sent = _capture(link, [_reply(*EXPIRED)])
+
+    assert command(link) == "LGMG-3019"
+
+    assert len(sent) == 1
+    assert not link.is_logged()
+
+
 # --- envelopes --------------------------------------------------------------
 
 
@@ -131,9 +230,6 @@ def test_a_plain_statement_makes_a_well_formed_envelope(link):
     assert statement.text == "SELECT ID FROM DPADD_OBJECT WHERE NAME = 'x'"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="review 2026-11 #2.5: SQL statements are not XML-escaped (< > &)"
-)
 def test_a_statement_with_xml_characters_makes_a_well_formed_envelope(link):
     link._connection._session_id = SESSION
     sent = _capture(link)
@@ -145,7 +241,36 @@ def test_a_statement_with_xml_characters_makes_a_well_formed_envelope(link):
     assert statement.text == select
 
 
-@pytest.mark.xfail(strict=True, reason="review 2026-11 #2.5: the SAI2 PIN is not escaped")
+def test_escaping_leaves_every_query_of_the_integration_as_it_was(link):
+    """None of them has <, > or &: what is sent must not change by one byte."""
+    link._connection._session_id = SESSION
+    sent = _capture(link)
+    queries = [
+        device_queries.get_room_ids_query(),
+        device_queries.get_room_devices_query("330,461", 0, 300),
+        device_queries.get_remote_devices_query(0, 300),
+        device_queries.get_device_status_query("342"),
+        device_queries.get_status_only_query([345, 347]),
+        device_queries.get_sai2_groups_query(),
+        device_queries.get_sai2_zones_query(),
+        device_queries.get_sai2_area_values_query(["1672"]),
+        device_queries.get_sai2_zone_to_group_query(),
+    ]
+
+    for query in queries:
+        link.execute_sql(query)
+
+    for query, post in zip(queries, sent, strict=True):
+        as_before = (
+            query.replace("\r\n", " ")
+            .replace("\n", " ")
+            .replace('"', "&apos;")
+            .replace("'", "&apos;")
+        )
+        assert f"<statement>{as_before}</statement>" in post
+        assert f"<statement-len>{len(as_before)}</statement-len>" in post
+
+
 @pytest.mark.parametrize(
     "send",
     [
@@ -158,7 +283,7 @@ def test_a_pin_cannot_add_elements_to_the_envelope(link, send):
     """Either the PIN is refused before anything is sent, or it stays a PIN."""
     link._connection._session_id = SESSION
     sent = _capture(link)
-    pin = "1234</pin><command>0</command><pin>1"
+    pin = "0000</pin><command>0</command><pin>0"
 
     send(link, pin)
 

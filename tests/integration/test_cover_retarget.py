@@ -79,6 +79,7 @@ class _Rig:
             cover_module, "async_track_time_interval", lambda *args, **kwargs: lambda: None
         )
         self.writes: list[tuple[str, str]] = []
+        self.contexts: list[object] = []
         self.tasks: list[str] = []
 
         cover = VimarCover.__new__(VimarCover)
@@ -125,9 +126,10 @@ class _Rig:
         coro.close()
         return MagicMock()
 
-    def _change_state(self, state: str, value: object) -> None:
+    def _change_state(self, state: str, value: object, write_context: object = None) -> None:
         """What change_state() does to the local device: the optimistic value."""
         self.writes.append((state, str(value)))
+        self.contexts.append(write_context)
         self.cover._device["status"][state]["status_value"] = str(value)
 
     def at(self, seconds: float) -> None:

@@ -5,6 +5,7 @@ Configurazione travel times tramite UI di ogni singola cover!
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 
 import voluptuous as vol
@@ -32,6 +33,7 @@ from .const import (
 from .const import (
     DEVICE_TYPE_COVERS as CURR_PLATFORM,
 )
+from .vimar_coordinator import WriteResults
 from .vimar_entity import VimarEntity, vimar_setup_entry
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,8 +93,19 @@ async def async_setup_entry(
     )
 
 
+# What a write was for, handed to change_state() and back to
+# _on_write_results() with its outcome (see there).
+_WRITE_MOVE = "move"
+_WRITE_STOP = "stop"
+
+
 class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
     """Provides a Vimar cover with time-based position tracking."""
+
+    # Counts the movements started by _tb_start_tracking, so the outcome of
+    # the write that started one can tell whether that movement is still the
+    # one being tracked.
+    _tb_movement_id = 0
 
     @property
     def assumed_state(self) -> bool:
@@ -548,8 +561,12 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
         self._tb_last_updown = current_updown
 
-    async def _tb_start_tracking(self, opening: bool, target: int | None = None):
-        """Avvia tracking temporale per comandi HA."""
+    async def _tb_start_tracking(self, opening: bool, target: int | None = None) -> bool:
+        """Avvia tracking temporale per comandi HA.
+
+        Returns True when a new movement was started, False when the cover was
+        already moving this way and only its target changed.
+        """
         operation = "opening" if opening else "closing"
 
         if self._tb_operation == operation:
@@ -573,13 +590,14 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
                 self._tb_target = new_target
                 self._tb_planned_stop = False
                 self.async_write_ha_state()
-            return
+            return False
 
         # _tb_position resta None finché async_added_to_hass non ha
         # ripristinato lo stato: un comando arrivato prima parte da 0 (chiusa).
         if self._tb_position is None:
             self._tb_position = 0
 
+        self._tb_movement_id += 1
         self._tb_operation = operation
         self._tb_start_time = dt_util.utcnow()
         self._tb_start_position = self._tb_position
@@ -609,6 +627,92 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             self._tb_position,
             self._tb_target,
         )
+        self.async_write_ha_state()
+        return True
+
+    def _move(self, opening: bool, started: object) -> None:
+        """Send the relay command of a movement.
+
+        `started` is what _tb_start_tracking returned: only the write that
+        STARTS a movement carries its id, so that only its outcome can move
+        the start of the tracking or cancel it. A same-direction command sent
+        again while the cover is already running starts nothing.
+        """
+        context = (_WRITE_MOVE, self._tb_movement_id) if started is True else None
+        self.change_state("up/down", "0" if opening else "1", write_context=context)
+
+    def _on_write_results(self, results: WriteResults, write_context: object) -> None:
+        """Keep the time-based tracking in step with what the web server did.
+
+        The position is estimated from the moment the command was issued, so
+        it matters whether, and when, the web server took it:
+
+        * the write that started a movement was sent a second time (expired
+          session, new login - seconds, not milliseconds): the motor started
+          at the second request, and the tracking is measured from there;
+        * that write was refused: the cover never moved. The tracking is
+          dropped and the position goes back to where it was;
+        * a STOP was refused: the motor is still running, and will only stop
+          at its mechanical end stop - where a cover whose STOP is lost ends
+          up, the same reasoning as the recovery after a restart. The position
+          becomes that end stop instead of the target that was not reached.
+
+        None of this has been seen on the plant: no write measured there was
+        ever refused or resent.
+        """
+        if not isinstance(write_context, tuple) or not results:
+            return
+        kind, detail = write_context
+        _write, outcome = results[0]
+
+        if kind == _WRITE_MOVE:
+            if detail != self._tb_movement_id or self._tb_operation is None:
+                return  # that movement is over, or another one replaced it
+            if outcome.rejected:
+                _LOGGER.warning(
+                    "%s: the %s command was refused by the web server, the cover did not "
+                    "move: tracking dropped, position back to %s%%",
+                    self.device_name,
+                    self._tb_operation,
+                    self._tb_start_position,
+                )
+                self._tb_cancel_tracking()
+            elif outcome.accepted and outcome.resent and outcome.sent_at is not None:
+                delay = max(0.0, time.monotonic() - outcome.sent_at)
+                self._tb_start_time = dt_util.utcnow() - timedelta(seconds=delay)
+                _LOGGER.info(
+                    "%s: the %s command was accepted at the second attempt: "
+                    "tracking measured from that one",
+                    self.device_name,
+                    self._tb_operation,
+                )
+        elif kind == _WRITE_STOP and outcome.rejected and self._tb_operation is None:
+            end_stop = 100 if detail == "opening" else 0
+            _LOGGER.warning(
+                "%s: the STOP was refused by the web server: the cover runs on to its "
+                "end stop, position set to %s%%",
+                self.device_name,
+                end_stop,
+            )
+            self._tb_position = end_stop
+            self._tb_last_reported_position = end_stop
+            self.async_write_ha_state()
+
+    def _tb_cancel_tracking(self) -> None:
+        """Drop a tracking whose movement never started; nothing is sent."""
+        if self._tb_unsub:
+            self._tb_unsub()
+            self._tb_unsub = None
+        self._tb_position = self._tb_start_position
+        self._tb_last_reported_position = self._tb_position
+        self._tb_operation = None
+        self._tb_start_time = None
+        self._tb_target = None
+        self._tb_planned_stop = False
+        self._tb_ha_command_active = False
+        # The refused up/down value has been taken back by the base class:
+        # resync, or the next poll would read the change as a physical button.
+        self._tb_last_updown = self.get_state("up/down")
         self.async_write_ha_state()
 
     async def _tb_stop_tracking(self):
@@ -873,20 +977,25 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
 
     async def async_close_cover(self, **kwargs):
         """Close the cover."""
+        started = None
         if self._use_time_based_tracking():
-            await self._tb_start_tracking(False, target=0)
-        self.change_state("up/down", "1")
+            started = await self._tb_start_tracking(False, target=0)
+        self._move(False, started)
 
     async def async_open_cover(self, **kwargs):
         """Open the cover."""
+        started = None
         if self._use_time_based_tracking():
-            await self._tb_start_tracking(True, target=100)
-        self.change_state("up/down", "0")
+            started = await self._tb_start_tracking(True, target=100)
+        self._move(True, started)
 
     async def async_stop_cover(self, **kwargs):
+        context = None
         if self._use_time_based_tracking():
+            if self._tb_operation is not None:
+                context = (_WRITE_STOP, self._tb_operation)
             await self._tb_stop_tracking()
-        self.change_state("stop up/stop down", "1")
+        self.change_state("stop up/stop down", "1", write_context=context)
 
     async def async_set_cover_position(self, **kwargs):
         """Move the cover to a specific position."""
@@ -950,12 +1059,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
             )
             return
 
-        if opening:
-            await self._tb_start_tracking(True, target=target)
-            self.change_state("up/down", "0")
-        else:
-            await self._tb_start_tracking(False, target=target)
-            self.change_state("up/down", "1")
+        started = await self._tb_start_tracking(opening, target=target)
+        self._move(opening, started)
 
     async def _tb_stop_at_new_target(self, target: int) -> None:
         """Stop a moving cover whose new target is where it already is.

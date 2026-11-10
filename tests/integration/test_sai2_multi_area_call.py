@@ -410,3 +410,18 @@ async def test_pin_is_not_stored_in_clear_nor_logged(monkeypatch, caplog):
 
     assert PIN not in caplog.text
     assert PIN not in repr(vars(panels[GIORNO]._pin_cache))
+
+
+@pytest.mark.parametrize("code", ["12a4", "0000</pin><command>0</command><pin>0", " 0000", "²²²²"])
+async def test_a_code_that_is_not_digits_never_reaches_the_control_unit(monkeypatch, code):
+    """A SAI2 PIN is digits only: anything else is a wrong PIN, known without asking."""
+    clock, unit, connection, panels = _setup(monkeypatch, {g: AWAY for g in AREAS})
+
+    with pytest.raises(ServiceValidationError) as err:
+        await _ha_call([panels[GIORNO]], "async_alarm_disarm", code=code)
+
+    assert err.value.translation_key == "sai2_wrong_pin"
+    assert connection.authenticate_sai2_pin.call_count == 0
+    assert connection.set_sai2_status.call_count == 0
+    assert unit.commands == []
+    assert unit.value(GIORNO) == AWAY

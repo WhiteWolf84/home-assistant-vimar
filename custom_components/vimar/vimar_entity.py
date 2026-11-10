@@ -1,6 +1,7 @@
 """Vimar base entity implementation."""
 
 import logging
+from functools import partial
 from typing import cast
 
 from homeassistant.core import HomeAssistant
@@ -13,7 +14,7 @@ from .const import (
     DOMAIN,
     PACKAGE_NAME,
 )
-from .vimar_coordinator import VimarDataUpdateCoordinator
+from .vimar_coordinator import VimarDataUpdateCoordinator, WriteResults
 from .vimarlink.vimarlink import VimarDevice, VimarLink, VimarProject
 
 #: Stands in for a device that was not found at construction time. Compared by
@@ -228,7 +229,9 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             self._coordinator.invalidate_device_hash(self._device_id)
         self.async_write_ha_state()
 
-    def _apply_state_change(self, state: str, value: object) -> tuple[str, str, str] | None:
+    def _apply_state_change(
+        self, state: str, value: object, previous: dict[str, tuple[str, str]] | None = None
+    ) -> tuple[str, str, str] | None:
         """Validate a single state change and update the local device state.
 
         FIX #9: extracted from change_state() to remove duplicate logic.
@@ -236,6 +239,9 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         bus, or None if the state is unknown. The actual SETVALUE request is
         NOT sent here: change_state() schedules all writes as a single ordered
         executor job (see change_state docstring).
+
+        `previous`, when given, receives {status_id: (state, value before)}:
+        what to go back to if the web server refuses the write.
         """
         if state not in self._device["status"]:
             self._logger.warning(
@@ -249,10 +255,16 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
 
         optionals = self._vimarconnection.get_optionals_param(state)
         status_id = self._device["status"][state]["status_id"]
+        if previous is not None:
+            # The first value of a batch wins: that is the one read from the
+            # web server, later ones are our own optimistic writes.
+            previous.setdefault(
+                str(status_id), (state, self._device["status"][state]["status_value"])
+            )
         self._device["status"][state]["status_value"] = str(value)
         return (status_id, str(value), optionals)
 
-    def change_state(self, *args: object, **kwargs: object) -> None:
+    def change_state(self, *args: object, write_context: object = None, **kwargs: object) -> None:
         """Change state on bus system and the local device state.
 
         Writes are not sent here directly: they are enqueued (in order) onto
@@ -264,6 +276,11 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
         - writes never overlap on the shared SOAP session.
         Order matters for thermostats: the activating mode (funzionamento) must
         be sent before the setpoint so the setpoint wins.
+
+        The value is shown at once, before the web server has it. Should the
+        web server refuse the write, _handle_write_results() takes it back.
+        `write_context` is handed to _on_write_results() untouched, for a
+        subclass that needs to know which of its commands an outcome is about.
         """
         if self._device is MISSING_DEVICE or "status" not in self._device:
             self._logger.warning(
@@ -272,23 +289,74 @@ class VimarEntity(CoordinatorEntity[VimarDataUpdateCoordinator]):
             return
 
         writes: list[tuple[str, str, str]] = []
+        previous: dict[str, tuple[str, str]] = {}
 
         if self._device["status"]:
             if args:
                 iter_args = iter(args)
                 for state, value in zip(iter_args, iter_args, strict=False):
-                    write = self._apply_state_change(state, value)
+                    write = self._apply_state_change(cast("str", state), value, previous)
                     if write is not None:
                         writes.append(write)
 
             for state, value in kwargs.items():
-                write = self._apply_state_change(state, value)
+                write = self._apply_state_change(state, value, previous)
                 if write is not None:
                     writes.append(write)
 
         if writes:
-            self.coordinator.enqueue_device_writes(writes)
+            self.coordinator.enqueue_device_writes(
+                writes,
+                on_results=partial(self._handle_write_results, previous, write_context),
+            )
             self.request_statemachine_update()
+
+    def _handle_write_results(
+        self,
+        previous: dict[str, tuple[str, str]],
+        write_context: object,
+        results: WriteResults,
+    ) -> None:
+        """Take back the optimistic value of every write the web server refused.
+
+        Called by the coordinator's write worker, in the event loop, once a
+        batch has been sent. A write is "refused" when it is known not to have
+        been carried out (see CommandOutcome.rejected) - after the one resend
+        vimarlink makes on an expired session. A write that got no answer is
+        left alone: it may have been executed, and the poll will tell.
+
+        For a refused write the entity goes back to the value it had before,
+        the write-guard is dropped so the next poll can correct it further,
+        and the state is published again. No optimistic value is left standing.
+        """
+        refused = [(write, outcome) for write, outcome in results if outcome.rejected]
+        for (status_id, value, _optionals), outcome in refused:
+            state, before = previous.get(str(status_id), (None, None))
+            self._logger.warning(
+                "%s (%s): write of %s=%s was refused by the web server (result=%s%s); "
+                "the value shown goes back to %s",
+                self.device_name,
+                self._device_id,
+                state or status_id,
+                value,
+                outcome.code,
+                ", not sent" if outcome.not_sent else "",
+                before,
+            )
+            status = self._device["status"].get(state) if state is not None else None
+            # Only if it is still OUR value: a later command may have written
+            # another one, which has its own outcome to wait for.
+            if status is not None and before is not None and status["status_value"] == value:
+                status["status_value"] = before
+            self.coordinator.release_write_guard(status_id)
+
+        self._on_write_results(results, write_context)
+
+        if refused and self.hass is not None:
+            self.request_statemachine_update()
+
+    def _on_write_results(self, results: WriteResults, write_context: object) -> None:
+        """Hook for entities that track something beyond the status values."""
 
     def get_state(self, state: str) -> str | None:
         """Get state of the local device state."""

@@ -105,7 +105,7 @@ async def test_supraovershoot_move_starts_tracking():
     args, kwargs = cover._tb_start_tracking.await_args
     assert args[0] is True  # opening
     assert kwargs["target"] == 40
-    cover.change_state.assert_called_once_with("up/down", "0")
+    cover.change_state.assert_called_once_with("up/down", "0", write_context=None)
 
 
 async def test_set_position_equal_is_noop():

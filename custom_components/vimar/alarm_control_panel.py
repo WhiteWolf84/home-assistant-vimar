@@ -571,6 +571,12 @@ class VimarAlarmControlPanel(
         code = code or self._resolve_user_pin()
         if not code:
             await self._fail("sai2_no_pin_for_user", validation=True)
+        if not (code.isascii() and code.isdigit()):
+            # A SAI2 PIN is digits only, so anything else cannot be one: it is
+            # refused here, as a wrong PIN, without a request to the control
+            # unit - which would count it as an attempt - and without ever
+            # putting free text from a service call into the SOAP envelope.
+            await self._fail("sai2_wrong_pin", validation=True)
 
         project = self.coordinator.vimarproject
         if project is None or project.sai2_groups is None:
