@@ -217,6 +217,77 @@ def test_a_sai2_request_is_never_sent_twice(link, command):
     assert not link.is_logged()
 
 
+# What one SAI2 command costs, counted as the alarm panel issues it: a PIN
+# check (authenticate_sai2_pin) and, only if that says DPCM-0000, the command.
+# The PIN check has had a retry of its own since 2026-06-28 - one new login and
+# one more authenticate when the answer is neither "valid" nor "wrong PIN" -
+# and that one stays. Together with the login made before a command, the total
+# must stay within two logins and two authenticate requests, and the command
+# itself must go out once, whatever the web server answers.
+_AUTH_ANSWERS = {
+    "valid": ("DPCM-0000",),
+    "wrong pin": ("SAI2-3127",),
+    "session expired": EXPIRED,
+    "other code": ("SAI2-9999",),
+    "no answer": None,
+}
+_SET_ANSWERS = {"accepted": ("DPCM-0000",), "session expired": EXPIRED, "no answer": None}
+
+
+@pytest.mark.parametrize("session", [None, "stale"], ids=["no session", "session"])
+@pytest.mark.parametrize("first", _AUTH_ANSWERS.values(), ids=_AUTH_ANSWERS.keys())
+@pytest.mark.parametrize("second", _AUTH_ANSWERS.values(), ids=_AUTH_ANSWERS.keys())
+@pytest.mark.parametrize("answer", _SET_ANSWERS.values(), ids=_SET_ANSWERS.keys())
+def test_a_sai2_command_costs_two_authentications_at_most(
+    link, monkeypatch, session, first, second, answer
+):
+    conn = link._connection
+    conn._session_id = session
+    logins: list[str] = []
+    login = conn.login
+
+    def counted_login():
+        logins.append("login")
+        login()
+
+    monkeypatch.setattr(conn, "login", counted_login)
+    replies = {
+        "service-vimarsai2authenticate": [first, second],
+        "service-vimarsai2allgroupsset": [answer],
+    }
+    sent: list[str] = []
+
+    def fake_soap(post):
+        service = next(name for name in replies if name in post)
+        sent.append(service)
+        reply = replies[service].pop(0)  # an IndexError is a request too many
+        return None if reply is None else _reply(*reply)
+
+    link._request_vimar_soap = fake_soap
+
+    # The panel's sequence: see VimarAlarmControlPanel._check_pin.
+    if link.authenticate_sai2_pin("0000") == "DPCM-0000":
+        link.set_sai2_status(1, 1, "0000")
+
+    assert 1 <= sent.count("service-vimarsai2authenticate") <= 2
+    assert sent.count("service-vimarsai2allgroupsset") <= 1
+    assert len(logins) <= 2
+    if "service-vimarsai2allgroupsset" in sent:
+        assert sent[-1] == "service-vimarsai2allgroupsset"
+
+
+def test_a_sai2_command_after_a_retried_pin_check_is_sent_once(link):
+    """The worst case that still sends: retried check, then one command."""
+    link._connection._session_id = None
+    sent = _capture(link, [_reply("SAI2-9999"), _reply("DPCM-0000"), _reply(*EXPIRED)])
+
+    assert link.authenticate_sai2_pin("0000") == "DPCM-0000"
+    assert link.set_sai2_status(1, 1, "0000") == "LGMG-3019"
+
+    assert ["authenticate" in e for e in sent] == [True, True, False]
+    assert len(sent) == 3
+
+
 # --- envelopes --------------------------------------------------------------
 
 
