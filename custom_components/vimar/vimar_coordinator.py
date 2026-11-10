@@ -24,11 +24,12 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_VERIFY_SSL,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -90,6 +91,14 @@ _HASH_INVALIDATED = ""
 # takes as long as that timeout before the next one is even scheduled.
 _FAILED_POLLS_BEFORE_UNAVAILABLE = 3
 
+# ...which is why there is a limit in seconds as well. Three polls that each
+# wait for a login to time out take about two minutes, and for all that time
+# the SAI2 areas would show the last state read, to an alarm panel and to the
+# automations that rely on it. Values older than this are not shown, however
+# few polls have failed - or even finished: the limit is a timer started by
+# every good poll, so it also ends the wait for a poll that is still hanging.
+_MAX_DATA_AGE_SECONDS = 45.0
+
 # A failed SAI2 query keeps the area values already read, but not for ever:
 # with no valid reading of an area for this long, its state is unknown.
 _SAI2_STALE_SECONDS = 60.0
@@ -120,6 +129,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
     # See __init__ and _async_update_data_locked.
     _failed_polls = 0
     last_poll_ok = True
+    _last_good_poll: float | None = None
+    _data_age_unsub: CALLBACK_TYPE | None = None
 
     # --- slim-poll state (class-level defaults, overridden as instance attrs in __init__) ---
     _slim_poll_active: bool = False
@@ -176,6 +187,10 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         # from the first failure on.
         self._failed_polls = 0
         self.last_poll_ok = True
+        # When the last poll got through (monotonic), and the timer that
+        # fails the update once that is _MAX_DATA_AGE_SECONDS ago.
+        self._last_good_poll = None
+        self._data_age_unsub = None
 
         # FIX: single global FIFO for all device writes (SETVALUE). Every
         # change_state() from every entity enqueues its batch here and one
@@ -348,6 +363,7 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._refresh_tasks.clear()
+        self._cancel_data_age_limit()
         self._periodic_refresh_task = None
 
     async def async_close_connection(self) -> None:
@@ -428,8 +444,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         poll, a timeout, a login that does not go through, an error of ours -
         and none of them fails the update by itself: the previous values are
         kept until _FAILED_POLLS_BEFORE_UNAVAILABLE polls in a row have
-        failed. Only then is UpdateFailed raised and the entities go
-        unavailable. Before, an exception failed the update at once, while a
+        failed, or until the last good poll is _MAX_DATA_AGE_SECONDS old,
+        whichever comes first. Only then is UpdateFailed raised and the
+        entities go unavailable. Before, an exception failed the update at once, while a
         slim poll without an answer never did, however long it lasted.
 
         Kept values are the last ones READ: nothing is made up to fill the
@@ -447,6 +464,9 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         except UpdateFailed as err:
             self.last_poll_ok = False
             self._failed_polls += 1
+            if self._last_good_poll is None:
+                # No good poll on record to measure from: from here, then.
+                self._last_good_poll = time.monotonic()
             if not self._can_keep_previous_data():
                 if self._failed_polls >= _FAILED_POLLS_BEFORE_UNAVAILABLE:
                     _LOGGER.warning(
@@ -454,6 +474,13 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
                         "until the web server answers again",
                         self._failed_polls,
                         err,
+                    )
+                elif self._data_too_old():
+                    _LOGGER.warning(
+                        "Vimar: poll failed (%s) and the last good one is more than %d s "
+                        "old: entities are unavailable until the web server answers again",
+                        err,
+                        _MAX_DATA_AGE_SECONDS,
                     )
                 raise
             _LOGGER.info(
@@ -467,12 +494,50 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
 
         self._failed_polls = 0
         self.last_poll_ok = True
+        self._last_good_poll = time.monotonic()
+        self._start_data_age_limit()
         return data
+
+    def _data_too_old(self) -> bool:
+        """True when the last good poll is more than _MAX_DATA_AGE_SECONDS ago."""
+        return (
+            self._last_good_poll is not None
+            and time.monotonic() - self._last_good_poll > _MAX_DATA_AGE_SECONDS
+        )
+
+    def _start_data_age_limit(self) -> None:
+        """(Re)start the timer that fails the update when no good poll follows.
+
+        Checking the age when a poll fails is not enough: a poll stuck in a
+        login only fails when that login times out, and the next one is not
+        even started before. The timer ends the wait at the limit itself.
+        """
+        self._cancel_data_age_limit()
+        self._data_age_unsub = async_call_later(
+            self.hass, _MAX_DATA_AGE_SECONDS, self._async_data_age_limit_reached
+        )
+
+    def _cancel_data_age_limit(self) -> None:
+        if self._data_age_unsub is not None:
+            self._data_age_unsub()
+            self._data_age_unsub = None
+
+    @callback
+    def _async_data_age_limit_reached(self, _now: object = None) -> None:
+        """No good poll for _MAX_DATA_AGE_SECONDS: stop showing the old values."""
+        self._data_age_unsub = None
+        self.async_set_update_error(
+            UpdateFailed(
+                f"No successful poll for {_MAX_DATA_AGE_SECONDS:.0f} s "
+                f"({self._failed_polls} failed, one may still be waiting)"
+            )
+        )
 
     def _can_keep_previous_data(self) -> bool:
         """True while a failed poll may still be answered with the last values."""
         return (
             self._failed_polls < _FAILED_POLLS_BEFORE_UNAVAILABLE
+            and not self._data_too_old()
             and self._first_update_data_executed
             and self._platforms_registered
             and bool(self.vimarproject.devices)
@@ -1095,6 +1160,8 @@ class VimarDataUpdateCoordinator(DataUpdateCoordinator):
         self._reauth_triggered = False
         self._failed_polls = 0
         self.last_poll_ok = True
+        self._last_good_poll = None
+        self._cancel_data_age_limit()
         self._device_state_hashes = {}
         self._pending_write_guards = {}
         self.devices_for_platform = {}

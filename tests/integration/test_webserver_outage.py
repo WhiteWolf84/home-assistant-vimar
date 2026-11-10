@@ -13,6 +13,12 @@ Both now count the same: a failed poll, whatever made it fail, keeps the last
 values READ, and the third in a row fails the update. The "Connection" binary
 sensor goes off at the first one.
 
+Three polls are not a length of time, though: a poll that waits for a login
+to time out takes 30 s, so three of them take about two minutes - during
+which the SAI2 areas would go on showing the last state read. So the update
+also fails when the last good poll is 45 s old, whichever comes first, and a
+timer started by every good poll does it even while a poll is still hanging.
+
 How far the old behaviour reached, from the plant's history (2026-11-10): no
 recorded episode shows an outage that went unnoticed. On 2026-10-05 the
 entities did go unavailable, the session having been dropped first and the
@@ -42,6 +48,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+from custom_components.vimar import vimar_coordinator as coordinator_module  # noqa: E402
 from custom_components.vimar.alarm_control_panel import VimarAlarmControlPanel  # noqa: E402
 from custom_components.vimar.binary_sensor import VimarStatusSensor  # noqa: E402
 from custom_components.vimar.vimar_coordinator import (  # noqa: E402
@@ -216,6 +223,158 @@ async def test_a_rejected_login_is_not_softened():
 
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
+
+
+# --- the limit in seconds ---------------------------------------------------
+
+LOGIN_TIMEOUT = 30.0
+SCAN_INTERVAL = 8.0
+
+
+class _Timers:
+    """Stands in for time.monotonic and async_call_later in the coordinator."""
+
+    def __init__(self, monkeypatch) -> None:
+        self.now = 1000.0
+        self.pending: list[tuple[float, object]] = []
+        monkeypatch.setattr(coordinator_module.time, "monotonic", lambda: self.now)
+        monkeypatch.setattr(coordinator_module, "async_call_later", self._call_later)
+
+    def _call_later(self, hass, delay, action):
+        entry = (self.now + delay, action)
+        self.pending.append(entry)
+        return lambda: self.pending.remove(entry) if entry in self.pending else None
+
+    def advance(self, seconds: float) -> None:
+        """Let time pass, firing what comes due on the way."""
+        end = self.now + seconds
+        for entry in sorted(self.pending, key=lambda e: e[0]):
+            if entry[0] <= end and entry in self.pending:
+                self.pending.remove(entry)
+                self.now = entry[0]
+                entry[1](None)
+        self.now = end
+
+
+def _slow_login(coordinator, timers: _Timers) -> None:
+    """The session is gone and every login waits its whole timeout out."""
+    connection = coordinator.vimarconnection
+    connection.is_logged.return_value = False
+
+    def login():
+        timers.advance(LOGIN_TIMEOUT)
+        raise VimarConnectionError("Error during login: timeout")
+
+    connection.check_login.side_effect = login
+
+
+def _listening(coordinator) -> MagicMock:
+    """Give the bare coordinator what async_set_update_error touches."""
+    coordinator.logger = MagicMock()
+    coordinator.name = "vimar"
+    coordinator.async_update_listeners = MagicMock()
+    return coordinator.async_update_listeners
+
+
+async def test_a_slow_login_does_not_keep_old_values_for_three_polls(monkeypatch):
+    """The second failed poll ends 76 s after the last good one: too old."""
+    timers = _Timers(monkeypatch)
+    coordinator = _coordinator(slim_results=[{"status_id": STATUS_ID, "status_value": "1"}])
+    _listening(coordinator)
+    await coordinator._async_update_data()
+    _slow_login(coordinator, timers)
+
+    timers.advance(SCAN_INTERVAL)
+    assert await coordinator._async_update_data()  # ends at 38 s: values kept
+
+    timers.advance(SCAN_INTERVAL)
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()  # ends at 76 s, the second of 3
+    assert coordinator._failed_polls == 2
+
+
+async def test_the_limit_is_reached_while_a_poll_is_still_waiting(monkeypatch):
+    """At 45 s the entities go unavailable; nobody waits for the login to give up."""
+    timers = _Timers(monkeypatch)
+    coordinator = _coordinator(slim_results=[{"status_id": STATUS_ID, "status_value": "1"}])
+    listeners = _listening(coordinator)
+    await coordinator._async_update_data()
+    _slow_login(coordinator, timers)
+    timers.advance(SCAN_INTERVAL)
+    await coordinator._async_update_data()  # first failed poll, ends at 38 s
+    assert coordinator.last_update_success is True
+
+    timers.advance(6.9)  # 44.9 s: the second poll would be 6.9 s into its login
+    assert coordinator.last_update_success is True
+    listeners.assert_not_called()
+
+    timers.advance(0.2)
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    listeners.assert_called_once()
+
+
+async def test_every_good_poll_starts_the_limit_again(monkeypatch):
+    timers = _Timers(monkeypatch)
+    coordinator = _coordinator(slim_results=[{"status_id": STATUS_ID, "status_value": "1"}])
+    _listening(coordinator)
+
+    for _ in range(10):  # 80 s of good polls
+        await coordinator._async_update_data()
+        timers.advance(SCAN_INTERVAL)
+
+    assert coordinator.last_update_success is True
+    assert [due for due, _action in timers.pending] == [timers.now - SCAN_INTERVAL + 45.0]
+
+
+async def test_fast_failures_are_still_counted_in_polls(monkeypatch):
+    """Three polls failing at once are 16 s: the count gets there first."""
+    timers = _Timers(monkeypatch)
+    coordinator = _coordinator(slim_results=[{"status_id": STATUS_ID, "status_value": "1"}])
+    _listening(coordinator)
+    await coordinator._async_update_data()
+    _fail_with(coordinator, "no answer")
+
+    for _ in range(2):
+        timers.advance(SCAN_INTERVAL)
+        assert await coordinator._async_update_data()
+    timers.advance(SCAN_INTERVAL)
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+
+async def test_the_first_good_poll_ends_the_outage(monkeypatch):
+    timers = _Timers(monkeypatch)
+    coordinator = _coordinator(slim_results=[{"status_id": STATUS_ID, "status_value": "1"}])
+    _listening(coordinator)
+    await coordinator._async_update_data()
+    _fail_with(coordinator, "no answer")
+    timers.advance(60.0)
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()  # one failed poll, but too old
+
+    assert coordinator.last_update_success is False  # the timer, at 45 s
+
+    _answer_again(coordinator)
+    # After a failed update the coordinator checks whether the devices
+    # changed: not what this test is about, and the rig's devices are bare.
+    coordinator._reload_entry_if_devices_changed = MagicMock()
+
+    assert await coordinator._async_update_data()
+    assert coordinator._failed_polls == 0
+    assert len(timers.pending) == 1
+
+
+async def test_unloading_the_entry_stops_the_limit(monkeypatch):
+    timers = _Timers(monkeypatch)
+    coordinator = _coordinator(slim_results=[{"status_id": STATUS_ID, "status_value": "1"}])
+    await coordinator._async_update_data()
+    assert len(timers.pending) == 1
+
+    await coordinator.async_shutdown_write_worker()
+
+    assert timers.pending == []
 
 
 # --- the Connection sensor --------------------------------------------------
