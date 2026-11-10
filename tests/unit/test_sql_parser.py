@@ -107,9 +107,17 @@ def test_unparseable_line_returns_none_without_raising():
     assert parse_sql_payload("Unknown-Payload") is None
 
 
-def test_row_with_more_values_than_header_returns_none():
-    """Malformed row: better no data than data assigned to the wrong keys."""
-    assert parse_sql_payload("Row000001: 'ID'\nRow000002: '1','extra'") is None
+def test_row_with_more_values_than_header_is_left_out():
+    """Malformed row: better no data than data assigned to the wrong keys.
+
+    The row is dropped, and only the row: this used to return None for the
+    whole payload, so one odd name cost every other device its poll (see
+    test_sql_error_payload.py).
+    """
+    assert parse_sql_payload("Row000001: 'ID'\nRow000002: '1','extra'") == []
+    assert parse_sql_payload("Row000001: 'ID'\nRow000002: '1','extra'\nRow000003: '2'") == [
+        {"ID": "2"}
+    ]
 
 
 def test_row_with_fewer_values_than_header_is_partial_by_design():

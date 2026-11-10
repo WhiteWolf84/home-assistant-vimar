@@ -15,6 +15,12 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 ### Fixed
 
 - **Covers (time-based position): a command sent while the cover is already moving the same way is no longer ignored.** A second `set_cover_position` now replaces the target, and `open_cover` / `close_cover` during a partial move run to the end stop. Before, the cover kept its first target: on the plant (2026-11-10) "30% then 70%" stopped at 30%, and "30% then open" was stopped at 30% by the integration's own STOP. The movement under way keeps being measured from the command that started it. A new intermediate target the cover has already reached (within the relay-coast tolerance) stops it where it is; a cover at rest still gets no command for such a target. Nothing changes at the end stops: at 0% and 100% no STOP is ever sent.
+- **SQL answers: a refused request is recognised by its result code, and named.** The `<result>` of an answer is now read before its payload. A request the web server refuses - on the plant, 2026-10-05: `<result>DBMG-308</result>` with the payload `Unknown-Payload` - is reported with one warning that gives the code, instead of a "Transient SQL parse error" followed by a dump of the whole request. That dump included the session id, a credential: it is no longer logged, and no diagnostic carries the SQL statement any more (excerpts are cut at 300 characters).
+- **SQL answers: one malformed row no longer discards the whole answer.** A row with more values than columns (a name containing `','`) is left out, with a warning, and the other rows are used; before, every row of that query was lost.
+
+### Changed
+
+- **Diagnostics for SQL answers of an unknown shape.** The result code and the `Response:` line of a successful SELECT have never been captured on a plant (`DPCM-0000` and `DBMG-000` are inferred from the code's history and from the upstream documentation). An answer that carries other values but readable rows is therefore still used, and reported once per value with a warning quoting what was received; it fails only when its payload cannot be read either. At debug level, an answer without rows is logged as received.
 
 ---
 

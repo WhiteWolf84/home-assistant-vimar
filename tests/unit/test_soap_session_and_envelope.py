@@ -183,10 +183,6 @@ REFUSED_2026_10_05 = (
 )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="review 2026-11 #3.9: the session id is logged with the failed SQL request",
-)
 def test_the_session_id_is_not_logged_with_a_refused_request(link, caplog):
     """The session id is a bearer credential, and logs get attached to issues."""
     link._connection._session_id = SESSION

@@ -7,9 +7,9 @@ AS status_id, CURRENT_VALUE AS status_value FROM DPADD_OBJECT WHERE ID IN
 error code is in <result> (DBMG-308); the payload is the literal
 "Unknown-Payload" and has no "Response:" line at all.
 
-_request_vimar_sql() only looks at <result> for LGMG-* codes, so this envelope
-goes on to the row parser, which fails on "Unknown-Payload". The query does
-end up as failed (None) - but by accident, and the log says so twice over:
+_request_vimar_sql() only looked at <result> for LGMG-* codes, so this envelope
+went on to the row parser, which failed on "Unknown-Payload". The query did
+end up as failed (None) - but by accident, and the log said so twice over:
 
     WARNING sql_parser: Transient SQL parse error: Missing :-character in
             response line: Unknown-Payload at line 39 - payload: Unknown-Payload
@@ -29,8 +29,11 @@ appears in none of the plant's saved logs. Until it is read on the plant, a
 "Response:" line that is not the known one must be reported - a WARNING with
 the line as received - and must not fail the poll.
 
-The tests marked xfail describe the behaviour to reach; they are strict, so
-they fail - and must lose the marker - as soon as the fix lands.
+<result> is now read first. DPCM-0000 as the code of an answer that went
+through is itself inferred (see vimarlink.SQL_RESULT_OK), so another code
+fails the query only when the payload cannot be read either - which is the
+case of the refusal above; with readable rows it is reported once and the
+rows are used.
 """
 
 import logging
@@ -44,6 +47,7 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..", "custom_components", "vimar")
 )
 
+from vimarlink import sql_parser  # noqa: E402
 from vimarlink.exceptions import VimarApiError  # noqa: E402
 from vimarlink.sql_parser import parse_sql_payload  # noqa: E402
 from vimarlink.vimarlink import MAX_ROWS_PER_REQUEST, VimarLink  # noqa: E402
@@ -66,15 +70,24 @@ NO_ROWS = "Response: DBMG-000\nNextRows: 1\nRow000001: 'gid','current_value'\n"
 UNKNOWN_RESPONSE_LINE = "Response: DBMG-123"
 UNKNOWN_SHAPE = f"{UNKNOWN_RESPONSE_LINE}\nNextRows: 0\n"
 
-RESULT_FIRST = "review 2026-11 #1.2: <result> is only checked for LGMG, DBMG-* goes to the parser"
-UNKNOWN_LINE = "review 2026-11 #1.2: the 'Response:' line of the payload is never looked at"
 
-
-def _reply(payload: str) -> ElementTree.Element:
+def _reply(payload: str, result: str = "DPCM-0000") -> ElementTree.Element:
     root = ElementTree.Element("r")
-    ElementTree.SubElement(root, "result").text = "DPCM-0000"
+    ElementTree.SubElement(root, "result").text = result
     ElementTree.SubElement(root, "payload").text = payload
     return root
+
+
+@pytest.fixture(autouse=True)
+def _nothing_reported_yet():
+    """An unexpected "Response:" line is logged once per process: start clean."""
+    sql_parser._reported_responses.clear()
+    yield
+    sql_parser._reported_responses.clear()
+
+
+def _warnings(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
 
 
 @pytest.fixture
@@ -120,7 +133,6 @@ def test_the_refused_select_is_not_a_session_problem(link):
     assert link._connection.session_id == "session"
 
 
-@pytest.mark.xfail(strict=True, reason=RESULT_FIRST)
 def test_the_refused_select_is_recognised_by_its_result_code(link, caplog):
     """<result> first: the payload of a refused request is not rows to parse."""
     _refuse(link)
@@ -130,9 +142,37 @@ def test_the_refused_select_is_recognised_by_its_result_code(link, caplog):
 
     assert "Transient SQL parse error" not in caplog.text
     assert "Received invalid data from SQL" not in caplog.text
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    warnings = _warnings(caplog)
     assert len(warnings) == 1
     assert "DBMG-308" in warnings[0]
+
+
+def test_an_unknown_result_code_with_readable_rows_is_not_a_failure(link, caplog):
+    """DPCM-0000 as "it went through" is inferred: being wrong must not fail the poll."""
+    link._request_vimar_soap = lambda post: _reply(
+        NO_ROWS + "Row000002: '1672','00000001'\n", result="DPCM-0001"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        first = link.execute_sql("SELECT 1")
+        second = link.execute_sql("SELECT 1")
+
+    assert first == second == [{"gid": "1672", "current_value": "00000001"}]
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, "reported at every request instead of once per code"
+    assert "DPCM-0001" in warnings[0]
+
+
+def test_a_diagnostic_never_carries_the_statement_or_the_session(link, caplog):
+    link._request_vimar_soap = lambda post: _reply("x" * 5000, result="DBMG-999")
+    statement = "SELECT ID FROM DPADD_OBJECT WHERE ID IN (" + ",".join(["4242"] * 400) + ")"
+
+    with caplog.at_level(logging.DEBUG):
+        assert link.execute_sql(statement) is None
+
+    assert "4242,4242" not in caplog.text
+    assert "session" not in caplog.text
+    assert all(len(message) < 600 for message in _warnings(caplog))
 
 
 def test_sai2_areas_see_the_refused_select_as_a_failed_query(link):
@@ -180,23 +220,29 @@ def test_an_unknown_response_line_does_not_fail_the_query(link):
     assert link.execute_sql("SELECT ID FROM NO_SUCH_TABLE") == []
 
 
-@pytest.mark.xfail(strict=True, reason=UNKNOWN_LINE)
 def test_an_unknown_response_line_is_reported_as_received(link, caplog):
     link._request_vimar_soap = lambda post: _reply(UNKNOWN_SHAPE)
 
     with caplog.at_level(logging.WARNING):
         link.execute_sql("SELECT ID FROM NO_SUCH_TABLE")
 
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert any(UNKNOWN_RESPONSE_LINE in message for message in warnings)
+    assert any(UNKNOWN_RESPONSE_LINE in message for message in _warnings(caplog))
+
+
+def test_an_unknown_response_line_is_reported_once(link, caplog):
+    """Every 8 s otherwise, if the known line were wrong for some firmware."""
+    link._request_vimar_soap = lambda post: _reply(UNKNOWN_SHAPE)
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            link.execute_sql("SELECT ID FROM NO_SUCH_TABLE")
+
+    assert len(_warnings(caplog)) == 1
 
 
 # --- rows -------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="review 2026-11 #1.2: one malformed row discards the whole payload"
-)
 def test_one_malformed_row_does_not_discard_the_others():
     """A row with more values than columns: an apostrophe-comma inside a name."""
     payload = (

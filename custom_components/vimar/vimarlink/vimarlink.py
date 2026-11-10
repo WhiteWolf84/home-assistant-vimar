@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Callable
-from xml.etree import ElementTree
 
 from .connection import VimarConnection
 from .device_queries import (
@@ -45,7 +44,12 @@ from .device_types import (
     KNX_WINDSPEED_OBJECT_TYPES,
 )
 from .exceptions import VimarApiError
-from .sql_parser import parse_sql_payload
+from .sql_parser import (
+    LOG_EXCERPT,
+    parse_sql_payload,
+    read_sql_payload,
+    report_response_line,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +87,14 @@ def is_valid_sai2_bitmask(value: str | None) -> bool:
 
 MAX_ROWS_PER_REQUEST = 300
 
+# <result> of a SQL answer that went through. Inferred, not captured: commit
+# de2967d (2026-06-10) shows that successful answers do not carry a DBMG-*
+# code there - invalidating the session on "anything but DBMG" broke every
+# poll - and DPCM-0000 is what every other service of the web server answers
+# when it accepts a request. No saved log shows the <result> of a successful
+# SELECT. See _request_vimar_sql for what that uncertainty allows.
+SQL_RESULT_OK = "DPCM-0000"
+
 
 class VimarLink:
     """Link to communicate with the Vimar webserver."""
@@ -116,6 +128,8 @@ class VimarLink:
 
         self._room_ids = None
         self._rooms = None
+        # Unexpected SQL <result> codes already reported (see _request_vimar_sql).
+        self._reported_sql_results: set[str | None] = set()
 
     @property
     def _session_id(self):
@@ -891,7 +905,7 @@ class VimarLink:
         response = self._request_vimar_soap(post)
         if response is None:
             _LOGGER.warning("Unparseable response from SQL")
-            _LOGGER.info("Erroneous SQL: %s", select)
+            _LOGGER.info("Erroneous SQL: %.*s", LOG_EXCERPT, select)
             return None
 
         if response is False:
@@ -899,8 +913,6 @@ class VimarLink:
 
         result = response.find(".//result")
         result_code = (result.text or "").strip() if result is not None else None
-        # Successful SQL responses carry result=DPCM-0000 in the <result> tag
-        # (the DBMG-000 code lives inside the payload's "Response:" line).
         # LGMG-* codes (e.g. LGMG-3019) mean the session expired server-side:
         # the payload is "Unknown-Payload" and unparseable, so drop the stale
         # session so the next coordinator cycle re-authenticates instead of
@@ -916,17 +928,56 @@ class VimarLink:
 
         payload = response.find(".//payload")
         if payload is None:
-            _LOGGER.warning("Empty payload from SQL")
+            _LOGGER.warning("Empty payload from SQL (result=%s)", result_code)
             return None
 
-        parsed_data = parse_sql_payload(payload.text)
-        if parsed_data is None:
+        if result_code == SQL_RESULT_OK:
+            parsed_data = parse_sql_payload(payload.text)
+            if parsed_data is None:
+                # Neither the statement nor the envelope that carried it: the
+                # envelope holds the session id, a bearer credential, and this
+                # used to print both in a line users attach to issues.
+                _LOGGER.warning(
+                    "Received invalid data from SQL (result=%s): %.*r",
+                    result_code,
+                    LOG_EXCERPT,
+                    payload.text,
+                )
+            return parsed_data
+
+        # <result> is looked at BEFORE the payload. A refused request carries
+        # its reason there and a payload that is not rows at all - on the plant,
+        # 2026-10-05: <result>DBMG-308</result> with the literal payload
+        # "Unknown-Payload". That used to be handed to the row parser, which
+        # failed on it and logged a parse error, never naming the refusal.
+        #
+        # SQL_RESULT_OK itself is inferred, not captured (see its definition),
+        # and getting it wrong would fail every poll. So a code that is not the
+        # known one fails the query ONLY when the payload cannot be read
+        # either; with readable rows it is reported, once per code, and the
+        # rows are used.
+        parsed = read_sql_payload(payload.text)
+        if parsed.rows is None:
             _LOGGER.warning(
-                "Received invalid data from SQL: %s from post: %s",
-                ElementTree.tostring(response, encoding="unicode"),
-                post,
+                "SQL request refused by the web server (result=%s, payload %.*r)",
+                result_code,
+                LOG_EXCERPT,
+                payload.text,
             )
-        return parsed_data
+            return None
+
+        if result_code not in self._reported_sql_results:
+            self._reported_sql_results.add(result_code)
+            _LOGGER.warning(
+                "SQL answer with an unexpected result code %.*r (known: %s) but "
+                "readable rows: they are used as received. Logged once per code. "
+                "Please report it",
+                LOG_EXCERPT,
+                result_code,
+                SQL_RESULT_OK,
+            )
+        report_response_line(parsed.response_line)
+        return parsed.rows
 
     def _request_vimar_soap(self, post: str):
         """Execute SOAP request."""
