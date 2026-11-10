@@ -36,6 +36,7 @@ Covered by tests only.
 ### Changed
 
 - **SQL answers: `DPCM-0000` and `DBMG-000` are now read on a plant, not inferred.** They are the result code and the `Response:` line of a SELECT that went through (2026-11-10, with the beta). The code that reads the answers is unchanged: an answer that carries other values but readable rows is still used and reported once, since one plant is one firmware. The debug line `SQL answer without rows, as received` stays.
+- **Covers: the log lines of the recovery after a restart are in English** (`recovery completed at the end stop 100%`, `recovery skipped, a movement is already under way`, …). They were written in Italian; the recovery itself is unchanged.
 - **Covers: the debug line for an ignored `set_cover_position` is in English.** `set_position 99% ignored (delta 1% <= relay coast 1.4%, cannot be positioned)` was written in Italian. Nothing else changes.
 
 ### Known limits

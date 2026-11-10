@@ -361,18 +361,16 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         if not ts_raw:
             # Senza timestamp non possiamo valutare la freschezza: troppo
             # rischioso, non recuperiamo.
-            _LOGGER.debug("%s: recovery flag senza timestamp, ignorato", self.device_name)
+            _LOGGER.debug("%s: recovery flag without a timestamp, ignored", self.device_name)
             return
         try:
             age = (dt_util.utcnow() - datetime.fromisoformat(ts_raw)).total_seconds()
         except (ValueError, TypeError):
-            _LOGGER.debug(
-                "%s: recovery timestamp non valido (%s), ignorato", self.device_name, ts_raw
-            )
+            _LOGGER.debug("%s: invalid recovery timestamp (%s), ignored", self.device_name, ts_raw)
             return
         if age < 0 or age > RECOVERY_MAX_AGE_SECONDS:
             _LOGGER.info(
-                "%s: recovery flag scartato (eta' %.0fs fuori range 0..%ds)",
+                "%s: recovery flag discarded (age %.0fs outside 0..%ds)",
                 self.device_name,
                 age,
                 RECOVERY_MAX_AGE_SECONDS,
@@ -389,8 +387,8 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         self._recovery_target = target
         self._recovery_pending = True
         _LOGGER.warning(
-            "%s: movimento interrotto dal riavvio rilevato (%s, target=%s, eta' %.0fs) "
-            "-> recupero programmato",
+            "%s: movement interrupted by the restart detected (%s, target=%s, age %.0fs) "
+            "-> recovery scheduled",
             self.device_name,
             direction,
             target,
@@ -446,7 +444,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # subito dopo l'avvio), non interferire: chi ha preso il controllo vince.
         if self._tb_operation is not None:
             _LOGGER.info(
-                "%s: recovery saltato, movimento gia' in corso (%s)",
+                "%s: recovery skipped, a movement is already under way (%s)",
                 self.device_name,
                 self._tb_operation,
             )
@@ -456,7 +454,7 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         travel = self._travel_time_up if opening else self._travel_time_down
 
         _LOGGER.warning(
-            "%s: recovery -> guido al fondo-corsa %s%% (direzione %s), poi riprendo verso target=%s",
+            "%s: recovery -> running to the end stop %s%% (direction %s), then on to target=%s",
             self.device_name,
             end_stop,
             direction,
@@ -474,14 +472,15 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # Attendi il completamento reale (fine-corsa), non uno sleep fisso.
         if not await self._tb_wait_idle(timeout=travel + RELAY_DELAY + 5):
             _LOGGER.warning(
-                "%s: recovery scaduto in attesa del fondo-corsa, resume annullato", self.device_name
+                "%s: recovery timed out waiting for the end stop, resume cancelled",
+                self.device_name,
             )
             return
 
         # Resume solo se la corsa di recupero e' arrivata indisturbata.
         if self._tb_operation is not None or self._tb_position != end_stop:
             _LOGGER.info(
-                "%s: recovery interrotto da un comando esterno (op=%s, pos=%s) - niente resume",
+                "%s: recovery interrupted by an external command (op=%s, pos=%s) - no resume",
                 self.device_name,
                 self._tb_operation,
                 self._tb_position,
@@ -492,11 +491,11 @@ class VimarCover(VimarEntity, CoverEntity, RestoreEntity):
         # fondo-corsa gia' raggiunto (se il target era 0/100 abbiamo finito).
         if target is not None and 0 < target < 100 and target != end_stop:
             _LOGGER.info(
-                "%s: recovery completato, riprendo verso target %s%%", self.device_name, target
+                "%s: recovery completed, resuming towards target %s%%", self.device_name, target
             )
             await self.async_set_cover_position(**{ATTR_POSITION: target})
         else:
-            _LOGGER.info("%s: recovery completato al fondo-corsa %s%%", self.device_name, end_stop)
+            _LOGGER.info("%s: recovery completed at the end stop %s%%", self.device_name, end_stop)
 
     def _tb_check_vimar_state(self) -> None:
         """Controlla stato Vimar e gestisci movimenti fisici."""
