@@ -91,12 +91,16 @@ def is_valid_sai2_bitmask(value: str | None) -> bool:
 
 MAX_ROWS_PER_REQUEST = 300
 
-# <result> of a SQL answer that went through. Inferred, not captured: commit
-# de2967d (2026-06-10) shows that successful answers do not carry a DBMG-*
-# code there - invalidating the session on "anything but DBMG" broke every
-# poll - and DPCM-0000 is what every other service of the web server answers
-# when it accepts a request. No saved log shows the <result> of a successful
-# SELECT. See _request_vimar_sql for what that uncertainty allows.
+# <result> of a SQL answer that went through. Confirmed on the plant on
+# 2026-11-10: a restart and the polls that followed logged no "unexpected
+# result code". Before that it was inferred - commit de2967d (2026-06-10)
+# shows that successful answers do not carry a DBMG-* code there. One plant
+# and one firmware, so _request_vimar_sql still tolerates another code when
+# the rows are readable.
+#
+# It is also the <result> of a SELECT on a table that does not exist: the web
+# server answers that exactly like a SELECT that matches nothing (see
+# sql_parser), so a failed SELECT cannot be told from an empty one.
 SQL_RESULT_OK = "DPCM-0000"
 
 
@@ -1089,11 +1093,11 @@ class VimarLink:
         # "Unknown-Payload". That used to be handed to the row parser, which
         # failed on it and logged a parse error, never naming the refusal.
         #
-        # SQL_RESULT_OK itself is inferred, not captured (see its definition),
-        # and getting it wrong would fail every poll. So a code that is not the
-        # known one fails the query ONLY when the payload cannot be read
-        # either; with readable rows it is reported, once per code, and the
-        # rows are used.
+        # SQL_RESULT_OK is confirmed on one plant and one firmware (see its
+        # definition), and rejecting what another firmware answers would fail
+        # every poll. So a code that is not the known one fails the query ONLY
+        # when the payload cannot be read either; with readable rows it is
+        # reported, once per code, and the rows are used.
         parsed = read_sql_payload(payload.text)
         if parsed.rows is None:
             _LOGGER.warning(

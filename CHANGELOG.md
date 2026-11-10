@@ -14,7 +14,12 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ### Changed
 
+- **SQL answers: `DPCM-0000` and `DBMG-000` are now read on a plant, not inferred.** They are the result code and the `Response:` line of a SELECT that went through (2026-11-10, with the beta). The code that reads the answers is unchanged: an answer that carries other values but readable rows is still used and reported once, since one plant is one firmware. The debug line `SQL answer without rows, as received` stays.
 - **Covers: the debug line for an ignored `set_cover_position` is in English.** `set_position 99% ignored (delta 1% <= relay coast 1.4%, cannot be positioned)` was written in Italian. Nothing else changes.
+
+### Known limits
+
+- **A SELECT that fails cannot be told from one that finds nothing - a limit of the web server.** Read on the plant on 2026-11-10: `SELECT ID FROM` a table that does not exist and a valid SELECT that matches no row get the same answer, byte for byte (`<result>DPCM-0000</result>`, payload `Response: DBMG-000` / `NextRows: 0`). So `vimar.exec_vimar_sql` returns an empty list in both cases and logs nothing, and nothing on this side can change that: the web server does not say. A request it refuses outright is a different case and is reported (`DBMG-308`, see `2026.11.1b0`).
 
 ---
 

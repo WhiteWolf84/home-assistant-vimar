@@ -7,12 +7,26 @@ from typing import NamedTuple
 
 _LOGGER = logging.getLogger(__name__)
 
-#: The "Response:" line of a payload whose rows can be trusted. It comes from
-#: the example in the upstream project's docstring (see parse_sql_payload) and
-#: from nothing else: no answer captured on a plant shows it, because the
-#: payload of a successful SELECT has never been logged. It is therefore used
-#: to REPORT a line that differs, never to reject the rows that came with it.
+#: The "Response:" line of a SELECT the web server carried out. Captured on
+#: the plant on 2026-11-10 (payload 'Response: DBMG-000\nNextRows: 0\n'); before
+#: that it was only the example in the upstream project's docstring. One plant
+#: and one firmware: it is still used to REPORT a line that differs, never to
+#: reject the rows that came with it.
+#:
+#: It does NOT mean "the statement was valid". See the note below.
 KNOWN_RESPONSE = "DBMG-000"
+
+# A limit of the web server, not of this parser (plant, 2026-11-10): a SELECT
+# on a table that does not exist and a valid SELECT that matches no row get
+# the SAME answer - <result>DPCM-0000</result> and the payload
+#
+#     Response: DBMG-000
+#     NextRows: 0
+#
+# byte for byte. Nothing in the answer tells the two apart, so both are an
+# empty list here and a failed SELECT cannot be reported as such. Do not try
+# to guess from the text of the statement: the web server is the only one that
+# knows, and it does not say.
 
 #: Longest piece of a web server answer quoted in a log line. The Home
 #: Assistant log API cuts every line at about 16 KB, and a diagnostic is only
@@ -156,8 +170,8 @@ def parse_sql_payload(string: str | None) -> list[dict] | None:
         )
 
     if not parsed.rows and _LOGGER.isEnabledFor(logging.DEBUG):
-        # What an answer without rows looks like has only been seen through
-        # this parser, which says [] for every shape of it.
+        # Kept at debug level: it is how the shape above was read on the
+        # plant, and how it can be read on another firmware.
         _LOGGER.debug("SQL answer without rows, as received: %.*r", LOG_EXCERPT, string)
 
     return parsed.rows

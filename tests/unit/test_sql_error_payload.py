@@ -18,22 +18,21 @@ end up as failed (None) - but by accident, and the log said so twice over:
 neither line naming the one thing that matters, that the web server refused
 the request with DBMG-308.
 
-What is NOT known (2026-11-10): the shape of the answer to a SELECT on a
-table that does not exist. Through vimar.exec_vimar_sql it comes back as `[]`
-with no warning, exactly like a valid SELECT that finds nothing, so its
-payload has only lines the parser skips ("Response:", "NextRows:") - with
-which values, nobody has read yet. "Response: DBMG-000" as the line of a
-successful answer comes from the example in parse_sql_payload's docstring
-(inherited from the upstream project) and from the fixtures copied from it; it
-appears in none of the plant's saved logs. Until it is read on the plant, a
-"Response:" line that is not the known one must be reported - a WARNING with
-the line as received - and must not fail the poll.
+Read on the plant on 2026-11-10 (beta 2026.11.1b0, debug on): a SELECT on a
+table that does not exist and a valid SELECT that matches no row get the same
+answer, byte for byte - <result>DPCM-0000</result> and the payload kept below
+as NOTHING_FOUND_2026_11_10. This is a LIMIT OF THE WEB SERVER: nothing in the
+answer tells a failed SELECT from an empty one, so both are `[]` and no
+warning is logged. It is not a defect that can be fixed on this side, and the
+text of the statement is not to be used to guess.
 
-<result> is now read first. DPCM-0000 as the code of an answer that went
-through is itself inferred (see vimarlink.SQL_RESULT_OK), so another code
-fails the query only when the payload cannot be read either - which is the
-case of the refusal above; with readable rows it is reported once and the
-rows are used.
+The same capture shows "Response: DBMG-000" and <result>DPCM-0000</result> as
+what a SELECT that went through carries. Both were inferred until then. They
+are known for one plant and one firmware, so a "Response:" line or a result
+code that differs is still reported - a WARNING with the value as received,
+once - and still does not fail the poll when the rows can be read. A code
+that differs fails the query only when the payload cannot be read either,
+which is the case of the refusal above.
 """
 
 import logging
@@ -66,6 +65,11 @@ REFUSED_2026_10_05 = (
 )
 
 NO_ROWS = "Response: DBMG-000\nNextRows: 1\nRow000001: 'gid','current_value'\n"
+# Home Assistant log, 2026-11-10 22:15-22:26, "SQL answer without rows, as
+# received": the payload of BOTH statements below, with <result>DPCM-0000.
+NOTHING_FOUND_2026_11_10 = "Response: DBMG-000\nNextRows: 0\n"
+MISSING_TABLE = "SELECT ID FROM TABELLA_CHE_NON_ESISTE;"
+NO_MATCHING_ROW = "SELECT ID FROM DPADD_OBJECT WHERE ID = 999999999;"
 # A shape nobody has seen: stands for "a Response line that is not the known one".
 UNKNOWN_RESPONSE_LINE = "Response: DBMG-123"
 UNKNOWN_SHAPE = f"{UNKNOWN_RESPONSE_LINE}\nNextRows: 0\n"
@@ -148,7 +152,7 @@ def test_the_refused_select_is_recognised_by_its_result_code(link, caplog):
 
 
 def test_an_unknown_result_code_with_readable_rows_is_not_a_failure(link, caplog):
-    """DPCM-0000 as "it went through" is inferred: being wrong must not fail the poll."""
+    """DPCM-0000 is confirmed on one firmware: another code must not fail the poll."""
     link._request_vimar_soap = lambda post: _reply(
         NO_ROWS + "Row000002: '1672','00000001'\n", result="DPCM-0001"
     )
@@ -196,6 +200,35 @@ def test_discovery_does_not_end_quietly_on_a_refused_page(link):
         link.get_paged_results(link.get_remote_devices, {})
 
 
+# --- a limit of the web server: a failed SELECT looks like an empty one -----
+
+
+@pytest.mark.parametrize("statement", [MISSING_TABLE, NO_MATCHING_ROW])
+def test_a_missing_table_and_no_matching_row_are_the_same_answer(link, caplog, statement):
+    """Captured on the plant: one answer for both, so one outcome for both.
+
+    Not a defect to fix here. If this ever has to tell the two apart, it is
+    the web server's answer that must have changed - not the statement that
+    must be inspected.
+    """
+    link._request_vimar_soap = lambda post: _reply(NOTHING_FOUND_2026_11_10)
+
+    with caplog.at_level(logging.WARNING):
+        assert link.execute_sql(statement) == []
+
+    assert caplog.records == [], "the answer of a SELECT that went through is not reported"
+
+
+def test_an_answer_without_rows_is_logged_as_received_at_debug_level(link, caplog):
+    """How the shape was read on the plant; it stays available for other firmwares."""
+    link._request_vimar_soap = lambda post: _reply(NOTHING_FOUND_2026_11_10)
+
+    with caplog.at_level(logging.DEBUG):
+        link.execute_sql(NO_MATCHING_ROW)
+
+    assert f"SQL answer without rows, as received: {NOTHING_FOUND_2026_11_10!r}" in caplog.text
+
+
 # --- a shape nobody has read yet --------------------------------------------
 
 
@@ -214,7 +247,7 @@ def test_the_known_response_line_is_not_reported(link, caplog):
 
 
 def test_an_unknown_response_line_does_not_fail_the_query(link):
-    """Until the real shape is read on the plant, the poll must not fail on it."""
+    """DBMG-000 is confirmed on one firmware: another line must not fail the poll."""
     link._request_vimar_soap = lambda post: _reply(UNKNOWN_SHAPE)
 
     assert link.execute_sql("SELECT ID FROM NO_SUCH_TABLE") == []
