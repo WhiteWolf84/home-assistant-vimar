@@ -12,6 +12,27 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`YYYY.M.
 
 ## [Unreleased]
 
+> What follows `2026.11.1b0`. The beta has been running on the plant since
+> 2026-11-10 (Home Assistant 2026.11.1): entry loaded, 84 entities available
+> out of 84, the 83 entity_ids in common with the 2026-10-08 backup keep their
+> unique_ids, no warning or error from the integration after the restart.
+
+### Verified on the plant (2026-11-10, beta `2026.11.1b0`)
+
+- **Covers, a new target while moving.** "30% then 70%" from closed: retargeted at 7%, STOP at 70%, 25.3 s after the start. "30% then 100%": retargeted at 6%, ran to the end stop with no STOP. Both confirmed by eye.
+- **Covers, end stops.** Full closings from 70% and from 100%, and `set_cover_position` 100 at rest at 99% and 0 at rest at 1%: the up or down command alone, then `Reached end-stop …, mechanical stop (no STOP command)`. `set_cover_position` 99 at rest at 100% is ignored, as intended (1% is less than the 1.4% relay coast).
+- **SQL answers.** `DBMG-000` is the `Response:` line and `DPCM-0000` the result code of a SELECT that went through; no `unexpected result code` or `unexpected first line` warning after a restart.
+- **`status_range` on devices placed in a room.** Present on 13 sensors with a room out of 13, and on 24 without a room out of 24.
+- **"Connection" sensor, renaming the entity_id.** Renamed and renamed back: same registry id and unique_id, the state moves to the new entity_id at once, the entity is not removed and nothing is logged.
+
+### Not tried on the plant
+
+Covered by tests only.
+
+- **A second page of the discovery:** the plant fits in one page of 300 rows.
+- **A write refused for an expired session (`LGMG-*`),** and everything that follows it: the single resend, the entity going back to its value, the cover tracking after a refused command.
+- **The "Connection" sensor going off at the first failed poll,** and the entities becoming unavailable at the third one or after 45 seconds: it takes a web server that stops answering.
+
 ### Changed
 
 - **SQL answers: `DPCM-0000` and `DBMG-000` are now read on a plant, not inferred.** They are the result code and the `Response:` line of a SELECT that went through (2026-11-10, with the beta). The code that reads the answers is unchanged: an answer that carries other values but readable rows is still used and reported once, since one plant is one firmware. The debug line `SQL answer without rows, as received` stays.
